@@ -1,0 +1,36 @@
+# ── Rust ───────────────────────────────────────────────
+/target/
+**/target/
+
+# ── Node / 前端 ─────────────────────────────────────────
+node_modules/
+dist/
+*.local
+
+# ── Tauri ──────────────────────────────────────────────
+src-tauri/gen/
+
+# ── 依赖审计与 SBOM 产物（对齐方案 §4.10、§4.11.4）────────
+/sbom/
+/audit-output/
+*.sbom.json
+
+# ── fixtures：生成的样本不入库，只入库脚本与清单 ──────────
+# 规则见 fixtures/README.md「入库策略」
+fixtures/corpus/*/out/
+fixtures/bench/*/out/
+
+# ── 基准结果 ────────────────────────────────────────────
+/bench-results/
+/criterion/
+
+# ── 编辑器与系统 ────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── 临时/半成品文件（对齐方案 §4.3 的原子落盘命名习惯）────
+*.tmp
+*.part

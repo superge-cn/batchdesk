@@ -1,0 +1,146 @@
+# CI 工作流（四 job：lint / deny / test / bench）
+#
+# ── 平台可移植说明 ──────────────────────────────────────────────
+# 本文件按 GitHub Actions 输出（D-R5=A）。若改用 GitLab CI 或内网自托管，
+# 只需改写 runner 声明、缓存步骤与 artifact 传递方式，**四个 job 的结构与命令保持不变**。
+# Action 版本号在首次启用时以各 Action 官方 README 核对一次（避免引用不存在的 tag）。
+#
+# ── 边界说明（重要）─────────────────────────────────────────────
+# 1) 每日冒烟（T v1.1 §6.2 的 S-A/S-B/S-C，30 分钟内完成）是**本地或打包后的人工动作**，
+#    **不在本工作流内**（原因：冒烟覆盖 UNC、OneDrive 占位等真实环境，CI runner 无法复现）。
+# 2) 语料回归的**范围**：CI 只跑「自动化」子集。以下 4 条按 T v1.1 §3.2 的构造方式依赖人工操作
+#    或特定环境，已在 fixtures/corpus/manual-only.txt 中**显式排除**，改由人工跟踪台账
+#    fixtures/corpus/manual-results.md 记录：
+#      R05（任务中断线）、E01（Excel 占用）、E02（OneDrive 释放空间）、E04（配额受限卷）
+#    test job 的 check_scope.py 会强制"自动化/人工"两集合互斥且无遗漏。
+#    **CI 绿灯 = 自动化语料零失败**，不等于 T v1.1 §1.3 字面的"语料回归零失败"；
+#    后者由自动化与人工两栏共同构成，两栏都过才计入阶段级验收（T v1.1 §4.2）。
+#
+# ── 数值单源 ────────────────────────────────────────────────────
+# 本文件不写死任何性能阈值。漂移阈值集中在仓库变量（Settings → Variables）中管理，
+# 口径以基线《办公辅助工具产品方案》§9.1 为准。
+
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # 每周一次：cargo-deny 的漏洞库会更新，仅靠 push 触发会漏掉"这周新出的漏洞"
+    - cron: "0 18 * * 0"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  # ── ① 静态检查（零容忍门禁，见 CONTRIBUTING §1①②）──────────────
+  lint:
+    name: lint（fmt + clippy -D warnings）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy（零容忍）
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # ── ② 许可证与漏洞 + SBOM（CONTRIBUTING §1③）────────────────────
+  deny:
+    name: deny（licenses + advisories + SBOM）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: 许可证与漏洞检查
+        run: cargo deny check licenses advisories
+        # 移植代码的来源登记（方案 §4.11.2a⑤）与许可证义务（§4.11.4）由本 job 复查
+      - name: SBOM 产出
+        run: |
+          # TODO(选型): SBOM 工具待定（候选 cargo-cyclonedx / cargo-sbom）。
+          # 选定后替换下方占位，产物路径须与 upload-artifact 的 path 一致。
+          mkdir -p sbom
+          echo "SBOM 工具未选定：本步暂以占位跳过，不阻塞 lint/deny。" > sbom/README.txt
+      - name: 上传 SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+          if-no-files-found: error
+
+  # ── ③ 单元 + 语料回归（CONTRIBUTING §2）─────────────────────────
+  test:
+    name: test（单元 + 语料回归）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: 语料范围核对（显式排除人工项）
+        run: |
+          # 强制"自动化"与"人工"两集合互斥且无遗漏：
+          #   - manifest.md 的脚本状态 与 manual-only.txt 必须双向一致；
+          #   - 新增语料漏建脚本、或既建脚本又列人工清单，都会失败。
+          # 统计会写入 $GITHUB_STEP_SUMMARY。
+          python fixtures/corpus/check_scope.py
+      - name: 生成语料（幂等；D-R3=A 的 Python 脚本）
+        run: |
+          # 只生成"自动化"语料。人工跟踪的 4 条（R05/E01/E02/E04）本就无脚本，
+          # 由 check_scope.py 显式确认，是否跑到与 CI 无关：见 fixtures/corpus/manual-results.md
+          for script in fixtures/corpus/*/gen_*.py; do
+            [ -e "$script" ] || continue
+            echo "→ 生成：$script"
+            python "$script"
+          done
+      - name: 单元测试 + 语料回归（自动化子集）
+        run: cargo test --workspace --all-features
+        # 语料回归 = fixtures/ 全量中的「自动化」子集（方案 §4.11.2a④：移植代码不豁免）
+        # 通过率分母不含人工项；人工项单独跟踪，两栏都过才计入阶段级验收（T v1.1 §4.2）
+      - name: 语料幂等复检
+        run: |
+          # 二次生成必须不产生任何文件变更（fixtures/README.md §3 的幂等约定）
+          git diff --exit-code -- fixtures/ || {
+            echo "::error::语料生成不幂等：二次运行产生了文件变更";
+            exit 1;
+          }
+
+  # ── ④ 性能基准（仅主分支；与基线对比，超阈值失败）────────────────
+  bench:
+    name: bench（criterion，仅主分支）
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 生成基准数据（按需；大文件数据集见 fixtures/bench/C-2）
+        run: |
+          # TODO(数据): 基准数据集脚本待补（fixtures/bench/*/gen_*.py）。
+          # C-2 体积大，建议由预置缓存或按需生成提供，不入库。
+          echo "基准数据集脚本待补：本步暂以占位跳过。"
+      - name: 跑基准并保存基线
+        run: cargo bench --workspace -- --save-baseline ci
+      - name: 与基线对比（漂移超阈值即失败）
+        run: |
+          # TODO(对比): 基线对比脚本待补。约定如下——
+          #   1) 基线来自上一次主分支成功运行的 criterion 产物（artifact 或缓存）；
+          #   2) 漂移阈值为仓库变量（如 BENCH_DRIFT_*），**不在此处写死数值**；
+          #   3) 阈值口径以基线方案 §9.1 为准。
+          echo "基线对比脚本待补：本步暂以占位跳过。"
+      - name: 上传基准结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: target/criterion/
+          if-no-files-found: warn
