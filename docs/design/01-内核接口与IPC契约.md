@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.4（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.5（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明与进度合帧状态） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -65,7 +65,7 @@ interface IpcError {
 
 - 进度经事件通道推送（事件名见 §4.3），字段：`taskId, phase, done, total, message`。
   `phase ∈ queued | scanning | planning | executing | journaling | finalizing`。
-- **节流**：推送频率上限为性能阈值，引用方案 §9.1 既定值，本文不设数值；壳层负责合帧。
+- **节流**：推送频率上限为性能阈值，引用方案 §9.1 既定值，本文不设数值；壳层负责合帧。已实现（v1.5）：桌面壳按方案 §9.1「进度刷新节流 100–200 ms」区间的下限，对同阶段 `task://progress` 做合帧（`TaskSummary` 仍逐条更新）；阶段迁移立即推送并在窗口内补发最新条目计数，`task://state`/`task://done` 不合帧。
 - **取消**（§7.7）：壳层持有原子取消标志，以 `CancelToken` 端口传入 kernel 执行循环，每个条目边界检查一次；取消后已落盘动作按 Journal 反向回滚（§7.8）。
 - **暂停/恢复**：仅壳层队列语义（§4.4），kernel 不感知暂停。
 
@@ -289,7 +289,7 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 | `cleanupRetention` | `{retentionDays?: number, apply?: boolean}` | `CleanupOutcome` | 保留期演练/清理；`apply` 缺省 false |
 | `getStorageInfo` | — | `{quarantineDir: string, journalFile: string}` | 展示隔离目录与 Journal 路径 |
 
-> 任务队列命令 `cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已按 §4.1 的入出参实现；**S03 已实现任务快照持久化与 `recoverTask`**（`interrupted` 状态不自动续跑）。`retryTask` 尚未实现，实现前不得在 UI 暴露入口。分页默认值属壳层实现参数，不改变 §2.3 的契约。
+> 任务队列命令 `cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已按 §4.1 的入出参实现；**S03 已实现任务快照持久化与 `recoverTask`**（`interrupted` 状态不自动续跑）。**`retryTask` 已实现（v1.5）**：仅对终态 `partial-failed`/`failed` 的 apply 任务生效，缺省重试全部失败条目、`entryIds` 可选子集（必须都是该任务报告中的失败条目，否则 E1002）；生成**新 taskId** 引用原 planId（§6），原任务保持终态；Journal 已 applied 条目幂等排除，编排级失败（报告零条目）时重跑全部条目；undo 任务不可重试（重试语义见方案 §7.6：沿用原参数与冲突策略，apply 期重新裁决冲突）。分页默认值属壳层实现参数，不改变 §2.3 的契约。
 
 ## 5. Plan/Apply 数据模型
 
@@ -445,3 +445,4 @@ interface JournalEntry {
 | v1.2 | 2026-10-29 | 追加 §4.4.1 `cleanupRetention`/`getStorageInfo` 壳层命令；补事件顺序、撤销报告与 `ProgressEvent` 阶段计数说明；标注 `retryTask` 未实现。 |
 | v1.3 | 2026-10-29 | 追加 `PlanEntry.expected` 内容指纹与 E2010；apply 在隔离前复核大小/哈希，变化条目 skipped。 |
 | v1.4 | 2026-10-29 | 追加 S01 `preflightPlan`/`PreflightReport`、S03 `interrupted` 状态与 `recoverTask`、任务快照持久化说明；Journal 追加可选 `planKind`（undo 按 kind 退还配额）；`retryTask` 仍未实现。 |
+| v1.5 | 2026-10-30 | `retryTask` 实现语义定稿（仅失败条目、新 taskId 引用原 planId、Journal 幂等排除、undo 不可重试）；§3.2 节流行标注壳层合帧已实现（窗口取方案 §9.1 区间下限）；LicenseService 注入口收敛为壳层装配点（方案 13.8）。 |
