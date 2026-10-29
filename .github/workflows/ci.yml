@@ -127,10 +127,29 @@ jobs:
           # 人工跟踪的 4 条（R05/E01/E02/E04）本就无脚本，由 check_scope.py 显式确认。
           python fixtures/corpus/verify_corpus.py --rebuild --hashes
       - name: 单元测试（语料回归断言待实现）
-        run: cargo test --workspace --all-features
-        # 当前只跑单元测试；语料逐条断言 harness 尚未实现。
-        # 目标口径（实现 harness 后启用）：fixtures/ 全量中的「自动化」子集
-        # （方案 §4.11.2a④：移植代码不豁免）；通过率分母不含人工项。
+        shell: bash
+        run: |
+          # 当前只跑单元测试；语料逐条断言 harness 尚未实现。
+          # 目标口径（实现 harness 后启用）：fixtures/ 全量中的「自动化」子集
+          # （方案 §4.11.2a④：移植代码不豁免）；通过率分母不含人工项。
+          #
+          # 失败时把断言/panic/编译错误以 ::error:: 注解输出：日志下载需仓库
+          # 管理权限，注解可经 check-runs API 匿名读取，避免"只看到 exit code"。
+          set +e
+          log="test-output.log"
+          cargo test --workspace --all-features 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            escape() { printf '%s' "$1" | tr -d '\r' | sed 's/%/%25/g'; }
+            fails=$(grep -E "^test .*FAILED|panicked at|assertion .* failed|left:|right:|error\[E[0-9]+\]|error: " "$log" | head -20)
+            if [ -n "$fails" ]; then
+              while IFS= read -r line; do echo "::error::$(escape "$line")"; done <<< "$fails"
+            else
+              msg=$(tail -n 60 "$log" | tr -d '\r' | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error::$msg"
+            fi
+            exit "$status"
+          fi
       - name: 语料幂等复检
         run: |
           # 二次生成必须不产生任何文件变更（fixtures/README.md §3 的幂等约定）
