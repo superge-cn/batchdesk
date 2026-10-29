@@ -10,16 +10,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kernel::apply::{
     apply_plan, undo_plan_with_ports, ApplyContext, ApplyEntryReport, ApplyOptions, ApplyReport,
-    ApplyState, UndoPorts,
+    ApplyState, ApplyStatus, UndoPorts,
 };
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
 use kernel::journal::JournalStore;
-use kernel::license::AlwaysAllowLicense;
+use kernel::license::LicenseService;
 use kernel::path::ProtectedDir;
 use kernel::plan::PlanDocument;
 use kernel::progress::{CancelToken, ProgressEvent, ProgressPhase, ProgressSink};
@@ -35,6 +35,10 @@ pub type EventEmitter = Arc<dyn Fn(&str, Value) + Send + Sync>;
 pub const EVENT_PROGRESS: &str = "task://progress";
 pub const EVENT_STATE: &str = "task://state";
 pub const EVENT_DONE: &str = "task://done";
+
+/// 进度推送合帧窗口：取方案 9.1「进度刷新节流 100–200 ms」区间下限；
+/// 合帧由壳层负责（设计 01 §3.2）。状态迁移与 `task://done` 不合帧。
+const PROGRESS_COALESCE_WINDOW: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -186,6 +190,16 @@ impl TaskControl {
     }
 }
 
+/// 合帧状态（每任务）：kernel 逐条上报进度，壳层按窗口合并 `task://progress` 推送。
+/// `TaskSummary` 仍逐条更新，被合帧的计数通过 `getTask`/终态事件可达。
+#[derive(Default)]
+struct ProgressGate {
+    last_emit: Option<Instant>,
+    last_phase: Option<ProgressPhase>,
+    /// 窗口内被合帧的最新事件；阶段迁移或任务收尾时先于新阶段/终态事件补发。
+    pending: Option<ProgressEvent>,
+}
+
 struct TaskRecord {
     summary: TaskSummary,
     plan_id: String,
@@ -194,6 +208,7 @@ struct TaskRecord {
     job: StoredJob,
     /// 由启动恢复加载时记录崩溃前状态；`None` 表示当前进程新建的正常任务。
     recoverable_from: Option<TaskState>,
+    progress_gate: ProgressGate,
 }
 
 struct QueueState {
@@ -207,6 +222,8 @@ struct Inner {
     persist_lock: Mutex<()>,
     paths: TaskPaths,
     emit: EventEmitter,
+    /// LicenseService 注入（方案 13.8：接口不变、只换实现）。
+    license: Arc<dyn LicenseService>,
 }
 
 struct Job {
@@ -241,7 +258,14 @@ struct JobResult {
 }
 
 impl TaskQueue {
-    pub fn new(paths: TaskPaths, emit: EventEmitter) -> Self {
+    /// 唯一构造器即 LicenseService 注入口（方案 13.8：接口不变、只换实现）：
+    /// 单机版由装配点注入 AlwaysAllow，商业版/QuotaBased 只换注入实现，
+    /// 队列与 kernel 代码不变。
+    pub fn with_license(
+        paths: TaskPaths,
+        emit: EventEmitter,
+        license: Arc<dyn LicenseService>,
+    ) -> Self {
         let _ = std::fs::create_dir_all(&paths.quarantine_dir);
         if let Some(parent) = paths.journal_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -272,6 +296,7 @@ impl TaskQueue {
                     entries: persisted.entries,
                     job: persisted.job,
                     recoverable_from: Some(interrupted_from),
+                    progress_gate: ProgressGate::default(),
                 },
             );
         }
@@ -280,6 +305,7 @@ impl TaskQueue {
             persist_lock: Mutex::new(()),
             paths,
             emit,
+            license,
         });
         let (sender, receiver) = mpsc::channel::<Job>();
         let worker = Arc::clone(&inner);
@@ -297,7 +323,7 @@ impl TaskQueue {
             StoredJob::Apply { plan, .. } => plan.plan.entries.len() as u64,
             StoredJob::Undo { .. } => 0,
         };
-        self.insert(&task_id, job, total);
+        self.insert(&task_id, job, total, None);
         task_id
     }
 
@@ -318,11 +344,112 @@ impl TaskQueue {
                 plan_id: plan_id.clone(),
             },
             total,
+            None,
         );
         task_id
     }
 
-    fn insert(&self, task_id: &str, job: StoredJob, total: u64) -> String {
+    /// C16 手动重试（设计 01 §6、方案 §7.6）：仅对终态 `partial-failed`/`failed`
+    /// 的 apply 任务生效；默认重试全部失败条目，`entryIds` 限定子集（必须都是
+    /// 失败条目）。生成**新 taskId** 引用原 planId，原任务保持终态不复活；
+    /// Journal 已 applied 的条目幂等排除，保证不重复已完成项。
+    pub fn retry(
+        &self,
+        task_id: &str,
+        entry_ids: Option<Vec<String>>,
+    ) -> Result<String, KernelError> {
+        let (plan, options, failed_ids) = {
+            let state = self.inner.state.lock().unwrap();
+            let record = state.tasks.get(task_id).ok_or_else(|| {
+                KernelError::new("E1001", "task not found", Some(task_id.to_string()), false)
+            })?;
+            match (&record.summary.state, &record.job) {
+                (
+                    TaskState::PartialFailed | TaskState::Failed,
+                    StoredJob::Apply { plan, options },
+                ) => {
+                    let failed: BTreeSet<String> = record
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.status == ApplyStatus::Failed)
+                        .map(|entry| entry.entry_id.clone())
+                        .collect();
+                    (plan.clone(), options.clone(), failed)
+                }
+                (TaskState::PartialFailed | TaskState::Failed, _) => {
+                    return Err(KernelError::invalid_params(
+                        "only failed apply tasks can be retried; re-run undo from the journal",
+                    ));
+                }
+                _ => {
+                    return Err(KernelError::invalid_params(
+                        "only terminal partial-failed or failed tasks can be retried",
+                    ));
+                }
+            }
+        };
+        let selected: BTreeSet<String> = match entry_ids {
+            Some(ids) => {
+                if failed_ids.is_empty() || ids.is_empty() {
+                    return Err(KernelError::invalid_params("no failed entries to retry"));
+                }
+                for id in &ids {
+                    if !failed_ids.contains(id) {
+                        return Err(KernelError::invalid_params(format!(
+                            "entry {id} is not a failed entry of task {task_id}"
+                        )));
+                    }
+                }
+                ids.into_iter().collect()
+            }
+            None if failed_ids.is_empty() => {
+                // 编排级失败（如 Journal 不可写）：报告无条目级失败，重跑全部条目。
+                plan.plan
+                    .entries
+                    .iter()
+                    .map(|entry| entry.entry_id.clone())
+                    .collect()
+            }
+            None => failed_ids,
+        };
+        let applied = applied_entry_ids(&self.inner.paths, &plan.plan.plan_id).unwrap_or_default();
+        let selected: BTreeSet<String> = selected
+            .into_iter()
+            .filter(|entry_id| !applied.contains(entry_id))
+            .collect();
+        if selected.is_empty() {
+            return Err(KernelError::invalid_params(
+                "no failed entries left to retry; applied entries are skipped",
+            ));
+        }
+        let mut retried = plan;
+        retried
+            .plan
+            .entries
+            .retain(|entry| selected.contains(&entry.entry_id));
+        retried.plan.stats.total = retried.plan.entries.len();
+        retried.plan.stats.blocked = retried
+            .plan
+            .entries
+            .iter()
+            .filter(|entry| entry.blocked.is_some())
+            .count();
+        let total = retried.plan.entries.len() as u64;
+        let job = StoredJob::Apply {
+            plan: retried,
+            options,
+        };
+        let retry_task_id = new_ulid(&format!("task:retry:{task_id}"));
+        self.insert(
+            &retry_task_id,
+            job,
+            total,
+            Some(format!("retry of task {task_id}")),
+        );
+        Ok(retry_task_id)
+    }
+
+    fn insert(&self, task_id: &str, job: StoredJob, total: u64, message: Option<String>) -> String {
         let plan_id = job.plan_id();
         let kind = match &job {
             StoredJob::Apply { plan, .. } => plan.plan.kind.clone(),
@@ -337,7 +464,7 @@ impl TaskQueue {
             total,
             started_at: None,
             finished_at: None,
-            message: None,
+            message,
         };
         {
             let mut state = self.inner.state.lock().unwrap();
@@ -350,6 +477,7 @@ impl TaskQueue {
                     entries: Vec::new(),
                     job: job.clone(),
                     recoverable_from: None,
+                    progress_gate: ProgressGate::default(),
                 },
             );
             state.order.push(task_id.to_string());
@@ -718,7 +846,9 @@ impl Inner {
     }
 
     fn record_progress(&self, task_id: &str, event: &ProgressEvent) {
-        {
+        // 合帧决策在 state 锁内完成（每任务只有 worker 单生产者，无竞争），
+        // 实际推送在锁外执行；`TaskSummary` 无论是否推送都逐条更新。
+        let to_emit: Vec<ProgressEvent> = {
             let mut state = self.state.lock().unwrap();
             let Some(record) = state.tasks.get_mut(task_id) else {
                 return;
@@ -736,12 +866,39 @@ impl Inner {
                 record.summary.total = event.total;
             }
             record.summary.message = event.message.clone();
+
+            let gate = &mut record.progress_gate;
+            let phase_changed = gate.last_phase != Some(event.phase);
+            let due = match gate.last_emit {
+                Some(last) => last.elapsed() >= PROGRESS_COALESCE_WINDOW,
+                None => true,
+            };
+            let mut out = Vec::new();
+            if phase_changed {
+                // 阶段迁移立即推送；窗口内被合帧的条目计数先补发，
+                // 保证 journaling/finalizing 的阶段内计数不覆盖条目总量。
+                if let Some(pending) = gate.pending.take() {
+                    out.push(pending);
+                }
+                gate.last_phase = Some(event.phase);
+                gate.last_emit = Some(Instant::now());
+                out.push(event.clone());
+            } else if due {
+                gate.last_emit = Some(Instant::now());
+                gate.pending = None;
+                out.push(event.clone());
+            } else {
+                gate.pending = Some(event.clone());
+            }
+            out
+        };
+        for event in to_emit {
+            self.emit_progress(event);
         }
-        self.emit_progress(event.clone());
     }
 
     fn finish(&self, task_id: &str, next: TaskState, report: ApplyReport, message: Option<String>) {
-        let changed = {
+        let (changed, pending) = {
             let mut state = self.state.lock().unwrap();
             let Some(record) = state.tasks.get_mut(task_id) else {
                 return;
@@ -754,8 +911,12 @@ impl Inner {
             record.summary.finished_at = Some(now_rfc3339());
             record.summary.message = message;
             record.entries = report.entries.clone();
-            true
+            (true, record.progress_gate.pending.take())
         };
+        // 终态顺序（设计 01 §4.3）：窗口内合帧的计数 → state → done。
+        if let Some(event) = pending {
+            self.emit_progress(event);
+        }
         if changed {
             self.emit_state(task_id, next);
             self.emit(EVENT_DONE, json!({ "taskId": task_id, "summary": report }));
@@ -862,7 +1023,6 @@ fn run_apply(
         Err(error) => return failed_result(plan_id, task_id, error),
     };
     let adapter = CliFsAdapter::new(Some(inner.paths.quarantine_dir.clone()));
-    let license = AlwaysAllowLicense;
     let sink = JobSink {
         inner: Arc::clone(inner),
         task_id: task_id.to_string(),
@@ -870,7 +1030,7 @@ fn run_apply(
     };
     let mut context = ApplyContext {
         fs: &adapter,
-        license: &license,
+        license: inner.license.as_ref(),
         journal: &mut journal,
         task_id: task_id.to_string(),
         now_rfc3339: now_rfc3339(),
@@ -926,7 +1086,6 @@ fn run_undo(
         .filter(|entry| entry.status == kernel::journal::JournalStatus::Applied)
         .count();
     let adapter = CliFsAdapter::new(None);
-    let license = AlwaysAllowLicense;
     let sink = JobSink {
         inner: Arc::clone(inner),
         task_id: task_id.to_string(),
@@ -937,7 +1096,13 @@ fn run_undo(
         progress: Some(&sink),
         cancel: Some(control.as_ref()),
     };
-    match undo_plan_with_ports(plan_id, &adapter, &license, &mut journal, ports) {
+    match undo_plan_with_ports(
+        plan_id,
+        &adapter,
+        inner.license.as_ref(),
+        &mut journal,
+        ports,
+    ) {
         Ok(outcome) => {
             let processed = outcome.reverted + outcome.failed.len();
             let state = if control.cancel.load(Ordering::SeqCst) && processed < applied_count {
@@ -1152,6 +1317,10 @@ mod tests {
         }
     }
 
+    fn test_queue(paths: TaskPaths, emit: EventEmitter) -> TaskQueue {
+        TaskQueue::with_license(paths, emit, Arc::new(kernel::license::AlwaysAllowLicense))
+    }
+
     fn write_snapshot(paths: &TaskPaths, task_id: &str, plan: &PlanDocument, state: TaskState) {
         let summary = TaskSummary {
             task_id: task_id.to_string(),
@@ -1199,7 +1368,7 @@ mod tests {
 
         let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
         let sink = Arc::clone(&events);
-        let queue = TaskQueue::new(
+        let queue = test_queue(
             TaskPaths {
                 quarantine_dir: quarantine.clone(),
                 journal_path: journal.clone(),
@@ -1256,7 +1425,7 @@ mod tests {
         let temp = TempDir::new();
         let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
         let sink = Arc::clone(&events);
-        let queue = TaskQueue::new(
+        let queue = test_queue(
             TaskPaths {
                 quarantine_dir: temp.0.join("quarantine"),
                 journal_path: temp.0.join("journal.jsonl"),
@@ -1336,7 +1505,7 @@ mod tests {
             .unwrap();
         write_snapshot(&paths, &task_id, &plan, TaskState::Running);
 
-        let queue = TaskQueue::new(paths, Arc::new(|_, _| {}));
+        let queue = test_queue(paths, Arc::new(|_, _| {}));
         let detail = queue.get(&task_id).unwrap();
         assert_eq!(detail.summary.state, TaskState::Interrupted);
         assert!(detail.summary.finished_at.is_none());
@@ -1386,7 +1555,7 @@ mod tests {
             .unwrap();
         write_snapshot(&paths, &task_id, &plan, TaskState::Running);
 
-        let queue = TaskQueue::new(paths, Arc::new(|_, _| {}));
+        let queue = test_queue(paths, Arc::new(|_, _| {}));
         assert_eq!(
             queue.get(&task_id).unwrap().summary.state,
             TaskState::Interrupted
@@ -1441,7 +1610,7 @@ mod tests {
             .unwrap();
         write_snapshot(&paths, &task_id, &plan, TaskState::Running);
 
-        let queue = TaskQueue::new(paths, Arc::new(|_, _| {}));
+        let queue = test_queue(paths, Arc::new(|_, _| {}));
         let discarded = queue.recover(&task_id, RecoveryAction::Discard).unwrap();
         assert_eq!(discarded, task_id);
         assert_eq!(
@@ -1464,7 +1633,7 @@ mod tests {
         let temp = TempDir::new();
         let paths = paths_for(&temp);
         fs::write(&paths.queue_path, b"not json").unwrap();
-        let queue = TaskQueue::new(paths.clone(), Arc::new(|_, _| {}));
+        let queue = test_queue(paths.clone(), Arc::new(|_, _| {}));
         assert_eq!(queue.list(0, 10).total, 0);
         let backups: Vec<_> = fs::read_dir(&temp.0)
             .unwrap()
@@ -1478,6 +1647,211 @@ mod tests {
             .collect();
         assert_eq!(backups.len(), 1);
         assert!(!paths.queue_path.exists());
+    }
+
+    #[test]
+    fn retry_reruns_only_failed_entries_under_a_new_task_id() {
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let present = root.join("a.txt");
+        let missing = root.join("b.txt");
+        fs::write(&present, b"same").unwrap();
+        let plan = plan_for(&new_ulid("retry-plan"), &[present.clone(), missing.clone()]);
+        let plan_id = plan.plan_id.clone();
+        let ok_entry = plan.entries[0].entry_id.clone();
+        let failed_entry = plan.entries[1].entry_id.clone();
+
+        let queue = test_queue(paths_for(&temp), Arc::new(|_, _| {}));
+        let apply_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &apply_id);
+        assert_eq!(done.summary.state, TaskState::PartialFailed);
+
+        let error = queue
+            .retry(&apply_id, Some(vec![ok_entry.clone()]))
+            .unwrap_err();
+        assert_eq!(error.code, "E1002", "applied entries are not retryable");
+
+        let retry_id = queue.retry(&apply_id, None).unwrap();
+        assert_ne!(retry_id, apply_id);
+        let retried = wait_terminal(&queue, &retry_id);
+        assert_eq!(retried.summary.state, TaskState::Failed);
+        assert_eq!(retried.entries.len(), 1, "only the failed entry reruns");
+        assert_eq!(retried.entries[0].entry_id, failed_entry);
+        assert_eq!(retried.entries[0].status, ApplyStatus::Failed);
+        // 设计 01 §6：新任务引用原 planId，不复活旧任务。
+        let retried_plan_id = {
+            let state = queue.inner.state.lock().unwrap();
+            state.tasks.get(&retry_id).unwrap().plan_id.clone()
+        };
+        assert_eq!(retried_plan_id, plan_id);
+        assert_eq!(
+            queue.get(&apply_id).unwrap().summary.state,
+            TaskState::PartialFailed,
+            "the original task stays terminal"
+        );
+    }
+
+    #[test]
+    fn retry_after_orchestration_failure_requeues_all_entries() {
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("a.txt");
+        let second = root.join("b.txt");
+        fs::write(&first, b"same").unwrap();
+        fs::write(&second, b"same").unwrap();
+        let plan = plan_for(&new_ulid("orch-retry-plan"), &[first, second]);
+        // Journal 路径指向目录 → apply 打开 Journal 失败，编排级失败（报告零条目）。
+        let journal_dir = temp.0.join("journal-dir");
+        fs::create_dir_all(&journal_dir).unwrap();
+        let paths = TaskPaths {
+            quarantine_dir: temp.0.join("quarantine"),
+            journal_path: journal_dir,
+            queue_path: temp.0.join("tasks.json"),
+        };
+        fs::create_dir_all(&paths.quarantine_dir).unwrap();
+        let queue = test_queue(paths, Arc::new(|_, _| {}));
+        let apply_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &apply_id);
+        assert_eq!(done.summary.state, TaskState::Failed);
+        assert!(done.entries.is_empty());
+
+        let retry_id = queue.retry(&apply_id, None).unwrap();
+        let retried = wait_terminal(&queue, &retry_id);
+        assert_eq!(
+            retried.summary.state,
+            TaskState::Failed,
+            "the journal is still unwritable"
+        );
+        assert_eq!(
+            retried.summary.total, 2,
+            "every entry was requeued after an orchestration-level failure"
+        );
+    }
+
+    #[test]
+    fn retry_rejects_undo_jobs_running_tasks_and_unknown_ids() {
+        let temp = TempDir::new();
+        let queue = test_queue(paths_for(&temp), Arc::new(|_, _| {}));
+        let running_id = new_ulid("retry-running");
+        insert_control_task(&queue, &running_id);
+        assert_eq!(
+            queue.retry(&running_id, None).unwrap_err().code,
+            "E1002",
+            "non-terminal tasks cannot be retried"
+        );
+        {
+            let mut state = queue.inner.state.lock().unwrap();
+            let record = state.tasks.get_mut(&running_id).unwrap();
+            record.summary.state = TaskState::Failed;
+        }
+        assert_eq!(
+            queue.retry(&running_id, None).unwrap_err().code,
+            "E1002",
+            "undo jobs cannot be retried"
+        );
+        assert_eq!(queue.retry("no-such-task", None).unwrap_err().code, "E1001");
+    }
+
+    #[test]
+    fn progress_bursts_are_coalesced_and_flushed_on_phase_change() {
+        let temp = TempDir::new();
+        let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let sink = Arc::clone(&events);
+        let queue = test_queue(
+            paths_for(&temp),
+            Arc::new(move |event, payload| {
+                sink.lock().unwrap().push((event.to_string(), payload));
+            }),
+        );
+        let task_id = new_ulid("coalesce");
+        insert_control_task(&queue, &task_id);
+
+        for done in 1..=200u64 {
+            queue.inner.record_progress(
+                &task_id,
+                &ProgressEvent {
+                    task_id: task_id.clone(),
+                    phase: ProgressPhase::Executing,
+                    done,
+                    total: 200,
+                    message: None,
+                },
+            );
+        }
+        queue.inner.record_progress(
+            &task_id,
+            &ProgressEvent {
+                task_id: task_id.clone(),
+                phase: ProgressPhase::Journaling,
+                done: 1,
+                total: 1,
+                message: None,
+            },
+        );
+
+        let emitted: Vec<Value> = {
+            let guard = events.lock().unwrap();
+            guard
+                .iter()
+                .filter(|(name, _)| name == EVENT_PROGRESS)
+                .filter(|(_, payload)| {
+                    payload.get("taskId").and_then(Value::as_str) == Some(task_id.as_str())
+                })
+                .map(|(_, payload)| payload.clone())
+                .collect()
+        };
+        assert!(!emitted.is_empty());
+        assert!(
+            emitted.len() < 200,
+            "same-phase progress bursts must be coalesced"
+        );
+        let phase_of = |payload: &Value| {
+            payload
+                .get("phase")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let executing: Vec<&Value> = emitted
+            .iter()
+            .filter(|payload| phase_of(payload) == "executing")
+            .collect();
+        assert_eq!(
+            executing
+                .last()
+                .and_then(|payload| payload.get("done"))
+                .and_then(Value::as_u64),
+            Some(200),
+            "the latest coalesced count is flushed on the phase change"
+        );
+        assert_eq!(
+            phase_of(emitted.last().unwrap()),
+            "journaling",
+            "phase transitions are pushed immediately"
+        );
+        assert_eq!(
+            queue.get(&task_id).unwrap().summary.done,
+            200,
+            "TaskSummary keeps updating even when the push is coalesced"
+        );
     }
 
     fn insert_control_task(queue: &TaskQueue, task_id: &str) {
@@ -1504,6 +1878,7 @@ mod tests {
                     plan_id: new_ulid("control-undo"),
                 },
                 recoverable_from: None,
+                progress_gate: ProgressGate::default(),
             },
         );
         state.order.push(task_id.to_string());

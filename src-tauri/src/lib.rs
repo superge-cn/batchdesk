@@ -365,6 +365,20 @@ fn recoverTask(
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
+fn retryTask(
+    state: State<'_, AppState>,
+    task_id: String,
+    entry_ids: Option<Vec<String>>,
+) -> Result<TaskHandle, IpcError> {
+    let task_id = state
+        .tasks
+        .retry(&task_id, entry_ids)
+        .map_err(IpcError::from)?;
+    Ok(TaskHandle { task_id })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
 fn undoPlan(state: State<'_, AppState>, plan_id: String) -> Result<TaskHandle, IpcError> {
     let task_id = state.tasks.enqueue_undo(plan_id);
     Ok(TaskHandle { task_id })
@@ -786,7 +800,9 @@ pub fn run() {
         .setup(|app| {
             let paths = DataPaths::from_app(app)?;
             let handle = app.handle().clone();
-            let tasks = TaskQueue::new(
+            // LicenseService 装配点（方案 13.8：接口不变、只换实现）：
+            // 单机版注入 AlwaysAllow；商业版/QuotaBased 只替换此处实现。
+            let tasks = TaskQueue::with_license(
                 TaskPaths {
                     quarantine_dir: paths.quarantine_dir.clone(),
                     journal_path: paths.journal_path.clone(),
@@ -797,6 +813,7 @@ pub fn run() {
                         eprintln!("E9001: failed to emit {event}: {error}");
                     }
                 }),
+                Arc::new(kernel::license::AlwaysAllowLicense),
             );
             app.manage(AppState::new(paths, tasks));
             Ok(())
@@ -808,6 +825,7 @@ pub fn run() {
             applyPlan,
             preflightPlan,
             recoverTask,
+            retryTask,
             undoPlan,
             cancelTask,
             pauseTask,

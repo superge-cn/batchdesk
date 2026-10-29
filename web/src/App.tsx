@@ -36,6 +36,7 @@ import {
   preflightPlan,
   recoverTask,
   resumeTask,
+  retryTask,
   toIpcError,
   undoPlan
 } from "./lib/ipc";
@@ -324,6 +325,12 @@ function App() {
     busy === null &&
     ["completed", "partial-failed", "failed"].includes(applyTask?.state ?? "") &&
     applyHasApplied;
+  const canRetry =
+    Boolean(applyTask) &&
+    !undoTask &&
+    !taskActive &&
+    busy === null &&
+    ["partial-failed", "failed"].includes(applyTask?.state ?? "");
   const undoReverted =
     undoTask?.report?.entries.filter((entry) => entry.status === "ok").length ?? 0;
   const undoFailures =
@@ -441,7 +448,50 @@ function App() {
               }
             }
       );
+      // 撤销总数以壳层按 Journal 统计为准（重试后 Journal 条目多于单次报告）。
+      getTask(handle.taskId)
+        .then((detail) =>
+          setTaskViews((previous) => {
+            const current = previous[handle.taskId];
+            if (!current) return previous;
+            return {
+              ...previous,
+              [handle.taskId]: {
+                ...current,
+                total: Math.max(current.total, detail.summary.total)
+              }
+            };
+          })
+        )
+        .catch(() => undefined);
       setNotice("撤销任务已加入队列；回滚进度通过 task:// 事件推送。");
+    } catch (value) {
+      setError(toIpcError(value));
+    }
+  }
+
+  async function onRetry() {
+    if (!applyTask) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const handle = await retryTask(applyTask.taskId);
+      setApplyTaskId(handle.taskId);
+      setTaskViews((previous) =>
+        previous[handle.taskId]
+          ? previous
+          : {
+              ...previous,
+              [handle.taskId]: {
+                taskId: handle.taskId,
+                state: "queued",
+                phase: "queued",
+                done: 0,
+                total: 0
+              }
+            }
+      );
+      setNotice("重试任务已加入队列；只重跑失败条目，已完成条目按 Journal 幂等跳过。");
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -879,6 +929,11 @@ function App() {
                       {isActive(undoTask) ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
                       {isActive(undoTask) ? "撤销中…" : "撤销本次计划"}
                     </button>
+                    {applyTask && ["partial-failed", "failed"].includes(applyTask.state) && (
+                      <button className="button button-secondary" type="button" onClick={onRetry} disabled={!canRetry}>
+                        <RefreshCw size={16} /> 重试失败项
+                      </button>
+                    )}
                   </div>
 
                   {hasBlocked && (

@@ -14,6 +14,7 @@ import {
   mockPreflightPlan,
   mockRecoverTask,
   mockResume,
+  mockRetry,
   mockUndo
 } from "./mock";
 import type {
@@ -89,6 +90,10 @@ export async function recoverTask(
   return isTauri()
     ? invoke<TaskHandle>("recoverTask", { taskId, action })
     : mockRecoverTask(taskId);
+}
+
+export async function retryTask(taskId: string): Promise<TaskHandle> {
+  return isTauri() ? invoke<TaskHandle>("retryTask", { taskId }) : mockRetry(taskId);
 }
 
 export async function cancelTask(taskId: string): Promise<void> {

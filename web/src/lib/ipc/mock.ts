@@ -220,7 +220,7 @@ function tick(task: MockTask) {
     task.done = task.total;
     task.phase = "executing";
     emitProgress(task);
-    finish(task, "completed");
+    finish(task, finalApplyState(task));
     return;
   }
   task.cursor += 1;
@@ -228,6 +228,15 @@ function tick(task: MockTask) {
   task.phase = "executing";
   emitProgress(task);
   task.timer = setTimeout(() => tick(task), 110);
+}
+
+function finalApplyState(task: MockTask): TaskState {
+  const failed = task.entries.some((entry) => entry.status === "failed");
+  if (!failed) return "completed";
+  const applied = task.entries.some(
+    (entry) => entry.status === "ok" || entry.status === "overwritten"
+  );
+  return applied ? "partial-failed" : "failed";
 }
 
 function launch(task: MockTask) {
@@ -285,6 +294,19 @@ export async function mockApply(planId: string): Promise<TaskHandle> {
     }
     return { entryId: entry.entryId, status: "ok" };
   });
+  // 演示 C16 重试链路：最后一个未受阻条目模拟“文件被占用”失败，重试后成功。
+  const demoFailure = [...lastPlan.entries].reverse().find((entry) => !entry.blocked);
+  const target = demoFailure
+    ? entries.find((entry) => entry.entryId === demoFailure.entryId)
+    : undefined;
+  if (target) {
+    target.status = "failed";
+    target.error = {
+      code: "E2003",
+      message: "mock: file was locked by another process",
+      retryable: true
+    };
+  }
   const task = createTask("apply", entries);
   return { taskId: task.taskId };
 }
@@ -325,6 +347,23 @@ export function mockRecoverTask(taskId: string): TaskHandle {
   if (!task) fail("E1001", "任务不存在");
   finish(task, "cancelled", "mock recovery: discarded");
   return { taskId };
+}
+
+export function mockRetry(taskId: string): TaskHandle {
+  const task = tasks.get(taskId);
+  if (!task) fail("E1001", "任务不存在");
+  if (task.kind !== "apply" || !["partial-failed", "failed"].includes(task.state)) {
+    fail("E1002", "只有失败的应用任务可重试");
+  }
+  const failed = task.entries.filter((entry) => entry.status === "failed");
+  if (failed.length === 0) fail("E1002", "没有失败条目可重试");
+  const entries: ApplyEntryReport[] = failed.map((entry) => ({
+    entryId: entry.entryId,
+    status: "ok"
+  }));
+  const retry = createTask("apply", entries);
+  retry.message = `重试任务 ${taskId}`;
+  return { taskId: retry.taskId };
 }
 
 export function mockCancel(taskId: string) {
