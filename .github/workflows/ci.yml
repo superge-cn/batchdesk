@@ -37,6 +37,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  # Windows runner 的 Python 默认用 cp1252 编码管道 I/O，中文输出/读取会
+  # UnicodeEncodeError（CI run 40865148224 的 test·windows 失败根因之一）。
+  # PYTHONUTF8 强制全 Python 步骤按 UTF-8 处理（对 Linux 无副作用）。
+  PYTHONUTF8: "1"
 
 jobs:
   # ── ① 静态检查（零容忍门禁，见 CONTRIBUTING §1①）──────────────

@@ -1,0 +1,6 @@
+# 统一 LF 检出（全平台）：
+# 1) scripts/check_docs.py 与 fixtures/corpus/verify_corpus.py 用字节级 sha256 校验
+#    MANIFEST 冻结哈希，Windows autocrlf 检出会把 LF 转 CRLF 导致哈希必失配（CI run 40865148224）；
+# 2) test job 的"语料幂等复检"依赖 git diff --exit-code 的字节稳定性；
+# 3) 二进制文件（png/ico/icns 等）由 text=auto 自动识别，不受影响。
+* text=auto eol=lf

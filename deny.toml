@@ -28,6 +28,15 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 
+[advisories]
+ignore = [
+    # RUSTSEC-2024-0370：proc-macro-error 已停止维护（unmaintained，非漏洞）。
+    # 传递路径：gtk-rs（glib-macros）→ wry/tauri（Linux WebKitGTK 栈），上游无可用升级；
+    # 属桌面壳独立 workspace 的传递依赖，非本项目直接依赖。tauri/gtk-rs 生态迁移后移除本例外。
+    # 依据：CI 首跑（2026-10-29，run 40865148224）确认其为唯一命中项，本地离线复核实一致。
+    "RUSTSEC-2024-0370",
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
