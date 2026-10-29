@@ -40,7 +40,7 @@
 - CLI：C09 scan → plan → apply → undo/cleanup、S02、`--protected-dir`、`--retention-days`。
 - 桌面：`src-tauri` Tauri v2 任务队列（`tasks.rs`）与 `task://progress`/`task://state`/`task://done`；`applyPlan`/`undoPlan` 返回 `{taskId}`；取消/暂停/恢复与 list/get 已注册；应用数据目录下 quarantine/journal。
 - Web：React 19/Vite 7 C09 页面，U v1.3 token + 液态玻璃外壳；计划预览、确认执行、事件驱动进度/暂停/取消、撤销、保留期演练/永久清理；任务事件按 taskId 归档，避免 IPC 返回前完成导致丢报告；浏览器 mock IPC 流已验证。
-- 验证：`cargo test --workspace` 70 项通过（kernel 46 + platform 15 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 2 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 六 job 全绿（run 40872864062，2026-10-29；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success）**。
+- 验证：`cargo test --workspace` **146 项**通过（kernel 102 + platform 35 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 8 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 六 job 全绿（run 40872864062，2026-10-29；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success；head be3632e 复验 success）**。
 - 门禁：fmt/clippy、docs、语料范围/哈希、迁移 schema。
 
 ### 3.2 部分完成/有明确缺口
@@ -48,7 +48,7 @@
 | 域 | 已完成 | 未完成/缺口 |
 |---|---|---|
 | C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010）、Windows 文件身份（ADR-0012） | 长路径、C09 的 T 全量 UI 验收 |
-| 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停、ConfigDocument + UiState + Recipe 存储与命令、通用执行器（rename/move/delete）+ 冲突枚举 | 重试（retryTask）、任务持久化、设置 UI、`loadRecipe`、日志/授权注入、Hashing 端口、`copy` 执行器 |
+| 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停、ConfigDocument + UiState + Recipe 存储与命令、通用执行器（rename/move/delete）+ 冲突枚举、S01 预检判定与采集、S02 目标路径执行期复核、S03 任务快照持久化与恢复 | 重试（retryTask）、事件合帧、设置 UI、`loadRecipe`、日志/授权注入、Hashing 端口、`copy` 执行器 |
 | IPC/UI | C09 任务队列命令、`{taskId}+事件`、cleanup/storage 合约化、事件驱动 UI | CSP/capabilities、i18n、虚拟滚动、shadcn 完整组件、Vitest/Playwright、任务列表 UI |
 | 桌面工程 | Tauri 编译/启动、CI desktop check | Windows WebView 构建验证、`src-tauri` 独立 Cargo.lock 的 cargo-deny/SBOM、安装包/签名 |
 | 验证 | C-6、C-6 计划预览、apply/undo/保留期集成 | 24 条自动化语料的逐条断言 harness、C-7 阻塞、C-1/C-2/C-4/C-5/C-8 正式基准 |
@@ -56,7 +56,7 @@
 ### 3.3 未开始（按功能组）
 
 - **阶段 0 文本/编码**：F01–F13（分割/合并/抽列/编码/表头/换行/替换/正则改名等）、C01/C02/C03/C04/C05/C06/C07/C08/C10/C11/C12/C13/C14/C15/C18。
-- **阶段 0 安全/环境**：S01 预检、S02 完整 UI 接入、S03 断点续跑；C-7 授权状态集。
+- **阶段 0 安全/环境**：C-7 授权状态集（阻塞；S01/S02/S03 的内核与壳层切片已完成，见 §3.2 平台核心行）。
 - **阶段 1**：C37 处理模板（存储/迁移/导入导出已完成，Phase A/B 的 plan/apply 与 UI 未做）、F15 AI 助手 Phase 1/2/3、设置与持久化 UI。
 - **P1/P2**：C21–C63 中未进入阶段 0 的功能、CLI C40 正式命令面、性能基准结果台账。
 - **商业/云端/Web/发布**：商业授权签发与 QuotaBased、云端服务端、Web/WASM 链路、安装包/签名/更新检查。
@@ -67,8 +67,8 @@
 |---|---|
 | 有几个产品功能完成 T 验收？ | **0** |
 | 有几个功能有可运行纵向切片？ | **1**（C09） |
-| 平台核心是否足够支撑第二个功能？ | **不够**：缺重试/任务持久化、Config/UiState、通用文件操作主链、日志/授权注入 |
-| 现在最该做什么？ | **Wave 1 续做**：配置/模板/UiState 存储已完成，下一步是设置 UI 与通用文件操作主链；W0-6 仅剩 Windows 长路径与 C09 的 T 全量 UI 验收 |
+| 平台核心是否足够支撑第二个功能？ | **接近**：S01/S02/S03、Config/UiState、通用文件操作主链已建；仍缺 retryTask、事件合帧、日志/授权注入与 Hashing 端口 |
+| 现在最该做什么？ | **Wave 1 收尾**：S01/S02/S03 切片已完成；下一步是日志/授权注入、retryTask 与事件合帧，随后进入 Wave 2；W0-6 仅剩 Windows 长路径与 C09 的 T 全量 UI 验收 |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -109,6 +109,7 @@
 2. **通用文件操作主链**：C05/C06/C07/C18 的冲突枚举、预览、plan/apply、Journal 撤销；供后续 F/C 功能复用。
    - **当前状态（2026-10-29）**：kernel `conflict`（三类冲突枚举、保留名/非法字符/结尾点空格/空名警告、`sequence` 命名、大小写折叠）与 `generic_apply`（rename/move/delete 执行、冲突二次裁决、Journal 可逆记录、取消回滚、E2010 指纹复核、E2009/E2006/E4001/E4004、outcome→`overwritten` 单列）已落地并含 17 项单测；`copy`、压缩/转码类与长路径分级未接（见台账缺口）；尚未接入具体功能与 UI。
 3. **S01/S02/S03**：预检、保护目录执行层复核、断点续跑/任务持久化。
+   - **当前状态（2026-10-29）**：S01 内核纯函数预检（磁盘余量判定式、只读/占用/占位、路径长度分级、UNC 降级、保护命中）与 platform 事实采集（statvfs/GetDiskFreeSpaceExW、写探测、2 秒 UNC 超时、LongPathsEnabled）已落地；壳层 `preflightPlan` 与 `applyPlan` 前置阻断（E2004 零副作用）。S02 执行期补 `rename/move` **目标路径**保护复核；配置来源名单在 plan→apply 间变化时旧预览失效（E1002）。S03 非终态任务快照持久化（`tasks.json` 原子写、损坏备份）、启动标记 `interrupted` 不自动续跑、`recoverTask` 的 resume/rollback/discard；Journal 增 `planKind`，undo 按计划类别退还配额。**剩余**：TC S01/S02 的 10–12 条 UI 用例尚未逐条执行、S03 实机崩溃演练、retryTask/事件合帧、UNC 探测线程超时残留的系统调用（已知取舍）。
 4. **日志/诊断/授权注入**：C17a 最小日志、Journal 保留期、LicenseService 单机实现与商业接口边界。
 5. **Hashing/FsAdapter 能力补齐**：长路径、占位文件、分块读（Windows 文件身份已由 ADR-0012 落地）。
 
@@ -166,7 +167,7 @@
 - **每个 Wave**：更新本文件与 `TRACEABILITY`；Wave 完成不等于阶段验收，最终以 T 的四级验收为准。
 - **状态更新**：完成/切片/部分/未开始/阻塞五档只能按证据改；没有测试或 E2E 的不写“完成”。
 - **范围控制**：不因本计划新增产品阈值或行为；新增功能/改优先级回到方案 §11.6 或 T 升版。
-- **已知偏差**：任务队列已实现，但 `retryTask`、任务持久化/S03 恢复、事件合帧未实现；`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计已由 CI deny job 覆盖（W0-5 完成）。W0-6 是 Wave 0 仅剩的关闭项（Windows 长路径、C09 的 T 全量 UI 验收），不是“已完成”。
+- **已知偏差**：S03 任务快照持久化与 `recoverTask` 已实现，但 `retryTask`、事件合帧仍未实现；S01/S02 已有内核/壳层判定与最小 UI 提示，TC 的 10–12 条 S01/S02 用例尚未逐条执行，S03 尚未做实机崩溃演练。`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计已由 CI deny job 覆盖（W0-5 完成）。W0-6 是 Wave 0 仅剩的关闭项（Windows 长路径、C09 的 T 全量 UI 验收），不是“已完成”。
 
 ### 6.1 状态更新记录（模板 + 当前示例）
 
@@ -186,6 +187,7 @@
 | 2026-10-29 | Wave 1-2 通用文件操作主链 | 切片 | kernel 新增 `conflict`（9 项单测）与 `generic_apply`（8 项单测）；`LicenseService` 端口参数由 `OperationKind` 改为 `&str` 以支持动态功能编号；workspace 124 项测试全绿（kernel 88 + platform 27 + CLI 6 + 集成 3）；fmt/clippy -D warnings 通过 | `copy` 撤销（Journal 删除型逆向，待契约评审）、undo 的 release kind、长路径分级、具体功能与 UI 接入 | 开发代理 |
 | 2026-10-29 | Wave 1-1 配置/模板/UiState 存储 | 切片 | kernel 新增 `config`/`recipe`/`ui_state`（kernel 71 项含 25 项新增单测）；platform 新增 `config_store`（27 项含 12 项新增：损坏备份 E5009、高版本只读 E1007、UiState 隔离重置、模板 CRUD/导入导出、recipeId 路径穿越拒绝）；src-tauri 注册 12 条命令；**CI 七 job 全绿（run 40881782445，head 11f981c，0 failure 注解）**；`cargo fmt/clippy -D warnings`/`check_docs.py` 通过 | 设置 UI、`loadRecipe`、迁移链（v1 空）、UiState 离屏/clamp、E5009/E1007 用户提示、Web OPFS | 开发代理 |
 | 2026-10-29 | CI 六 job 全绿 + W0-5 关闭 | 完成 | run 40872864062（head 23c1f45，push，0 failure 注解）：lint / deny（advisories+licenses+bans+sources + SBOM artifact）/ test·ubuntu / test·windows / web / desktop / bench 全 success；Windows 侧 `apply_flow` 3 项（含真实 plan→apply E2010 场景，`stats.total=2`）通过 → Windows 文件身份可用、C09 计划非空 | W0-6 剩 Windows 长路径与 C09 的 T 全量 UI 验收 | 开发代理 |
+| 2026-10-29 | Wave 1-3 S01/S02/S03 | 切片 | kernel 新增 `preflight`（9 项单测：余量临界 ±1、临时峰值、200/259/260 分级、保护 canonical/字面、只读/占用/占位、UNC 超时降级、空输入逐项结论）；`generic_apply` 补目标路径保护复核（+2 项）；Journal 增可选 `planKind`（+2 项，旧日志兼容），undo 按 kind 退还配额；platform 新增 `preflight`（35 项中 +8：statvfs、写探测、UNC 2 秒超时、long-path、same-volume）；`src-tauri/src/tasks.rs` 快照持久化 + `interrupted` + `interrupted → resume/rollback/discard`（6 项测试，含已完成条目按 Journal 幂等跳过、回滚恢复、放弃保留、损坏快照备份）；壳层 `preflightPlan`/`recoverTask` 命令、`applyPlan` E2004 前置阻断与配置名单变更 E1002；web 预检报告与恢复提示条；`cargo test --workspace` 146 项、壳层 8 项、`./node_modules/.bin/tsc --noEmit`/`vite build`、fmt/clippy -D warnings/`cargo deny`（root + src-tauri）全绿 | TC S01/S02 的 10–12 条 UI 用例逐条执行、S03 实机崩溃演练、retryTask/事件合帧、UNC 超时线程残留（已知取舍）、C09 长路径 | 开发代理 |
 
 ## 7. 关联
 

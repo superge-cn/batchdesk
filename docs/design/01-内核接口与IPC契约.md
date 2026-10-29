@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.3（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明与 E2010） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.4（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -186,8 +186,27 @@ interface LicenseStateSummary {
 }
 
 // —— 任务状态（§6 状态机的线协议值）——
-type TaskState = "queued" | "running" | "paused" | "cancelling"
+type TaskState = "queued" | "running" | "paused" | "cancelling" | "interrupted"
                | "completed" | "partial-failed" | "failed" | "cancelled";
+// interrupted：应用异常退出后由启动恢复加载；只能经 recoverTask 续跑/回滚/放弃，不自动执行（§6、S03）。
+
+// —— S01 预检（只读结论；kernel 判定，壳层采集事实）——
+type PreflightLevel = "pass" | "warn" | "block";
+interface PreflightItem {
+  kind: "disk-space" | "protected" | "readonly" | "locked" | "placeholder"
+      | "long-path" | "unc" | "path";            // 追加式枚举，冻结后只增不改
+  level: PreflightLevel;
+  message: string;
+  path?: string;
+  code?: string;                                  // E1003/E2002/E2003/E2004/E2005/E2006/E2009
+  hint?: string;
+}
+interface PreflightReport {
+  items: PreflightItem[];
+  level: PreflightLevel;                          // 全项最高级别
+  pass: number; warn: number; block: number;
+  taskBlocked: boolean;                           // 仅磁盘空间不足等整任务阻断；条目级阻断由计划 skipped
+}
 
 // —— 分页容器（§2.3）与各页条目 ——
 interface Page<T> { items: T[]; total: number; }
@@ -222,9 +241,11 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 |---|---|---|---|
 | `scanDirectory` | `{path, filter: ScanFilter, page}` | `DirPage` | §4.2 工作区 |
 | `planOperation` | `{kind, params, sourcePaths}` | `PlanDocument`（纯函数结果，含 warnings/conflicts） | §7.1 / §7.4 |
-| `applyPlan` | `{planId, options: ApplyOptions}` | `{taskId}`（立即返回，进度走事件） | §7.1 |
+| `preflightPlan` | `{planId}` | `PreflightReport`（S01 预检结论，逐项 pass/warn/block；只读，不改变计划） | 方案 §3.3、§4.9、§9.1 |
+| `applyPlan` | `{planId, options: ApplyOptions}` | `{taskId}`（立即返回，进度走事件；预检整任务阻断时返回 E2004 且零副作用） | §7.1 |
 | `cancelTask` | `{taskId}` | `void`（幂等） | §7.7 |
 | `pauseTask` / `resumeTask` | `{taskId}` | `void` | §7.7 / §4.4 |
+| `recoverTask` | `{taskId, action: "resume" \| "rollback" \| "discard"}` | `{taskId}`（仅对 interrupted 任务；rollback 返回新的 undo 任务 ID） | 方案 §9.3、§15.3.2（S03） |
 | `retryTask` | `{taskId, entryIds?}` | `{taskId}`（C16 只重试失败条目） | §7.6 |
 | `listTasks` | `{page}` | `TaskPage` | §6.5 |
 | `getTask` | `{taskId}` | `TaskDetail`（含 per-entry ApplyReport） | §7.5 |
@@ -268,7 +289,7 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 | `cleanupRetention` | `{retentionDays?: number, apply?: boolean}` | `CleanupOutcome` | 保留期演练/清理；`apply` 缺省 false |
 | `getStorageInfo` | — | `{quarantineDir: string, journalFile: string}` | 展示隔离目录与 Journal 路径 |
 
-> 任务队列新增的 `cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已按 §4.1 的入出参实现；`retryTask` 尚未实现，实现前不得在 UI 暴露入口。分页默认值属壳层实现参数，不改变 §2.3 的契约。
+> 任务队列命令 `cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已按 §4.1 的入出参实现；**S03 已实现任务快照持久化与 `recoverTask`**（`interrupted` 状态不自动续跑）。`retryTask` 尚未实现，实现前不得在 UI 暴露入口。分页默认值属壳层实现参数，不改变 §2.3 的契约。
 
 ## 5. Plan/Apply 数据模型
 
@@ -355,12 +376,15 @@ queued → running → completed            （全部条目 ok/overwritten）
            │        └─retry──▶ queued（新 taskId，仅 retryable 失败条目）
            ├─ failed ──retry──▶ queued（全部条目 failed，或编排级错误如 Journal 不可写）
            ├─ paused ⇄ running
-           └─ cancelling ──▶ cancelled（已执行部分按 Journal 反向回滚后终态）
+           ├─ cancelling ──▶ cancelled（已执行部分按 Journal 反向回滚后终态）
+           └─ interrupted ──recover(resume)──▶ queued（同 taskId；按 Journal 跳过已完成条目）
+                          ├─recover(rollback)──▶ cancelled（另起 undo 任务按 Journal 回滚）
+                          └─recover(discard)──▶ cancelled（保留已执行状态，Journal 仍可后续撤销）
 ```
 
 - 终态三分类：`completed`／`partial-failed`／`failed`／`cancelled` 均为终态；`partial-failed` 与 `failed` 的区分依据 ApplyReport 条目级状态（§5），展示层据此呈现"部分失败"（方案 §7.6 的失败明细与重试入口）。
-
-- `cancelling → cancelled` 的中间回滚步骤以 `phase = journaling` 进度上报。
+- `interrupted` 不是终态，但**不得自动执行**：只能由 `recoverTask` 显式选择续跑/回滚/放弃（方案 §9.3、§15.3.2）。
+- `cancelling → cancelled` 的中间回滚步骤以 `phase = journaling` 进度上报；崩溃发生在 `cancelling` 时，恢复后 `resume` 继续回滚并以 `cancelled` 收尾。
 - 终态不可再迁移；`retryTask` 生成**新 taskId** 引用原 planId，不复活旧任务。
 
 ## 7. 错误码位表（§4.6 分段的落地）
@@ -385,6 +409,7 @@ Journal 每执行条目一条 JSONL 记录，字段：
 ```ts
 interface JournalEntry {
   seq: number; planId: string; entryId: string;
+  planKind?: string;                // 追加式可选字段：撤销时按该 kind 向 LicenseService 退还配额；旧日志缺省按 c09
   ts: string;                       // 经 Clock 端口取得
   forward: FsOp; reverse: FsOp;     // FsOp = {op:"rename"|"copy"|"write_atomic"|"quarantine", from?, to?, dataRef?}
   status: "applied" | "reverted";
@@ -419,3 +444,4 @@ interface JournalEntry {
 | v1.1 | 2026-10-28 | 补 `TaskSummary.channel`、`UndoableSummary.scope`、`LogPage.ephemeral`；补 `ConflictPolicy`/`Capability` 类型与 `KernelError` 映射说明；修正 §9 内部引用；E3xxx 增补 E3006。 |
 | v1.2 | 2026-10-29 | 追加 §4.4.1 `cleanupRetention`/`getStorageInfo` 壳层命令；补事件顺序、撤销报告与 `ProgressEvent` 阶段计数说明；标注 `retryTask` 未实现。 |
 | v1.3 | 2026-10-29 | 追加 `PlanEntry.expected` 内容指纹与 E2010；apply 在隔离前复核大小/哈希，变化条目 skipped。 |
+| v1.4 | 2026-10-29 | 追加 S01 `preflightPlan`/`PreflightReport`、S03 `interrupted` 状态与 `recoverTask`、任务快照持久化说明；Journal 追加可选 `planKind`（undo 按 kind 退还配额）；`retryTask` 仍未实现。 |
