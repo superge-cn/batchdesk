@@ -1,0 +1,33 @@
+# 依赖许可证/来源策略（初始白名单）
+#
+# 依据：OQ-13（2026-10-28 用户按推荐确认）；项目自身许可证方向见 OQ-11，待法务确认。
+# 允许宽松许可证；GPL/AGPL/LGPL 默认不在白名单内，需逐案评审后再加例外。
+# cargo-deny 配置语法见 https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "0BSD",
+    "MIT-0",
+    "LicenseRef-Proprietary",
+    # 2026-10-29 用户确认：仅允许未修改的 Tauri 传递依赖使用 MPL-2.0
+    # （cssparser/cssparser-macros/dtoa-short/option-ext/selectors）。
+    "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

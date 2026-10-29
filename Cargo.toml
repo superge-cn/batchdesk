@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel",
+    "crates/platform",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "LicenseRef-Proprietary"
+
+[workspace.dependencies]
+batchdesk-kernel = { path = "crates/kernel" }
+batchdesk-platform = { path = "crates/platform" }
+
+# 发行构建硬化方向见 docs/adr/0002-二进制加固与混淆边界.md：
+# 完整配置以本文件为单一事实来源，CI release 路径另做产物断言。
+[profile.release]
+strip = "symbols"
+lto = true
+codegen-units = 1
+panic = "abort"
