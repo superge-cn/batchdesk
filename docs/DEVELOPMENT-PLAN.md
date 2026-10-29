@@ -48,7 +48,7 @@
 | 域 | 已完成 | 未完成/缺口 |
 |---|---|---|
 | C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010）、Windows 文件身份（ADR-0012） | 长路径、C09 的 T 全量 UI 验收 |
-| 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停 | 重试（retryTask）、任务持久化、ConfigDocument、UiState、Recipe 存储、日志/授权注入、Hashing 端口 |
+| 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停、ConfigDocument + UiState + Recipe 存储与命令 | 重试（retryTask）、任务持久化、设置 UI、`loadRecipe`、日志/授权注入、Hashing 端口 |
 | IPC/UI | C09 任务队列命令、`{taskId}+事件`、cleanup/storage 合约化、事件驱动 UI | CSP/capabilities、i18n、虚拟滚动、shadcn 完整组件、Vitest/Playwright、任务列表 UI |
 | 桌面工程 | Tauri 编译/启动、CI desktop check | Windows WebView 构建验证、`src-tauri` 独立 Cargo.lock 的 cargo-deny/SBOM、安装包/签名 |
 | 验证 | C-6、C-6 计划预览、apply/undo/保留期集成 | 24 条自动化语料的逐条断言 harness、C-7 阻塞、C-1/C-2/C-4/C-5/C-8 正式基准 |
@@ -57,7 +57,7 @@
 
 - **阶段 0 文本/编码**：F01–F13（分割/合并/抽列/编码/表头/换行/替换/正则改名等）、C01/C02/C03/C04/C05/C06/C07/C08/C10/C11/C12/C13/C14/C15/C18。
 - **阶段 0 安全/环境**：S01 预检、S02 完整 UI 接入、S03 断点续跑；C-7 授权状态集。
-- **阶段 1**：C37 处理模板（Phase A/B 代码）、F15 AI 助手 Phase 1/2/3、持久化 UI。
+- **阶段 1**：C37 处理模板（存储/迁移/导入导出已完成，Phase A/B 的 plan/apply 与 UI 未做）、F15 AI 助手 Phase 1/2/3、设置与持久化 UI。
 - **P1/P2**：C21–C63 中未进入阶段 0 的功能、CLI C40 正式命令面、性能基准结果台账。
 - **商业/云端/Web/发布**：商业授权签发与 QuotaBased、云端服务端、Web/WASM 链路、安装包/签名/更新检查。
 
@@ -68,7 +68,7 @@
 | 有几个产品功能完成 T 验收？ | **0** |
 | 有几个功能有可运行纵向切片？ | **1**（C09） |
 | 平台核心是否足够支撑第二个功能？ | **不够**：缺重试/任务持久化、Config/UiState、通用文件操作主链、日志/授权注入 |
-| 现在最该做什么？ | **进入 Wave 1**：Wave 0 的 W0-1…W0-5 已完成（CI 六 job 全绿），W0-6 仅剩 Windows 长路径与 C09 的 T 全量 UI 验收 |
+| 现在最该做什么？ | **Wave 1 续做**：配置/模板/UiState 存储已完成，下一步是设置 UI 与通用文件操作主链；W0-6 仅剩 Windows 长路径与 C09 的 T 全量 UI 验收 |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -105,6 +105,7 @@
 ### Wave 1：平台核心（阶段 0 的前置）
 
 1. **ConfigDocument + UiState + Recipe 存储**（设计 03）：设置、最近目录、列宽/排序、模板运行偏好；不混入门禁/任务/日志。
+   - **当前状态（2026-10-29）**：存储层完成（kernel 类型/默认值/来源视图/模板 v1→v3 迁移 + `platform::config_store` 原子写/损坏兜底/只读降级 + 12 条壳层命令）；设置 UI、`loadRecipe`、迁移链（v1 为空）与 UiState 恢复规则待补。
 2. **通用文件操作主链**：C05/C06/C07/C18 的冲突枚举、预览、plan/apply、Journal 撤销；供后续 F/C 功能复用。
 3. **S01/S02/S03**：预检、保护目录执行层复核、断点续跑/任务持久化。
 4. **日志/诊断/授权注入**：C17a 最小日志、Journal 保留期、LicenseService 单机实现与商业接口边界。
@@ -181,6 +182,7 @@
 | 2026-10-29 | W0-6 plan→apply 内容再校验 | 切片 | kernel `expected` 指纹 + E2010 复核（单测 3 项）+ platform `content_hash`（BLAKE3）；`apply_flow.rs` 新增真实 CLI 链路集成场景，`cargo test -p batchdesk-cli --test apply_flow` 3 passed | Windows 文件 ID、长路径、T 全量 UI 验收 | 开发代理 |
 | 2026-10-29 | Windows 编译缺陷（E0658）修复 | 切片 | CI run 40870120156 注解实证 `use of unstable library feature windows_by_handle`；`scan.rs` 的 Windows `identity_from` 改为“身份不可用”回退（None → kernel 标 needs_manual_review），Windows 测试同步断言回退；本地 `cargo check --target x86_64-pc-windows-msvc`（platform，临时 pure 绕过 blake3 汇编后还原）零 error；Linux `cargo test --workspace` 70 项仍全绿 | Windows 文件 ID 需 WinAPI GetFileInformationByHandle 并新增依赖（过 cargo-deny）；长路径矩阵 | 开发代理 |
 | 2026-10-29 | Windows 文件身份（WinAPI，ADR-0012） | 切片 | CI run 40870967145 实证“回退”导致 Windows 上 `stats.total=0`（C09 不可用）；`identity_from` 改经 `GetFileInformationByHandle` 取 volume serial + file index（`windows-sys` 0.61，MIT OR Apache-2.0）；Windows-only 测试断言身份可得且硬链接两路径一致；`cargo check --target x86_64-pc-windows-msvc` 零 error；Linux fmt/clippy/70 项测试/`cargo deny` 四项全绿 | 长路径矩阵、T 全量 UI 验收、Windows 实机复验（依赖 CI） | 开发代理 |
+| 2026-10-29 | Wave 1-1 配置/模板/UiState 存储 | 切片 | kernel 新增 `config`/`recipe`/`ui_state`（71 项含 25 项新增单测）；platform 新增 `config_store`（27 项含 12 项新增：损坏备份 E5009、高版本只读 E1007、UiState 隔离重置、模板 CRUD/导入导出、recipeId 路径穿越拒绝）；src-tauri 注册 12 条命令（`cargo check` + 队列测试 2 项通过）；`cargo fmt/clippy -D warnings`/`check_docs.py` 通过 | 设置 UI、`loadRecipe`、迁移链（v1 空）、UiState 离屏/clamp、E5009/E1007 用户提示、Web OPFS | 开发代理 |
 | 2026-10-29 | CI 六 job 全绿 + W0-5 关闭 | 完成 | run 40872864062（head 23c1f45，push，0 failure 注解）：lint / deny（advisories+licenses+bans+sources + SBOM artifact）/ test·ubuntu / test·windows / web / desktop / bench 全 success；Windows 侧 `apply_flow` 3 项（含真实 plan→apply E2010 场景，`stats.total=2`）通过 → Windows 文件身份可用、C09 计划非空 | W0-6 剩 Windows 长路径与 C09 的 T 全量 UI 验收 | 开发代理 |
 
 ## 7. 关联

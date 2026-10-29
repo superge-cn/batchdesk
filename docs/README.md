@@ -36,7 +36,7 @@
 
 ## 4. 当前状态（2026-10-29）
 
-- 代码已有 `crates/kernel`、`crates/platform`、`crates/cli`、`src-tauri`（独立 workspace）与 `web`；C09 的纯分组、计划、隔离 apply/undo、S02、保留期 cleanup、任务队列/`task://*` 事件与事件驱动 React UI 切片已跑通，真实 WebView E2E（apply→undo、cleanup 演练、取消回滚）通过；目标结构见 `docs/design/12-前端与桌面壳架构.md`（v0.4）。
+- 代码已有 `crates/kernel`、`crates/platform`、`crates/cli`、`src-tauri`（独立 workspace）与 `web`；C09 的纯分组、计划、隔离 apply/undo、S02、保留期 cleanup、任务队列/`task://*` 事件与事件驱动 React UI 切片已跑通，真实 WebView E2E（apply→undo、cleanup 演练、取消回滚）通过；Wave 1-1 的配置/模板/UiState 存储层（kernel 类型 + platform `config_store` + 12 条壳层命令）已落地，设置 UI 未建；目标结构见 `docs/design/12-前端与桌面壳架构.md`（v0.4）。
 - 24 条自动化语料的**生成脚本**已就绪，但逐条断言 harness 尚未实现；CI 当前做生成、范围核对、哈希/幂等校验与单元测试，不能称为“语料回归零失败”。CI 已六 job 全绿（run 40872864062，2026-10-29，含 Windows 单元测试与 deny/SBOM）。
 - 已补齐的文档：错误码表（已冻结 v1.2）、云端服务端草案、授权签发草案、i18n 草案、日志诊断草案、发布更新草案、前端/壳架构草案、AI 助手与工具调用草案；**07–13 为草案（12 已升 v0.4），14 已冻结 v1；01–06 已冻结或已评审**，07–13 待评审后才可作为实现冻结依据。
 - 未闭环事项统一登记在 `docs/OPEN-QUESTIONS.md`，不要在代码注释或新文档里另立数值/结论。
