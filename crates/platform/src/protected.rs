@@ -28,8 +28,7 @@ fn prepare(path: &Path) -> Result<ProtectedDir, KernelError> {
     let absolute = make_absolute(path);
     let literal = absolute.to_string_lossy().into_owned();
     try_normalize(&literal)?;
-    let canonical = std::fs::canonicalize(&absolute)
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned());
+    // canonical 显示值经适配层剥 `\\?\` 前缀；kernel 比较前会再归一（设计 04 §N4）。
+    let canonical = crate::fs::canonicalize_display(&absolute);
     Ok(ProtectedDir::with_canonical(literal, canonical))
 }

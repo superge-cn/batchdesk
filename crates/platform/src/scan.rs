@@ -16,6 +16,8 @@ use std::time::UNIX_EPOCH;
 
 use kernel::duplicate::FileIdentity;
 
+use crate::fs::{fs_path, strip_extended_path};
+
 const READ_CHUNK: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +89,7 @@ pub fn scan_path(root: &Path, options: ScanOptions) -> std::io::Result<ScanOutco
 
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
-        let metadata = match fs::symlink_metadata(&path) {
+        let metadata = match fs::symlink_metadata(fs_path(&path)) {
             Ok(metadata) => metadata,
             Err(error) => {
                 skipped.push((path, error.to_string()));
@@ -181,7 +183,9 @@ fn collect_files(
     out: &mut Vec<PathBuf>,
     skipped: &mut Vec<(PathBuf, String)>,
 ) -> std::io::Result<()> {
-    let metadata = fs::symlink_metadata(root)?;
+    // 长路径收口（设计 04 §"Windows 长路径"）：所有 std::fs 调用经 `fs_path`
+    // 统一加 `\\?\` 前缀，枚举出的路径剥回前缀后存入结果/计划/Journal。
+    let metadata = fs::symlink_metadata(fs_path(root))?;
     if metadata.is_file() {
         out.push(root.to_path_buf());
         return Ok(());
@@ -192,7 +196,7 @@ fn collect_files(
 
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
+        let entries = match fs::read_dir(fs_path(&dir)) {
             Ok(entries) => entries,
             Err(error) => {
                 skipped.push((dir, error.to_string()));
@@ -208,8 +212,8 @@ fn collect_files(
                     continue;
                 }
             };
-            let path = entry.path();
-            let metadata = match fs::symlink_metadata(&path) {
+            let path = PathBuf::from(strip_extended_path(&entry.path().to_string_lossy()));
+            let metadata = match fs::symlink_metadata(fs_path(&path)) {
                 Ok(metadata) => metadata,
                 Err(error) => {
                     skipped.push((path, error.to_string()));
@@ -237,7 +241,7 @@ fn collect_files(
 }
 
 fn hash_quick(path: &Path, size: u64, window: u64) -> std::io::Result<Vec<u8>> {
-    let mut file = fs::File::open(path)?;
+    let mut file = fs::File::open(fs_path(path))?;
     let mut hasher = blake3::Hasher::new();
     if size <= window.saturating_mul(2) {
         // The two windows would overlap; hash the whole file once.
@@ -251,7 +255,7 @@ fn hash_quick(path: &Path, size: u64, window: u64) -> std::io::Result<Vec<u8>> {
 }
 
 fn hash_full(path: &Path) -> std::io::Result<Vec<u8>> {
-    let mut file = fs::File::open(path)?;
+    let mut file = fs::File::open(fs_path(path))?;
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0u8; READ_CHUNK];
     loop {
@@ -305,7 +309,7 @@ fn identity_from(path: &Path, _metadata: &fs::Metadata) -> Option<FileIdentity> 
     // `MetadataExt::volume_serial_number`/`file_index` 仍受 `windows_by_handle`
     // 不稳定特性门控（stable 报 E0658），故走 WinAPI（ADR-0012）。设计 04 §7
     // 要求的正是 volume serial + file index。
-    let file = fs::File::open(path).ok()?;
+    let file = fs::File::open(crate::fs::fs_path(path)).ok()?;
     // SAFETY: `file` 在本调用期间持有有效句柄；`info` 是独占的出参结构，
     // 不与任何别名共享；失败时按"身份不可用"回退（不 panic）。
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
@@ -498,5 +502,39 @@ mod tests {
             let metadata = fs::metadata(&hard).unwrap();
             assert_eq!(identity_from(&hard, &metadata), identity);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scans_long_paths_beyond_the_win32_limit() {
+        // 方案 §5.13 超长档（>260）：适配层统一加 `\\?\` 前缀后，即使系统未开启
+        // LongPathsEnabled，扫描/哈希/文件身份也能到达深层文件；返回给计划与
+        // Journal 的路径必须剥回无前缀形式（设计 04 §"Windows 长路径"）。
+        let dir = TempDir::new();
+        let mut deep = dir.0.clone();
+        while deep.as_os_str().to_string_lossy().len() < 260 {
+            deep.push("level-0123456789");
+        }
+        fs::create_dir_all(crate::fs::fs_path(&deep)).unwrap();
+        fs::write(crate::fs::fs_path(&deep.join("a.txt")), b"same").unwrap();
+        fs::write(crate::fs::fs_path(&deep.join("b.txt")), b"same").unwrap();
+        assert!(deep.join("a.txt").to_string_lossy().len() > 260);
+
+        let outcome = scan_path(&dir.0, full_options(None)).unwrap();
+        assert!(
+            outcome.skipped.is_empty(),
+            "deep files must not be skipped: {:?}",
+            outcome.skipped
+        );
+        assert_eq!(outcome.files.len(), 2);
+        for file in &outcome.files {
+            let text = file.path.to_string_lossy();
+            assert!(text.len() > 260);
+            assert!(!text.starts_with(r"\\?\"));
+        }
+        assert_eq!(outcome.files[0].full_hash, outcome.files[1].full_hash);
+
+        // TempDir 的 Drop 用的是无前缀路径，深层树需在此显式清理。
+        fs::remove_dir_all(crate::fs::fs_path(&dir.0)).unwrap();
     }
 }

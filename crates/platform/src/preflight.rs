@@ -17,7 +17,7 @@ use kernel::path::normalize;
 #[cfg(unix)]
 use std::io::ErrorKind;
 
-use crate::fs::is_placeholder_file;
+use crate::fs::{canonicalize_display, fs_path, is_placeholder_file};
 
 /// 磁盘安全余量下限（方案 §9.1 磁盘空间安全余量行、11.6-12）。
 pub const DEFAULT_DISK_MARGIN_FLOOR_BYTES: u64 = 200 * 1024 * 1024;
@@ -28,7 +28,11 @@ pub const UNC_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 距离 `path` 最近的存在目录（用于对尚不存在的目标探测所在卷）。
 pub fn probe_root(path: &Path) -> PathBuf {
-    let mut current = if path.is_file() {
+    // 长路径下 `Path::exists` 不经前缀会误判不存在，统一走 `fs_path`。
+    let is_file = fs::metadata(fs_path(path))
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false);
+    let mut current = if is_file {
         path.parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| path.to_path_buf())
@@ -36,7 +40,7 @@ pub fn probe_root(path: &Path) -> PathBuf {
         path.to_path_buf()
     };
     for _ in 0..64 {
-        if current.exists() {
+        if fs::metadata(fs_path(&current)).is_ok() {
             return current;
         }
         match current.parent() {
@@ -175,7 +179,7 @@ enum WriteProbe {
 }
 
 fn probe_write(path: &Path) -> WriteProbe {
-    match fs::OpenOptions::new().write(true).open(path) {
+    match fs::OpenOptions::new().write(true).open(fs_path(path)) {
         Ok(file) => {
             drop(file);
             WriteProbe::Writable
@@ -193,7 +197,7 @@ fn probe_write(path: &Path) -> WriteProbe {
 /// 采集单个路径的预检事实；路径不存在时不报错（由计划/执行层再判定）。
 pub fn path_check(path: &Path, long_path_supported: bool) -> PathCheck {
     let display = path.to_string_lossy().into_owned();
-    let metadata = fs::metadata(path).ok();
+    let metadata = fs::metadata(fs_path(path)).ok();
     let attribute_readonly = metadata
         .as_ref()
         .map(|metadata| metadata.permissions().readonly())
@@ -210,9 +214,8 @@ pub fn path_check(path: &Path, long_path_supported: bool) -> PathCheck {
     };
     PathCheck {
         path: display,
-        canonical_path: fs::canonicalize(path)
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned()),
+        // canonical 显示值由适配层剥前缀（设计 04 §"Windows 长路径"）。
+        canonical_path: canonicalize_display(path),
         readonly: attribute_readonly || probe == WriteProbe::Readonly,
         locked: probe == WriteProbe::Locked,
         placeholder: is_placeholder_file(path),
@@ -239,7 +242,7 @@ pub fn probe_unc(path: &Path) -> Option<UncCheck> {
     let worker = std::thread::Builder::new()
         .name("batchdesk-unc-probe".to_string())
         .spawn(move || {
-            let reachable = fs::metadata(&target).is_ok();
+            let reachable = fs::metadata(crate::fs::fs_path(&target)).is_ok();
             let _ = sender.send(reachable);
         });
     let reachable = match worker {

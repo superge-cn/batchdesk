@@ -316,9 +316,14 @@ impl FsAdapter for CliFsAdapter {
     }
 
     fn canonicalize(&self, path: &str) -> Result<String, KernelError> {
-        fs::canonicalize(fs_path(Path::new(path)))
-            .map(|path| strip_extended_path(&path.to_string_lossy()))
-            .map_err(|error| io_error(&error, Path::new(path)))
+        canonicalize_display(Path::new(path)).ok_or_else(|| {
+            KernelError::new(
+                "E2001",
+                "cannot canonicalize path",
+                Some(path.to_string()),
+                false,
+            )
+        })
     }
 
     fn case_sensitivity(&self) -> CaseSense {
@@ -350,7 +355,7 @@ impl FsAdapter for CliFsAdapter {
     }
 }
 
-fn fs_path(path: impl AsRef<Path>) -> PathBuf {
+pub(crate) fn fs_path(path: impl AsRef<Path>) -> PathBuf {
     PathBuf::from(extended_path(&path.as_ref().to_string_lossy()))
 }
 
@@ -364,17 +369,35 @@ fn extended_path(path: &str) -> String {
         if path.starts_with(r"\\?\") {
             return path.to_string();
         }
-        if let Some(rest) = path.strip_prefix(r"\\") {
-            return format!(r"\\?\UNC\{rest}");
+        // 以两种分隔符形式探测绝对路径：`\\UNC`/`//UNC` 与 `C:\`/`C:/`。
+        // 相对路径与 `C:` 盘符相对形式不加前缀，保持 Win32 原语义。
+        let slash_form = path.replace('\\', "/");
+        let looks_absolute = slash_form.starts_with("//")
+            || (slash_form.as_bytes().get(1) == Some(&b':')
+                && slash_form.as_bytes().get(2) == Some(&b'/'));
+        if looks_absolute {
+            // 设计 04 §N4/§"Windows 长路径"：`\\?\` 前缀不吃 Win32 归一化，
+            // 加前缀前先归一分隔符与 `.`/`..` 段（kernel 纯函数）；归一失败
+            // （越界）时保留原串，让系统调用按既有错误路径报错。
+            let normalized = kernel::path::try_normalize(path)
+                .map(|value| value.replace('/', "\\"))
+                .unwrap_or_else(|_| path.to_string());
+            if let Some(rest) = normalized.strip_prefix(r"\\") {
+                return format!(r"\\?\UNC\{rest}");
+            }
+            if normalized.as_bytes().get(1) == Some(&b':') {
+                return format!(r"\\?\{normalized}");
+            }
         }
-        if path.as_bytes().get(1) == Some(&b':') {
-            return format!(r"\\?\{path}");
-        }
+        path.to_string()
     }
-    path.to_string()
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
 }
 
-fn strip_extended_path(path: &str) -> String {
+pub(crate) fn strip_extended_path(path: &str) -> String {
     #[cfg(windows)]
     {
         if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
@@ -385,6 +408,17 @@ fn strip_extended_path(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// 规范化用户路径并返回剥离 `\\?\` 前缀的显示形式。
+///
+/// Windows 上 `std::fs::canonicalize` 恒返回带 `\\?\` 前缀的路径，直接透出会
+/// 污染 Journal/UI；壳层一律经由本助手取 canonical 显示值（设计 04 §"Windows
+/// 长路径"：前缀逻辑属适配层内部，业务层禁止自拼，不变量 8）。
+pub fn canonicalize_display(path: &Path) -> Option<String> {
+    fs::canonicalize(fs_path(path))
+        .ok()
+        .map(|canonical| strip_extended_path(&canonical.to_string_lossy()))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -651,6 +685,24 @@ mod tests {
         assert_eq!(
             strip_extended_path(r"\\?\UNC\server\share\a.txt"),
             r"\\server\share\a.txt"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extended_path_normalizes_before_prefixing_and_keeps_relative_paths() {
+        // `\\?\` 前缀不吃 Win32 归一化：加前缀前先统一分隔符并消解 `.`/`..`。
+        assert_eq!(extended_path("C:/tmp/a.txt"), r"\\?\C:\tmp\a.txt");
+        assert_eq!(extended_path(r"C:\tmp\.\sub\..\a.txt"), r"\\?\C:\tmp\a.txt");
+        assert_eq!(
+            extended_path("//server/share/a.txt"),
+            r"\\?\UNC\server\share\a.txt"
+        );
+        assert_eq!(extended_path("relative/a.txt"), "relative/a.txt");
+        assert_eq!(
+            extended_path("C:data"),
+            "C:data",
+            "drive-relative stays unprefixed"
         );
     }
 }

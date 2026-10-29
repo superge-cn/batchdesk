@@ -248,9 +248,8 @@ fn planOperation(
             canonical_path: if protected_dirs.is_empty() {
                 None
             } else {
-                std::fs::canonicalize(&file.path)
-                    .ok()
-                    .map(|path| path.to_string_lossy().into_owned())
+                // Windows canonicalize 恒带 \\?\ 前缀，由适配层剥回显示形式。
+                platform::fs::canonicalize_display(&file.path)
             },
             mtime_nanos: file.mtime_nanos,
             full_hash: file.full_hash.clone(),

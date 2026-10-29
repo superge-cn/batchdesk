@@ -144,9 +144,7 @@ fn main() {
                 let canonical_path = if protected_dirs.is_empty() {
                     None
                 } else {
-                    std::fs::canonicalize(&file.path)
-                        .ok()
-                        .map(|path| path.to_string_lossy().into_owned())
+                    platform::fs::canonicalize_display(&file.path)
                 };
                 PlanFile {
                     id: index as u64,
