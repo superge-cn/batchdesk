@@ -35,19 +35,19 @@
 ### 3.1 已验证可用
 
 - 基线/契约/测试文档体系：产品方案 v1.19、T v1.12、U v1.3、设计 01–14、ADR、PDR、TC v0.3。
-- kernel：C09 纯分组、`PlanDocument`/`plan_c09`、`FsAdapter`/`LicenseService`/`Journal`/`apply_plan`/`undo_plan`、`ProgressSink`/`CancelToken`（逐条进度、取消回滚）、路径 normalize/is_under 与 S02 blocked。
+- kernel：C09 纯分组、`PlanDocument`/`plan_c09`、`FsAdapter`/`LicenseService`/`Journal`/`apply_plan`/`undo_plan`、`ProgressSink`/`CancelToken`（逐条进度、取消回滚）、路径 normalize/is_under 与 S02 blocked、plan→apply 内容指纹复核（`expected`+E2010，设计 01 v1.3）。
 - `crates/platform`：扫描/BLAKE3、原生 FsAdapter、FileJournal、保留期 cleanup，CLI 与桌面壳共用。
 - CLI：C09 scan → plan → apply → undo/cleanup、S02、`--protected-dir`、`--retention-days`。
 - 桌面：`src-tauri` Tauri v2 任务队列（`tasks.rs`）与 `task://progress`/`task://state`/`task://done`；`applyPlan`/`undoPlan` 返回 `{taskId}`；取消/暂停/恢复与 list/get 已注册；应用数据目录下 quarantine/journal。
 - Web：React 19/Vite 7 C09 页面，U v1.3 token + 液态玻璃外壳；计划预览、确认执行、事件驱动进度/暂停/取消、撤销、保留期演练/永久清理；任务事件按 taskId 归档，避免 IPC 返回前完成导致丢报告；浏览器 mock IPC 流已验证。
-- 验证：`cargo test --workspace` 63 项通过（kernel 42 + platform 13 + CLI 6 + CLI 集成 2）；`cargo test --manifest-path src-tauri/Cargo.toml` 2 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过。
+- 验证：`cargo test --workspace` 70 项通过（kernel 46 + platform 15 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 2 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；CI 首跑（run 40865148224，2026-10-29）5/7 绿，两处失败已修复待复验（见 §6.1）。
 - 门禁：fmt/clippy、docs、语料范围/哈希、迁移 schema。
 
 ### 3.2 部分完成/有明确缺口
 
 | 域 | 已完成 | 未完成/缺口 |
 |---|---|---|
-| C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E | Windows 文件 ID、长路径、plan→apply 内容再校验、C09 的 T 全量 UI 验收 |
+| C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010） | Windows 文件 ID、长路径、C09 的 T 全量 UI 验收 |
 | 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停 | 重试（retryTask）、任务持久化、ConfigDocument、UiState、Recipe 存储、日志/授权注入、Hashing 端口 |
 | IPC/UI | C09 任务队列命令、`{taskId}+事件`、cleanup/storage 合约化、事件驱动 UI | CSP/capabilities、i18n、虚拟滚动、shadcn 完整组件、Vitest/Playwright、任务列表 UI |
 | 桌面工程 | Tauri 编译/启动、CI desktop check | Windows WebView 构建验证、`src-tauri` 独立 Cargo.lock 的 cargo-deny/SBOM、安装包/签名 |
@@ -68,7 +68,7 @@
 | 有几个产品功能完成 T 验收？ | **0** |
 | 有几个功能有可运行纵向切片？ | **1**（C09） |
 | 平台核心是否足够支撑第二个功能？ | **不够**：缺重试/任务持久化、Config/UiState、通用文件操作主链、日志/授权注入 |
-| 现在最该做什么？ | **Wave 0 收尾**：W0-5 `src-tauri` 依赖审计、W0-6 C09 内容再校验/Windows 能力；之后进入 Wave 1 |
+| 现在最该做什么？ | **Wave 0 收尾**：W0-5 CI 绿灯复验（首跑 5/7，deny/windows 已修复）、W0-6 Windows 能力（内容再校验已完成）；之后进入 Wave 1 |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -155,7 +155,7 @@
 | W0-3 Tauri WebView E2E | **完成** | WebDriver 脚本 `scripts/e2e-tauri.mjs` | plan→apply→undo/cleanup 演练 + 取消回滚 | W0-1、Tauri 系统依赖 |
 | W0-4 合约化 cleanup/storage 命令 | **完成** | 设计 01 §4.4.1 壳层追加行 | 文档/命令/DTO 一致 | 设计 01 评审 |
 | W0-5 src-tauri 依赖审计 | 部分 | cargo-deny/SBOM 覆盖独立 lock（CI deny job 步骤已起草） | CI 绿灯 | OQ-13、CI |
-| W0-6 C09 收尾 | 未开始 | Windows ID/长路径/内容再校验 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
+| W0-6 C09 收尾 | 部分 | 内容再校验已落地（expected+E2010+CLI 集成锚点）；Windows ID/长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
 
 ## 6. 完成判定与维护
 
@@ -164,7 +164,7 @@
 - **每个 Wave**：更新本文件与 `TRACEABILITY`；Wave 完成不等于阶段验收，最终以 T 的四级验收为准。
 - **状态更新**：完成/切片/部分/未开始/阻塞五档只能按证据改；没有测试或 E2E 的不写“完成”。
 - **范围控制**：不因本计划新增产品阈值或行为；新增功能/改优先级回到方案 §11.6 或 T 升版。
-- **已知偏差**：任务队列已实现，但 `retryTask`、任务持久化/S03 恢复、事件合帧未实现；`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计仍未完成。W0-5/W0-6 是 Wave 0 的剩余关闭项，不是“已完成”。
+- **已知偏差**：任务队列已实现，但 `retryTask`、任务持久化/S03 恢复、事件合帧未实现；`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计仍未完成（CI 首跑 5/7：deny 的 RUSTSEC-2024-0370 与 test·windows 的 EOL/编码已修复，待复验）。W0-5/W0-6 是 Wave 0 的剩余关闭项，不是“已完成”。
 
 ### 6.1 状态更新记录（模板 + 当前示例）
 
@@ -177,6 +177,8 @@
 | 2026-10-29 | W0-3 Tauri WebView E2E | 完成 | `node scripts/e2e-tauri.mjs`：apply→undo、cleanup 演练、执行中取消回滚全部 PASS；截图 `target/e2e/tauri-task-queue.png` | Playwright/Vitest 矩阵、CSP/capabilities 断言 | 开发代理 |
 | 2026-10-29 | W0-4 cleanup/storage 契约 | 完成 | 设计 01 v1.2 §4.4.1；`cleanupRetention`/`getStorageInfo` 命令保持 | — | 开发代理 |
 | 2026-10-29 | C09 CLI/platform/IPC/UI 纵向切片 | 切片 | `cargo test --workspace` 63 项；C-6；`pnpm build`；`src-tauri` cargo check；WebView E2E | W0-5 依赖审计、W0-6 Windows/长路径/plan→apply 再校验、T 全量 UI 验收 | 开发代理 |
+| 2026-10-29 | CI 首次运行（run 40865148224） | 部分 | lint/bench/desktop/web/test·ubuntu 5 job 绿；deny（src-tauri advisories 命中 RUSTSEC-2024-0370）与 test·windows（check_docs）失败；已修复：`deny.toml` 带理由忽略项、`.gitattributes` LF 统一、`PYTHONUTF8=1`；本地离线复核实证 | 推送后复验全绿 | 开发代理 |
+| 2026-10-29 | W0-6 plan→apply 内容再校验 | 切片 | kernel `expected` 指纹 + E2010 复核（单测 3 项）+ platform `content_hash`（BLAKE3）；`apply_flow.rs` 新增真实 CLI 链路集成场景，`cargo test -p batchdesk-cli --test apply_flow` 3 passed | Windows 文件 ID、长路径、T 全量 UI 验收 | 开发代理 |
 
 ## 7. 关联
 
