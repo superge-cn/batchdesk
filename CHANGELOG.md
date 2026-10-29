@@ -93,7 +93,7 @@
 
 ### Fixed
 
-- **Windows 编译失败（E0658，2026-10-29）**：CI run 40870120156 暴露 `crates/platform/src/scan.rs` 的 Windows `identity_from` 使用了 `std::os::windows::fs::MetadataExt::volume_serial_number`/`file_index`，这两个方法仍在 `windows_by_handle` 不稳定特性门控下，stable 编译报 `error[E0658]`（此前 lint 只在 ubuntu 跑，Windows 分支从未编译）。修复：改为 `#[cfg(not(unix))]` 的"身份不可用"回退（返回 `None`，kernel 将该组标 `needs_manual_review` 并排除自动清理，符合设计 04 §7 与 PDR-001 T8 的安全侧口径），Windows 测试同步断言回退语义；正式 Windows 文件 ID 仍需 WinAPI `GetFileInformationByHandle` 并新增依赖（须过 cargo-deny），留在 W0-6 缺口。本地 `cargo check --target x86_64-pc-windows-msvc` 零 error，Linux `cargo test --workspace` 70 项全绿。同时 CI test 步骤在失败时以 `::error::` 注解输出断言/panic/编译错误，便于在无仓库管理权限时定位失败。
+- **Windows 编译与文件身份（E0658 → WinAPI，2026-10-29）**：CI run 40870120156 暴露 `crates/platform/src/scan.rs` 的 Windows `identity_from` 使用了 `std::os::windows::fs::MetadataExt::volume_serial_number`/`file_index`，二者仍在 `windows_by_handle` 不稳定特性门控下，stable 报 `error[E0658]`（此前 lint 只在 ubuntu 跑，Windows 分支从未编译）。改用"恒回退"后，run 40870967145 又实证 `stats.total = 0`——Windows 上全部重复组被标 `needs_manual_review`，C09 清理计划为空（主交付平台功能不可用）。最终按 [ADR-0012](docs/adr/0012-Windows文件身份改用WinAPI.md) 引入 `windows-sys` 0.61（MIT OR Apache-2.0，`[target.'cfg(windows)'.dependencies]`）调用 `GetFileInformationByHandle` 取 volume serial + file index，符合设计 04 §7；不可得时仍回退 `needs_manual_review`。Windows-only 测试断言身份可得且硬链接两路径一致。验证：`cargo check --target x86_64-pc-windows-msvc` 零 error、Linux `cargo test --workspace` 70 项、fmt/clippy/`cargo deny`（含新依赖）全绿。同时 CI test 步骤在失败时以 `::error::` 注解输出断言/panic/编译错误，便于在无仓库管理权限时定位失败。
 
 ### Removed
 

@@ -47,7 +47,7 @@
 
 | 域 | 已完成 | 未完成/缺口 |
 |---|---|---|
-| C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010） | Windows 文件 ID、长路径、C09 的 T 全量 UI 验收 |
+| C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010）、Windows 文件身份（ADR-0012） | 长路径、C09 的 T 全量 UI 验收 |
 | 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停 | 重试（retryTask）、任务持久化、ConfigDocument、UiState、Recipe 存储、日志/授权注入、Hashing 端口 |
 | IPC/UI | C09 任务队列命令、`{taskId}+事件`、cleanup/storage 合约化、事件驱动 UI | CSP/capabilities、i18n、虚拟滚动、shadcn 完整组件、Vitest/Playwright、任务列表 UI |
 | 桌面工程 | Tauri 编译/启动、CI desktop check | Windows WebView 构建验证、`src-tauri` 独立 Cargo.lock 的 cargo-deny/SBOM、安装包/签名 |
@@ -94,7 +94,7 @@
    - CSP/capabilities 最小化；生产构建关闭 devtools；
    - `src-tauri` 独立 Cargo.lock 纳入 cargo-deny/SBOM。
 4. **C09 收尾**
-   - Windows 文件 ID、长路径；plan→apply 内容再校验；
+   - 长路径（Windows 文件身份与 plan→apply 内容再校验已完成）；
    - C09 的 T 全量 UI 用例与人工项台账；
    - C-6/apply_flow 继续作为回归锚点。
 
@@ -108,7 +108,7 @@
 2. **通用文件操作主链**：C05/C06/C07/C18 的冲突枚举、预览、plan/apply、Journal 撤销；供后续 F/C 功能复用。
 3. **S01/S02/S03**：预检、保护目录执行层复核、断点续跑/任务持久化。
 4. **日志/诊断/授权注入**：C17a 最小日志、Journal 保留期、LicenseService 单机实现与商业接口边界。
-5. **Hashing/FsAdapter 能力补齐**：Windows 文件 ID、长路径、占位文件、分块读。
+5. **Hashing/FsAdapter 能力补齐**：长路径、占位文件、分块读（Windows 文件身份已由 ADR-0012 落地）。
 
 **完成判据**：新增任一阶段 0 功能可以只写“参数→PlanDocument 生成器”，不重复实现 plan/apply/Journal/冲突/日志/授权。
 
@@ -155,7 +155,7 @@
 | W0-3 Tauri WebView E2E | **完成** | WebDriver 脚本 `scripts/e2e-tauri.mjs` | plan→apply→undo/cleanup 演练 + 取消回滚 | W0-1、Tauri 系统依赖 |
 | W0-4 合约化 cleanup/storage 命令 | **完成** | 设计 01 §4.4.1 壳层追加行 | 文档/命令/DTO 一致 | 设计 01 评审 |
 | W0-5 src-tauri 依赖审计 | 部分 | cargo-deny/SBOM 覆盖独立 lock（CI deny job 步骤已起草） | CI 绿灯 | OQ-13、CI |
-| W0-6 C09 收尾 | 部分 | 内容再校验已落地（expected+E2010+CLI 集成锚点）；Windows 文件身份按“不可用”回退（stable 的 `windows_by_handle` 未稳定，需 WinAPI）；长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
+| W0-6 C09 收尾 | 部分 | 内容再校验（expected+E2010+CLI 集成锚点）与 Windows 文件身份（WinAPI，ADR-0012）已落地；长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
 
 ## 6. 完成判定与维护
 
@@ -180,6 +180,7 @@
 | 2026-10-29 | CI 首次运行（run 40865148224） | 部分 | lint/bench/desktop/web/test·ubuntu 5 job 绿；deny（src-tauri advisories 命中 RUSTSEC-2024-0370）与 test·windows（check_docs）失败；已修复：`deny.toml` 带理由忽略项、`.gitattributes` LF 统一、`PYTHONUTF8=1`；本地离线复核实证 | 推送后复验全绿 | 开发代理 |
 | 2026-10-29 | W0-6 plan→apply 内容再校验 | 切片 | kernel `expected` 指纹 + E2010 复核（单测 3 项）+ platform `content_hash`（BLAKE3）；`apply_flow.rs` 新增真实 CLI 链路集成场景，`cargo test -p batchdesk-cli --test apply_flow` 3 passed | Windows 文件 ID、长路径、T 全量 UI 验收 | 开发代理 |
 | 2026-10-29 | Windows 编译缺陷（E0658）修复 | 切片 | CI run 40870120156 注解实证 `use of unstable library feature windows_by_handle`；`scan.rs` 的 Windows `identity_from` 改为“身份不可用”回退（None → kernel 标 needs_manual_review），Windows 测试同步断言回退；本地 `cargo check --target x86_64-pc-windows-msvc`（platform，临时 pure 绕过 blake3 汇编后还原）零 error；Linux `cargo test --workspace` 70 项仍全绿 | Windows 文件 ID 需 WinAPI GetFileInformationByHandle 并新增依赖（过 cargo-deny）；长路径矩阵 | 开发代理 |
+| 2026-10-29 | Windows 文件身份（WinAPI，ADR-0012） | 切片 | CI run 40870967145 实证“回退”导致 Windows 上 `stats.total=0`（C09 不可用）；`identity_from` 改经 `GetFileInformationByHandle` 取 volume serial + file index（`windows-sys` 0.61，MIT OR Apache-2.0）；Windows-only 测试断言身份可得且硬链接两路径一致；`cargo check --target x86_64-pc-windows-msvc` 零 error；Linux fmt/clippy/70 项测试/`cargo deny` 四项全绿 | 长路径矩阵、T 全量 UI 验收、Windows 实机复验（依赖 CI） | 开发代理 |
 
 ## 7. 关联
 

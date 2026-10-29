@@ -112,7 +112,7 @@
 ## 7. 当前状态
 
 - 全功能 triage 已完成：[`triage.md`](./triage.md)；**L2a 短名单目前只有 C09 重复文件查找**。
-- C09 来源已批准：**fdupes v2.4.0 @ 5e86f87（MIT）**，PDR-001 经用户确认 T1–T9/L1–L4（2026-10-29）；纯分组、只读 CLI（含快速哈希）、计划预览、C-6 断言、CLI apply/undo（隔离 + Journal + AlwaysAllow）、S02、保留期 cleanup 与桌面任务队列/`task://*` 事件/IPC/UI 切片已实现（含取消回滚与真实 WebView E2E）；长路径/Windows 文件 ID/plan→apply 内容再校验待补；jdupes 仅备选，rmlint（GPL-3.0）排除，Czkawka（MIT）仅 L2b。
+- C09 来源已批准：**fdupes v2.4.0 @ 5e86f87（MIT）**，PDR-001 经用户确认 T1–T9/L1–L4（2026-10-29）；纯分组、只读 CLI（含快速哈希）、计划预览、C-6 断言、CLI apply/undo（隔离 + Journal + AlwaysAllow）、S02、保留期 cleanup 与桌面任务队列/`task://*` 事件/IPC/UI 切片已实现（含取消回滚与真实 WebView E2E）；长路径仍待补，Windows 文件身份与内容再校验已完成；jdupes 仅备选，rmlint（GPL-3.0）排除，Czkawka（MIT）仅 L2b。
 - C13 用 `extsort` 0.5.0（Apache-2.0）作为 L1，不移植。
 - 方案 §4.11.6 其余 C19/C59/C28/5.2 为 **L2b 仅参考**，未做许可证判定。
 - C21 LibreOffice headless：**L1/进程外**，许可证待法务（OQ-01），不得内嵌。

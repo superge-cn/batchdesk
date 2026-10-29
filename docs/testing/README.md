@@ -23,7 +23,7 @@
 | 云契约 | 02 §4 的 8 端点契约 | mock 档自动化、staging 档 |
 | AI 助手（F15 Phase 1/2/3） | `fixtures/ai/` 用例规范、设计 14 契约 | mock provider、真实 provider/staging、自动断言 harness |
 | 性能 | C-1…C-8 数据集脚本/模板（C-7 阻塞）；C-6 的 C09 只读/计划预览断言（本地手动） | 基准执行 SOP、结果台账、CI 对比脚本 |
-| C09 代码 | kernel 42 + platform 13 + CLI 6 单测 + 2 集成；kernel 进度/取消回滚单测；C-6 只读/计划预览；apply→undo、S02、保留期集成 | 长路径/Windows 文件 ID、plan→apply 内容再校验 |
+| C09 代码 | kernel 46 + platform 15 + CLI 6 单测 + 3 集成；kernel 进度/取消回滚单测；C-6 只读/计划预览；apply→undo、S02、保留期集成；plan→apply 内容再校验（E2010）；Windows 文件身份（WinAPI，ADR-0012） | 长路径 |
 | 桌面 IPC/UI（C09） | 壳层队列测试 2 项；web `pnpm build`；Tauri `cargo check`；浏览器 mock 流；WebView E2E（apply→undo、cleanup 演练、取消回滚） | Vitest/Playwright、i18n/虚拟滚动、任务列表 UI |
 
 > **CI 口径**：当前 `cargo test` 为单元测试＋CLI 集成测试（C09 共 63 项）；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期；壳层任务队列由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖，WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤只做生成 + 范围核对 + 哈希/幂等；TC v0.3 已展开 C37/B9 实例，但人工执行尚未开始；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；另有 web build 与 desktop cargo check job。

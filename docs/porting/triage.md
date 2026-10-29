@@ -119,7 +119,7 @@
 | [rmlint](https://github.com/sahib/rmlint) | C | **GPL-3.0**（仓库页已核） | **排除**：GPL 不作移植蓝本/逐行对照（§4.11.4） |
 | [Czkawka](https://github.com/qarmin/czkawka) | Rust，完整应用 | **MIT**（仓库首页；个别前端组件另有条款） | 仅 L2b 参考：整应用远超移植红线，不抽代码 |
 
-**PDR-001 已批准（2026-10-29，用户）**：[fdupes v2.4.0 @ 5e86f87](./PDR-001-C09-重复文件查找.md)。纯分组、只读 CLI（大小/快速/全量哈希）、计划预览、C-6 断言、CLI apply/undo（隔离 + Journal + AlwaysAllow）、S02、保留期 cleanup 与桌面任务队列/`task://*` 事件/IPC/UI 切片已实现（含取消回滚与真实 WebView E2E）；I/O/哈希实现/CLI/线程/日志/删除仍按 PDR 排除，长路径/Windows 文件 ID/plan→apply 内容再校验待补。
+**PDR-001 已批准（2026-10-29，用户）**：[fdupes v2.4.0 @ 5e86f87](./PDR-001-C09-重复文件查找.md)。纯分组、只读 CLI（大小/快速/全量哈希）、计划预览、C-6 断言、CLI apply/undo（隔离 + Journal + AlwaysAllow）、S02、保留期 cleanup 与桌面任务队列/`task://*` 事件/IPC/UI 切片已实现（含取消回滚与真实 WebView E2E）；I/O/哈希实现/CLI/线程/日志/删除仍按 PDR 排除，长路径仍待补（Windows 文件身份与内容再校验已完成）。
 
 
 ## 4. L1-first 说明（不进入 L2a）

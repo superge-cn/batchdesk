@@ -6,7 +6,7 @@
 
 | 功能/模块 | 层级 | 候选/参考来源 | 已批准来源（URL+commit） | 许可证判定 | 拟移植部件 | 明确排除 | 测试/适配 | 状态/负责人/日期 |
 |---|---|---|---|---|---|---|---|---|
-| C09 重复文件查找 | **L2a 已批准** | fdupes（MIT）／jdupes（MIT）；rmlint 为 GPL-3.0 已排除；Czkawka 仅 L2b | **fdupes v2.4.0 @ 5e86f87042b6472a4871881435fae1cc438f12d0** | MIT（文件头已核） | 仅抽 `checkmatch`/`registerpair`/文件身份判定；排除哈希 I/O/CLI | I/O/UI/线程/日志/冲突/预检 | 方案 §5.10 / T C09 / C-6 | **PDR-001 已批准（2026-10-29，用户）**；纯分组、只读切片、计划预览、C-6 断言、CLI apply/undo（FsAdapter/Journal/AlwaysAllow）、S02、保留期 cleanup 与桌面任务队列/`task://*` 事件/IPC/UI 切片已实现（含取消回滚与真实 WebView E2E）；长路径/Windows 文件 ID/内容再校验待补 |
+| C09 重复文件查找 | **L2a 已批准** | fdupes（MIT）／jdupes（MIT）；rmlint 为 GPL-3.0 已排除；Czkawka 仅 L2b | **fdupes v2.4.0 @ 5e86f87042b6472a4871881435fae1cc438f12d0** | MIT（文件头已核） | 仅抽 `checkmatch`/`registerpair`/文件身份判定；排除哈希 I/O/CLI | I/O/UI/线程/日志/冲突/预检 | 方案 §5.10 / T C09 / C-6 | **PDR-001 已批准（2026-10-29，用户）**；纯分组、只读切片、计划预览、C-6 断言、CLI apply/undo（FsAdapter/Journal/AlwaysAllow）、S02、保留期 cleanup 与桌面任务队列/`task://*` 事件/IPC/UI 切片已实现（含取消回滚与真实 WebView E2E）；长路径待补（Windows 文件身份 ADR-0012 与内容再校验已完成） |
 | C19 冲突策略 | L2b | 主流批量重命名工具 | — | 未判定（仅参考） | 不引入代码；冲突枚举完备性 | — | 方案 §5.13 / 7.7 | 仅思路参考 |
 | C59 规范模式重命名 | L2b | 成熟重命名工具 | — | 未判定（仅参考） | 不引入代码；token 语法可读性 | — | 方案 §5.5 / T 用例 | 仅思路参考 |
 | C13 大文件排序 | L1-first（不移植） | `extsort` 0.5.0（Apache-2.0，初筛） | — | 初筛通过；待 cargo-deny | 不移植；CSV 类型比较自建 | — | 方案 §5.4 / C-3 | L1 选型，无 PDR |
