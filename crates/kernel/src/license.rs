@@ -17,24 +17,25 @@ pub enum Capability {
 }
 
 pub trait LicenseService: Send + Sync {
-    fn capability(&self, op: OperationKind) -> Capability;
-    fn consume(&self, op: OperationKind, n: u32) -> Result<(), KernelError>;
-    fn release(&self, op: OperationKind, n: u32);
+    /// `op` 取 `PlanDocument.kind`（功能编号，如 `"c05"`）；执行层逐条复核（§8.5）。
+    fn capability(&self, op: &str) -> Capability;
+    fn consume(&self, op: &str, n: u32) -> Result<(), KernelError>;
+    fn release(&self, op: &str, n: u32);
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AlwaysAllowLicense;
 
 impl LicenseService for AlwaysAllowLicense {
-    fn capability(&self, _op: OperationKind) -> Capability {
+    fn capability(&self, _op: &str) -> Capability {
         Capability::Allow
     }
 
-    fn consume(&self, _op: OperationKind, _n: u32) -> Result<(), KernelError> {
+    fn consume(&self, _op: &str, _n: u32) -> Result<(), KernelError> {
         Ok(())
     }
 
-    fn release(&self, _op: OperationKind, _n: u32) {}
+    fn release(&self, _op: &str, _n: u32) {}
 }
 
 #[cfg(test)]

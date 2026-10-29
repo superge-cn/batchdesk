@@ -888,17 +888,17 @@ mod tests {
     struct DenyLicense;
 
     impl LicenseService for DenyLicense {
-        fn capability(&self, _op: OperationKind) -> Capability {
+        fn capability(&self, _op: &str) -> Capability {
             Capability::Deny {
                 reason: "test denial".to_string(),
             }
         }
 
-        fn consume(&self, _op: OperationKind, _n: u32) -> Result<(), KernelError> {
+        fn consume(&self, _op: &str, _n: u32) -> Result<(), KernelError> {
             Ok(())
         }
 
-        fn release(&self, _op: OperationKind, _n: u32) {}
+        fn release(&self, _op: &str, _n: u32) {}
     }
 
     fn delete_entry(entry_id: &str, source: &str) -> PlanEntry {

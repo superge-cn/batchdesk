@@ -7,9 +7,11 @@
 
 pub mod apply;
 pub mod config;
+pub mod conflict;
 pub mod duplicate;
 pub mod error;
 pub mod fs;
+pub mod generic_apply;
 pub mod journal;
 pub mod license;
 pub mod path;
