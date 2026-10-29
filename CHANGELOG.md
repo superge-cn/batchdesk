@@ -8,6 +8,8 @@
 
 ### Added
 
+- **CI 六 job 全绿 + W0-5 关闭（2026-10-29）**：run **40872864062**（head `23c1f45`，push，0 failure 注解）——lint / deny（advisories+licenses+bans+sources，4 份 SBOM artifact）/ test·ubuntu / **test·windows** / web / desktop / bench 全 success，确立本项目首个可复核的 CI 绿灯证据。Windows 侧 `crates/cli/tests/apply_flow.rs` 3 项全过（含真实 `c09 --plan` → 篡改 → apply 全 skipped E2010 场景，`stats.total=2`），实证 Windows 文件身份可用、C09 清理计划非空。据此按台账关闭 **W0-5（`src-tauri` 独立 workspace 依赖审计）**；Wave 0 仅剩 W0-6 的 Windows 长路径与 C09 的 T 全量 UI 验收。
+
 - **W0-6 plan→apply 内容再校验锚点（2026-10-29）**：kernel `PlanEntry.expected` 内容指纹与 apply 期 E2010 复核（大小 + BLAKE3 全量哈希；变化条目 skipped、不写 Journal、文件保留原位）已有实现与单测（kernel 46 项中的 3 项指纹单测）；`crates/cli/tests/apply_flow.rs` 补真实 CLI 链路集成场景（`c09 --plan` 携带指纹 → 篡改大小/同尺寸内容 → apply 全部 skipped E2010），`cargo test --test apply_flow` 3 passed（workspace 总数 63→70）。台账同步：DEVELOPMENT-PLAN/TRACEABILITY 将内容再校验移出缺口列；W0-6 转“部分”。
 - **CI 首跑与修复（2026-10-29）**：16 个分批提交推送 origin/main，触发 run 40865148224——lint/bench/desktop/web/test·ubuntu **5 job 绿**；两处失败本地离线复现并修复：① deny job 的 src-tauri advisories 命中 **RUSTSEC-2024-0370**（proc-macro-error unmaintained，gtk-rs→wry/tauri 传递依赖，上游无可用升级）：`deny.toml` 新增 `[advisories] ignore` 并注明理由与移除条件（tauri 生态迁移后移除）；② test·windows 的 check_docs 失败（Windows autocrlf 使基线字节级 sha256 失配 + cp1252 管道中文输出）：新增 `.gitattributes`（`* text=auto eol=lf`）并在 ci.yml 注入 `PYTHONUTF8=1`。SBOM 产出步骤本地实测可跑通（cargo-cyclonedx v0.5.9）。
 

@@ -8,7 +8,7 @@
 | # | 门禁 | 命令 | 说明 |
 |---|---|---|---|
 | ① | lint + 格式 | `cargo clippy --workspace --all-targets -- -D warnings` ＋ `cargo fmt --all -- --check` | **从第一行代码起生效**，不留"先欠着"的历史债；不通过即不合并 |
-| ② | 许可证 + 漏洞 | `cargo deny check licenses advisories` | **每周跑一次**（CI 定时任务）；SBOM 工具已选 cargo-cyclonedx（ADR-0008），CI deny job 步骤已起草（含 src-tauri 独立 workspace），待首次 CI 绿灯验证；许可证白名单见 `deny.toml` |
+| ② | 许可证 + 漏洞 | `cargo deny check licenses advisories` | **每周跑一次**（CI 定时任务）；SBOM 工具已选 cargo-cyclonedx（ADR-0008），CI deny job 覆盖根与 src-tauri 独立 workspace 并已全绿（run 40872864062）；许可证白名单见 `deny.toml` |
 | ③ | 测试 | `cargo test --workspace` | 单元测试；**语料回归断言尚未实现**（见 §2） |
 | ④ | 语料/文档一致性 | `python fixtures/corpus/check_scope.py`；`python fixtures/corpus/verify_corpus.py --hashes`；`python fixtures/migrations/check_schema.py`；`python scripts/check_docs.py` | 范围/哈希/幂等/迁移样本/链接锚点/版本锚点/错误码白名单 |
 

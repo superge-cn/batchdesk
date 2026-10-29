@@ -21,13 +21,13 @@
 | 09 i18n | `web/src/locales/`、设置区 | 未建 | 设计 09 §6 的 I18N-01…08；T v1.12 B8 | 资源 key、语言切换、英文排版 |
 | 10 日志/诊断 | `src-tauri/src/logging/`、kernel 记录 | Journal JSONL + CLI/桌面 undo 已建；操作/诊断日志未建 | `apply_flow.rs`；journal 单测；shell 队列测试 | 双轨落库、脱敏、轮转、支持包 |
 | 11 发布/签名/更新 | CI release、`src-tauri/src/update/` | CI 仅骨架；SBOM/bench 对比占位 | 发布清单（设计 11 §6） | 签名、更新清单、防降级、回滚 |
-| 12 前端/壳架构 | `web/`、`src-tauri/` | C09 React/Vite 事件驱动 UI + Tauri v2 任务队列/事件切片；`src-tauri` 独立 workspace；WebView E2E 脚本可运行 | `pnpm build`；`src-tauri` 队列测试；`scripts/e2e-tauri.mjs`；浏览器 mock 流 | `retryTask`/任务持久化、Playwright/Vitest、CSP/capabilities、i18n/虚拟滚动；src-tauri 依赖未纳入根 cargo-deny |
+| 12 前端/壳架构 | `web/`、`src-tauri/` | C09 React/Vite 事件驱动 UI + Tauri v2 任务队列/事件切片；`src-tauri` 独立 workspace；WebView E2E 脚本可运行 | `pnpm build`；`src-tauri` 队列测试；`scripts/e2e-tauri.mjs`；浏览器 mock 流 | `retryTask`/任务持久化、Playwright/Vitest、CSP/capabilities、i18n/虚拟滚动（`src-tauri` 独立 lock 已由 CI deny job 覆盖） |
 | 13 CLI（P1） | `crates/cli` + `crates/platform` | C09 scan/plan/apply/undo + S02 + cleanup 切片（OQ-30 已追认为实验命令，设计 13 v0.2 §2.1）；通用命令面未建 | platform 15 + CLI 6 单测 + 3 集成；C-6 | 命令面、退出码矩阵、真实授权注入、进度/取消 |
 | 14 AI 助手（F15 Phase 1/2/3） | `src-tauri/ai`、`web/src/features/ai` | 未开始 | `fixtures/ai/`、AI-01…AI-26 | FunctionCatalog、IntentGraph/PlanBundle、模型 Provider、工具 allowlist、同意/隐私、E6xxx、多计划冲突 |
 
 ## 2. 当前可走通性
 
-- **可运行**：`cargo test --workspace`（kernel 42 + platform 13 + CLI 6 单测 + CLI 2 集成）；`cargo fmt/clippy`；`web` 的 `pnpm build`；`cargo test --manifest-path src-tauri/Cargo.toml`（队列 2）；C-6 只读/计划预览断言（本地手动）。
+- **可运行**：`cargo test --workspace`（kernel 46 + platform 15 + CLI 6 单测 + CLI 3 集成）；`cargo fmt/clippy`；`web` 的 `pnpm build`；`cargo test --manifest-path src-tauri/Cargo.toml`（队列 2）；C-6 只读/计划预览断言（本地手动）；**CI 六 job 全绿（run 40872864062，2026-10-29；含 Windows 单元测试与 deny/SBOM）**。
 - **可端到端走通的功能**：**C09 CLI 切片**（扫描→计划→隔离清理→Journal 撤销）与**桌面任务队列切片**（plan→apply→undo、执行中取消回滚）均走通；后者已通过真实 Tauri WebView E2E（`scripts/e2e-tauri.mjs`），浏览器 mock 流保留。
 - **C09**：CLI scan/plan/apply/undo + S02 + cleanup，以及 Tauri 任务队列/事件/React UI；apply 只处理 C09 delete，移入隔离目录、逐条写 Journal、AlwaysAllow 授权；取消在条目边界回滚并终态 `cancelled`；快速窗口由调用方显式传入（OQ-28 待确认）；保留策略默认 `earliest`（OQ-29 已确认，待基线收编）。
 - **C37 处理模板/持久化**：只有契约与 T 用例，未实现 ConfigDocument/UiState/Recipe 命令/UI。

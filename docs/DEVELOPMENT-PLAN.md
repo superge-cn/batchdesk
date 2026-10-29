@@ -40,7 +40,7 @@
 - CLI：C09 scan → plan → apply → undo/cleanup、S02、`--protected-dir`、`--retention-days`。
 - 桌面：`src-tauri` Tauri v2 任务队列（`tasks.rs`）与 `task://progress`/`task://state`/`task://done`；`applyPlan`/`undoPlan` 返回 `{taskId}`；取消/暂停/恢复与 list/get 已注册；应用数据目录下 quarantine/journal。
 - Web：React 19/Vite 7 C09 页面，U v1.3 token + 液态玻璃外壳；计划预览、确认执行、事件驱动进度/暂停/取消、撤销、保留期演练/永久清理；任务事件按 taskId 归档，避免 IPC 返回前完成导致丢报告；浏览器 mock IPC 流已验证。
-- 验证：`cargo test --workspace` 70 项通过（kernel 46 + platform 15 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 2 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；CI 首跑（run 40865148224，2026-10-29）5/7 绿，两处失败已修复待复验（见 §6.1）。
+- 验证：`cargo test --workspace` 70 项通过（kernel 46 + platform 15 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 2 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 六 job 全绿（run 40872864062，2026-10-29；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success）**。
 - 门禁：fmt/clippy、docs、语料范围/哈希、迁移 schema。
 
 ### 3.2 部分完成/有明确缺口
@@ -68,7 +68,7 @@
 | 有几个产品功能完成 T 验收？ | **0** |
 | 有几个功能有可运行纵向切片？ | **1**（C09） |
 | 平台核心是否足够支撑第二个功能？ | **不够**：缺重试/任务持久化、Config/UiState、通用文件操作主链、日志/授权注入 |
-| 现在最该做什么？ | **Wave 0 收尾**：W0-5 CI 绿灯复验（首跑 5/7，deny/windows 已修复）、W0-6 Windows 能力（内容再校验已完成）；之后进入 Wave 1 |
+| 现在最该做什么？ | **进入 Wave 1**：Wave 0 的 W0-1…W0-5 已完成（CI 六 job 全绿），W0-6 仅剩 Windows 长路径与 C09 的 T 全量 UI 验收 |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -100,7 +100,7 @@
 
 **完成判据**：UI 通过事件驱动完成 C09 全链路；Tauri WebView E2E 绿灯；设计 01 命令形状一致；`src-tauri` 依赖审计通过。
 
-**当前状态（2026-10-29）**：W0-1/W0-2/W0-3/W0-4 已完成；W0-5/W0-6 未完成，Wave 0 仍为“部分”。
+**当前状态（2026-10-29）**：W0-1/W0-2/W0-3/W0-4/W0-5 已完成（W0-5 以 CI 六 job 全绿关闭）；W0-6 部分（仅剩 Windows 长路径与 C09 的 T 全量 UI 验收），Wave 0 仍为“部分”。
 
 ### Wave 1：平台核心（阶段 0 的前置）
 
@@ -154,7 +154,7 @@
 | W0-2 `applyPlan`/`undoPlan` 返回 taskId | **完成** | IPC 形状对齐 | UI 不再同步等待结果 | W0-1 |
 | W0-3 Tauri WebView E2E | **完成** | WebDriver 脚本 `scripts/e2e-tauri.mjs` | plan→apply→undo/cleanup 演练 + 取消回滚 | W0-1、Tauri 系统依赖 |
 | W0-4 合约化 cleanup/storage 命令 | **完成** | 设计 01 §4.4.1 壳层追加行 | 文档/命令/DTO 一致 | 设计 01 评审 |
-| W0-5 src-tauri 依赖审计 | 部分 | cargo-deny/SBOM 覆盖独立 lock（CI deny job 步骤已起草） | CI 绿灯 | OQ-13、CI |
+| W0-5 src-tauri 依赖审计 | **完成** | cargo-deny/SBOM 覆盖独立 lock | CI deny job 全绿（run 40872864062；含 `cargo deny --manifest-path src-tauri/Cargo.toml` 与 4 份 SBOM artifact） | OQ-13、CI |
 | W0-6 C09 收尾 | 部分 | 内容再校验（expected+E2010+CLI 集成锚点）与 Windows 文件身份（WinAPI，ADR-0012）已落地；长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
 
 ## 6. 完成判定与维护
@@ -164,7 +164,7 @@
 - **每个 Wave**：更新本文件与 `TRACEABILITY`；Wave 完成不等于阶段验收，最终以 T 的四级验收为准。
 - **状态更新**：完成/切片/部分/未开始/阻塞五档只能按证据改；没有测试或 E2E 的不写“完成”。
 - **范围控制**：不因本计划新增产品阈值或行为；新增功能/改优先级回到方案 §11.6 或 T 升版。
-- **已知偏差**：任务队列已实现，但 `retryTask`、任务持久化/S03 恢复、事件合帧未实现；`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计仍未完成（CI 首跑 5/7：deny 的 RUSTSEC-2024-0370 与 test·windows 的 EOL/编码已修复，待复验）。W0-5/W0-6 是 Wave 0 的剩余关闭项，不是“已完成”。
+- **已知偏差**：任务队列已实现，但 `retryTask`、任务持久化/S03 恢复、事件合帧未实现；`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计已由 CI deny job 覆盖（W0-5 完成）。W0-6 是 Wave 0 仅剩的关闭项（Windows 长路径、C09 的 T 全量 UI 验收），不是“已完成”。
 
 ### 6.1 状态更新记录（模板 + 当前示例）
 
@@ -181,6 +181,7 @@
 | 2026-10-29 | W0-6 plan→apply 内容再校验 | 切片 | kernel `expected` 指纹 + E2010 复核（单测 3 项）+ platform `content_hash`（BLAKE3）；`apply_flow.rs` 新增真实 CLI 链路集成场景，`cargo test -p batchdesk-cli --test apply_flow` 3 passed | Windows 文件 ID、长路径、T 全量 UI 验收 | 开发代理 |
 | 2026-10-29 | Windows 编译缺陷（E0658）修复 | 切片 | CI run 40870120156 注解实证 `use of unstable library feature windows_by_handle`；`scan.rs` 的 Windows `identity_from` 改为“身份不可用”回退（None → kernel 标 needs_manual_review），Windows 测试同步断言回退；本地 `cargo check --target x86_64-pc-windows-msvc`（platform，临时 pure 绕过 blake3 汇编后还原）零 error；Linux `cargo test --workspace` 70 项仍全绿 | Windows 文件 ID 需 WinAPI GetFileInformationByHandle 并新增依赖（过 cargo-deny）；长路径矩阵 | 开发代理 |
 | 2026-10-29 | Windows 文件身份（WinAPI，ADR-0012） | 切片 | CI run 40870967145 实证“回退”导致 Windows 上 `stats.total=0`（C09 不可用）；`identity_from` 改经 `GetFileInformationByHandle` 取 volume serial + file index（`windows-sys` 0.61，MIT OR Apache-2.0）；Windows-only 测试断言身份可得且硬链接两路径一致；`cargo check --target x86_64-pc-windows-msvc` 零 error；Linux fmt/clippy/70 项测试/`cargo deny` 四项全绿 | 长路径矩阵、T 全量 UI 验收、Windows 实机复验（依赖 CI） | 开发代理 |
+| 2026-10-29 | CI 六 job 全绿 + W0-5 关闭 | 完成 | run 40872864062（head 23c1f45，push，0 failure 注解）：lint / deny（advisories+licenses+bans+sources + SBOM artifact）/ test·ubuntu / test·windows / web / desktop / bench 全 success；Windows 侧 `apply_flow` 3 项（含真实 plan→apply E2010 场景，`stats.total=2`）通过 → Windows 文件身份可用、C09 计划非空 | W0-6 剩 Windows 长路径与 C09 的 T 全量 UI 验收 | 开发代理 |
 
 ## 7. 关联
 
