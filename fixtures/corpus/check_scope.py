@@ -3,7 +3,7 @@
 
 背景
 ----
-T v1.1 §3.2 的 28 条语料中，有 4 条的「构造方式」依赖人工操作或真实环境
+T v1.12 §3.2 的 28 条语料中，有 4 条的「构造方式」依赖人工操作或真实环境
 （R05 断线、E01 Excel 占用、E02 OneDrive 释放空间、E04 配额受限卷），无法脚本化。
 本脚本把这一区分**显式化**并作为 CI 门禁，避免三类静默问题：
 
@@ -19,9 +19,9 @@ T v1.1 §3.2 的 28 条语料中，有 4 条的「构造方式」依赖人工操
 
 规则
 ----
-1. manifest 行数 = EXPECTED_TOTAL（28，对齐 T v1.1 §3.2）；
+1. manifest 行数 = EXPECTED_TOTAL（28，对齐 T v1.12 §3.2）；
 2. 「人工」集合（manifest）与 manual-only.txt 双向一致；
-3. 状态=就绪 → 必须有 gen_*.py，且必须有对应目录；
+3. 状态=就绪 → 必须有 gen_*.py、对应目录与 expected.md，且 expected.md 回指 T v1.12 §3.2；
 4. 状态=人工 → 不得有 gen_*.py；
 5. 磁盘上的语料目录必须在 manifest 中列出；
 6. 状态=待补 → 不要求目录（构建期允许尚未落地）。
@@ -112,7 +112,7 @@ def main() -> int:
     # 规则 1：行数
     if len(table) != EXPECTED_TOTAL:
         errors.append(
-            f"manifest 列出 {len(table)} 条，与 T v1.1 §3.2 的 {EXPECTED_TOTAL} 条不符"
+            f"manifest 列出 {len(table)} 条，与 T v1.12 §3.2 的 {EXPECTED_TOTAL} 条不符"
         )
 
     # 规则 2：人工集合双向一致
@@ -121,12 +121,17 @@ def main() -> int:
     for fid in sorted(manual_ids - manual):
         errors.append(f"{fid} 在 manual-only.txt 中，但 manifest 未标为「人工」")
 
-    # 规则 3：就绪项必须有脚本与目录
+    # 规则 3：就绪项必须有脚本、目录与 expected.md
     for fid in sorted(ready):
         if not (HERE / fid).is_dir():
             errors.append(f"{fid} 标为「{STATUS_READY}」但缺少 corpus/{fid}/ 目录")
         if not has_script(fid):
             errors.append(f"{fid} 标为「{STATUS_READY}」但缺少 gen_*.py")
+        expected = HERE / fid / "expected.md"
+        if not expected.is_file():
+            errors.append(f"{fid} 标为「{STATUS_READY}」但缺少 expected.md")
+        elif "T v1.12 §3.2" not in expected.read_text(encoding="utf-8"):
+            errors.append(f"{fid} 的 expected.md 未回指 T v1.12 §3.2")
 
     # 规则 4：人工项不得有脚本（二选一，杜绝歧义）
     for fid in sorted(manual):
@@ -147,12 +152,12 @@ def main() -> int:
             "## 语料回归范围",
             "",
             f"- 清单条目：**{len(table)}** / 声明 {EXPECTED_TOTAL}",
-            f"- 自动化（进 CI）：**{len(auto_ids)}** —— {', '.join(sorted(auto_ids)) or '（无）'}",
+            f"- 自动化（脚本进 CI）：**{len(auto_ids)}** —— {', '.join(sorted(auto_ids)) or '（无）'}",
             f"- 人工跟踪（CI 显式排除）：**{len(manual)}** —— {', '.join(sorted(manual)) or '（无）'}",
             f"- 尚未落地（待补）：**{len(todo)}**",
             "",
-            "> 说明：CI 的通过率分母只含「自动化」子集；人工项单独跟踪，见 ",
-            "> `fixtures/corpus/manual-results.md`。",
+            "> 说明：CI 的语料步骤只处理「自动化」子集；人工项单独跟踪，见 ",
+            "> `fixtures/corpus/manual-results.md`。当前只做生成与范围核对，逐条断言尚未实现。",
         ]
     )
 

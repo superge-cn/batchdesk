@@ -1,0 +1,20 @@
+{
+  "id": "AI-05",
+  "purpose": "歧义输入：应追问，不生成计划",
+  "input": {
+    "text": "帮我整理一下",
+    "context": {"fileCount": 12, "kinds": ["pdf"], "locale": "zh-CN", "includeFileNames": false}
+  },
+  "mock_model": {
+    "intent": {"kind": "f12", "params": {}, "needsClarification": true, "question": "要按什么规则重命名？"},
+    "tool_calls": []
+  },
+  "expected": {
+    "intent_kind": "f12",
+    "tool_calls": [],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "needs_clarification": true,
+    "error_code": null
+  }
+}

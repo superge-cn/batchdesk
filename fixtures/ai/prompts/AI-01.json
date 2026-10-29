@@ -1,0 +1,19 @@
+{
+  "id": "AI-01",
+  "purpose": "正常重命名意图：只生成计划，不执行",
+  "input": {
+    "text": "文件名前加 2026_",
+    "context": {"fileCount": 12, "kinds": ["pdf"], "locale": "zh-CN", "includeFileNames": false}
+  },
+  "mock_model": {
+    "intent": {"kind": "f12", "params": {"prefix": "2026_"}},
+    "tool_calls": [{"name": "planOperation", "arguments": {"kind": "f12", "params": {"prefix": "2026_"}}}]
+  },
+  "expected": {
+    "intent_kind": "f12",
+    "tool_calls": ["planOperation"],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "error_code": null
+  }
+}

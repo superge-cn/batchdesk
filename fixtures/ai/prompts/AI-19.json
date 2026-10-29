@@ -1,0 +1,28 @@
+{
+  "id": "AI-19",
+  "purpose": "多计划依赖顺序（Phase 3）：先移动、再抽列；只生成计划，不执行",
+  "input": {
+    "text": "先按年份把合同分到文件夹，再只保留姓名列",
+    "context": {"fileCount": 12, "kinds": ["csv"], "locale": "zh-CN", "includeFileNames": false}
+  },
+  "mock_model": {
+    "intent_graph": {
+      "steps": [
+        {"stepId": "s1", "kind": "c07", "params": {"groupBy": "year"}, "dependsOn": []},
+        {"stepId": "s2", "kind": "f07", "params": {"columns": ["姓名"]}, "dependsOn": ["s1"]}
+      ]
+    },
+    "tool_calls": [
+      {"name": "planOperation", "arguments": {"stepId": "s1", "kind": "c07", "params": {"groupBy": "year"}}},
+      {"name": "planOperation", "arguments": {"stepId": "s2", "kind": "f07", "params": {"columns": ["姓名"]}}}
+    ]
+  },
+  "expected": {
+    "intent_steps": 2,
+    "order": ["s1", "s2"],
+    "tool_calls": ["planOperation", "planOperation"],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "error_code": null
+  }
+}

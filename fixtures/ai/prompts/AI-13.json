@@ -1,0 +1,19 @@
+{
+  "id": "AI-13",
+  "purpose": "模型输出非法 schema：拒绝执行，零副作用",
+  "input": {
+    "text": "按我的要求处理",
+    "context": {"fileCount": 12, "kinds": ["pdf"], "locale": "zh-CN", "includeFileNames": false}
+  },
+  "mock_model": {
+    "intent": {"kind": "c99", "params": {"raw_command": "rm -rf /"}},
+    "tool_calls": []
+  },
+  "expected": {
+    "intent_kind": "c99",
+    "tool_calls": [],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "error_code": "E6003"
+  }
+}

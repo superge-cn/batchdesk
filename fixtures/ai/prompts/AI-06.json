@@ -1,0 +1,20 @@
+{
+  "id": "AI-06",
+  "purpose": "不支持的功能：明确拒绝，不调用工具",
+  "input": {
+    "text": "把这批文件转成 PDF",
+    "context": {"fileCount": 3, "kinds": ["docx"], "locale": "zh-CN", "includeFileNames": false}
+  },
+  "mock_model": {
+    "intent": null,
+    "tool_calls": []
+  },
+  "expected": {
+    "intent_kind": null,
+    "tool_calls": [],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "refusal": true,
+    "error_code": null
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "configVersion": 1,
+  "updatedAt": "2026-10-27T00:00:00Z",
+  "scopes": {
+    "general": {
+      "language": "zh-CN",
+      "theme": "system",
+      "launchBehavior": "normal"
+    },
+    "processing": {
+      "onConflict": "skip",
+      "encodingPolicy": "auto",
+      "newlinePolicy": "keep",
+      "deletionMode": "move-to-quarantine",
+      "keepBackup": true
+    },
+    "performance": {
+      "concurrency": "auto",
+      "memoryBudget": "auto",
+      "largeFileThreshold": "auto"
+    },
+    "security": {
+      "protectedDirs": [],
+      "placeholderPolicy": "skip"
+    },
+    "logging": {
+      "logFullPaths": false
+    }
+  }
+}
