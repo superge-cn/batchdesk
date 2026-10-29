@@ -603,10 +603,6 @@ mod tests {
         fn exists(&self, path: &str) -> bool {
             self.files.lock().unwrap().contains_key(path)
         }
-
-        fn read(&self, path: &str) -> Option<Vec<u8>> {
-            self.files.lock().unwrap().get(path).cloned()
-        }
     }
 
     impl FsAdapter for TestFs {
@@ -960,8 +956,10 @@ mod tests {
         let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt"]);
         let license = crate::license::AlwaysAllowLicense;
         let mut journal = TestJournal::default();
-        let mut options = ApplyOptions::default();
-        options.on_conflict = OnConflict::Overwrite;
+        let options = ApplyOptions {
+            on_conflict: OnConflict::Overwrite,
+            ..Default::default()
+        };
         let error = apply_generic_plan(
             &plan(vec![action_entry(
                 "e1",

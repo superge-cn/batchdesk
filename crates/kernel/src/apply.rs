@@ -663,7 +663,7 @@ mod tests {
     use super::*;
     use crate::fs::{CaseSense, ConflictPolicy, DirEntryInfo, EntryAttrs, ScanFilter, StatInfo};
     use crate::journal::{FsOp, JournalEntry, JournalSink, JournalStatus, JournalStore};
-    use crate::license::{Capability, OperationKind};
+    use crate::license::Capability;
     use crate::plan::{PlanEntry, PlanExpected, PlanStats, PlanWarning};
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, Ordering};

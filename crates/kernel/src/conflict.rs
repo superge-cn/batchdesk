@@ -69,10 +69,7 @@ fn fold(value: &str, sense: CaseSense) -> String {
 
 /// 目标路径的最后一段（文件名），同时接受 `/` 与 `\`。
 pub fn file_name_of(target: &str) -> &str {
-    target
-        .rsplit(|ch| ch == '/' || ch == '\\')
-        .next()
-        .unwrap_or(target)
+    target.rsplit(['/', '\\']).next().unwrap_or(target)
 }
 
 /// 枚举三类冲突（方案 §5.13：批内重名、与现存重名、仅大小写不同）。
@@ -269,7 +266,7 @@ mod tests {
         let scan = scan_conflicts(&entries, &existing(&[]), CaseSense::Sensitive);
         assert_eq!(scan.conflicts.get(&1), Some(&ConflictKind::WithinBatch));
         assert!(
-            scan.conflicts.get(&2).is_none(),
+            !scan.conflicts.contains_key(&2),
             "different case is a distinct name on Linux"
         );
     }
