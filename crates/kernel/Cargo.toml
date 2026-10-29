@@ -13,3 +13,5 @@ path = "src/lib.rs"
 [dependencies]
 # Plan/Apply/Journal DTOs are wire-visible (design 01 §2.1: camelCase serde).
 serde = { version = "1", features = ["derive"] }
+# ConfigDocument 的 patch 与 SettingValue 需要动态 JSON 值（设计 03 §2/§4；ADR-0010 同一选型）。
+serde_json = "1"

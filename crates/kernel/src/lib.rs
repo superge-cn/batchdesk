@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod config;
 pub mod duplicate;
 pub mod error;
 pub mod fs;
@@ -14,6 +15,8 @@ pub mod license;
 pub mod path;
 pub mod plan;
 pub mod progress;
+pub mod recipe;
+pub mod ui_state;
 
 /// 引擎版本，供 IPC 握手与诊断使用（契约见 docs/design/01-内核接口与IPC契约.md §9 第 1 条）。
 pub const KERNEL_VERSION: &str = env!("CARGO_PKG_VERSION");

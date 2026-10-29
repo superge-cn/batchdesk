@@ -3,6 +3,7 @@
 //! This crate may perform filesystem I/O; it must not contain domain rules.
 //! The kernel remains pure and receives these adapters through its ports.
 
+pub mod config_store;
 pub mod fs;
 pub mod ids;
 pub mod journal;
