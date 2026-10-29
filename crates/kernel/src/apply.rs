@@ -349,10 +349,11 @@ pub fn apply_plan(
                 "FsOp::inverse returned None for quarantine",
             )
         })?;
-        let journal_entry = match context.journal.append(
+        let journal_entry = match context.journal.append_with_kind(
             &plan.plan_id,
             &entry.entry_id,
             &context.now_rfc3339,
+            &plan.kind,
             forward,
             reverse.clone(),
         ) {
@@ -614,7 +615,7 @@ pub fn undo_plan_with_ports(
         };
         match result {
             Ok(()) => {
-                license.release(C09, 1);
+                license.release(entry.plan_kind.as_deref().unwrap_or(C09), 1);
                 journal.mark_reverted(plan_id, &[entry.seq])?;
                 reverted += 1;
                 reports.push(ApplyEntryReport {
@@ -856,6 +857,7 @@ mod tests {
                 plan_id: plan_id.to_string(),
                 entry_id: entry_id.to_string(),
                 ts: ts.to_string(),
+                plan_kind: None,
                 forward,
                 reverse,
                 status: JournalStatus::Applied,

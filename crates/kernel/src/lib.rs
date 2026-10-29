@@ -16,6 +16,7 @@ pub mod journal;
 pub mod license;
 pub mod path;
 pub mod plan;
+pub mod preflight;
 pub mod progress;
 pub mod recipe;
 pub mod ui_state;

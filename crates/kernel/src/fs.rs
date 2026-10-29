@@ -4,6 +4,8 @@
 //! through this trait. Implementations live in the shell (desktop) or the Web
 //! adapter.
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::KernelError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,8 +68,10 @@ pub struct StatInfo {
     pub attrs: EntryAttrs,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CaseSense {
+    #[default]
     Sensitive,
     CaseInsensitive,
 }

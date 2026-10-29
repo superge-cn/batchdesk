@@ -62,6 +62,10 @@ pub struct JournalEntry {
     pub plan_id: String,
     pub entry_id: String,
     pub ts: String,
+    /// 计划类别（如 "c05"）；撤销时据此向 LicenseService 退还配额。
+    /// 旧日志缺省时按 c09 处理（设计 01 §8，追加式可选字段）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_kind: Option<String>,
     pub forward: FsOp,
     pub reverse: FsOp,
     pub status: JournalStatus,
@@ -76,6 +80,20 @@ pub trait JournalSink {
         forward: FsOp,
         reverse: FsOp,
     ) -> Result<JournalEntry, KernelError>;
+
+    /// 记录 plan kind 的追加式写法；默认实现忽略类别以保持旧实现兼容。
+    fn append_with_kind(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        plan_kind: &str,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> Result<JournalEntry, KernelError> {
+        let _ = plan_kind;
+        self.append(plan_id, entry_id, ts, forward, reverse)
+    }
 }
 
 pub trait JournalStore: JournalSink {
@@ -108,5 +126,35 @@ mod tests {
             .inverse(),
             None
         );
+    }
+
+    #[test]
+    fn legacy_journal_lines_without_plan_kind_parse_as_none() {
+        let legacy = r#"{"seq":1,"planId":"p1","entryId":"e1","ts":"2026-10-29T00:00:00Z","forward":{"op":"rename","from":"a","to":"b"},"reverse":{"op":"rename","from":"b","to":"a"},"status":"applied"}"#;
+        let entry: JournalEntry = serde_json::from_str(legacy).unwrap();
+        assert_eq!(entry.plan_kind, None);
+    }
+
+    #[test]
+    fn plan_kind_round_trips_when_present() {
+        let entry = JournalEntry {
+            seq: 1,
+            plan_id: "p1".to_string(),
+            entry_id: "e1".to_string(),
+            ts: "2026-10-29T00:00:00Z".to_string(),
+            plan_kind: Some("c05".to_string()),
+            forward: FsOp::Rename {
+                from: "a".to_string(),
+                to: "b".to_string(),
+            },
+            reverse: FsOp::Rename {
+                from: "b".to_string(),
+                to: "a".to_string(),
+            },
+            status: JournalStatus::Applied,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let decoded: JournalEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, entry);
     }
 }

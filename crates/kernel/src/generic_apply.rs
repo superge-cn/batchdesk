@@ -213,6 +213,12 @@ pub fn apply_generic_plan(
                 continue;
             }
         };
+        if matches!(entry.action, PlanAction::Rename | PlanAction::Move) {
+            if let Some(error) = protected_target_hit(context, &target) {
+                reports.push(skipped_entry(entry.entry_id.clone(), error));
+                continue;
+            }
+        }
 
         if let Err(error) = context.license.consume(&plan.kind, 1) {
             failed += 1;
@@ -259,10 +265,11 @@ pub fn apply_generic_plan(
                 ));
             }
         };
-        match context.journal.append(
+        match context.journal.append_with_kind(
             &plan.plan_id,
             &entry.entry_id,
             &context.now_rfc3339,
+            &plan.kind,
             forward,
             reverse,
         ) {
@@ -520,6 +527,31 @@ fn protected_hit(
     })
 }
 
+fn protected_target_hit(context: &GenericApplyContext<'_>, target: &str) -> Option<KernelError> {
+    if context.protected_dirs.is_empty() {
+        return None;
+    }
+    let normalized = match try_normalize(target) {
+        Ok(normalized) => normalized,
+        Err(error) => return Some(error),
+    };
+    let canonical = context.fs.canonicalize(target).ok();
+    protected_by(
+        &normalized,
+        canonical.as_deref(),
+        &context.protected_dirs,
+        context.case_sense,
+    )
+    .map(|hit| {
+        KernelError::new(
+            "E2009",
+            format!("target is under protected directory {hit}"),
+            None,
+            false,
+        )
+    })
+}
+
 fn is_cancelled(context: &GenericApplyContext<'_>) -> bool {
     context
         .cancel
@@ -748,6 +780,31 @@ mod tests {
                 plan_id: plan_id.to_string(),
                 entry_id: entry_id.to_string(),
                 ts: ts.to_string(),
+                plan_kind: None,
+                forward,
+                reverse,
+                status: JournalStatus::Applied,
+            };
+            self.entries.push(entry.clone());
+            Ok(entry)
+        }
+
+        fn append_with_kind(
+            &mut self,
+            plan_id: &str,
+            entry_id: &str,
+            ts: &str,
+            plan_kind: &str,
+            forward: FsOp,
+            reverse: FsOp,
+        ) -> Result<JournalEntry, KernelError> {
+            let seq = self.entries.len() as u64 + 1;
+            let entry = JournalEntry {
+                seq,
+                plan_id: plan_id.to_string(),
+                entry_id: entry_id.to_string(),
+                ts: ts.to_string(),
+                plan_kind: Some(plan_kind.to_string()),
                 forward,
                 reverse,
                 status: JournalStatus::Applied,
@@ -833,7 +890,7 @@ mod tests {
     fn context<'a>(
         fs: &'a TestFs,
         journal: &'a mut TestJournal,
-        license: &'a crate::license::AlwaysAllowLicense,
+        license: &'a dyn crate::license::LicenseService,
     ) -> GenericApplyContext<'a> {
         GenericApplyContext {
             fs,
@@ -1019,6 +1076,103 @@ mod tests {
             "E2010"
         );
         assert!(fs.exists("/data/a.txt"));
+    }
+
+    #[test]
+    fn protected_target_is_skipped_before_any_change() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.protected_dirs = vec![ProtectedDir::new("/protected")];
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                Some("/protected/a.txt"),
+                PlanAction::Rename,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2009"
+        );
+        assert!(fs.exists("/data/a.txt"));
+        assert!(!fs.exists("/protected/a.txt"));
+        assert!(journal.entries.is_empty());
+    }
+
+    #[test]
+    fn protected_source_is_rechecked_during_execution() {
+        let fs = TestFs::with_files(&["/protected/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.protected_dirs = vec![ProtectedDir::new("/protected")];
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/protected/a.txt",
+                Some("/data/b.txt"),
+                PlanAction::Rename,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2009"
+        );
+        assert!(fs.exists("/protected/a.txt"));
+        assert!(!fs.exists("/data/b.txt"));
+    }
+
+    #[derive(Default)]
+    struct RecordingLicense {
+        released: Mutex<Vec<String>>,
+    }
+
+    impl crate::license::LicenseService for RecordingLicense {
+        fn capability(&self, _op: &str) -> crate::license::Capability {
+            crate::license::Capability::Allow
+        }
+
+        fn consume(&self, _op: &str, _n: u32) -> Result<(), KernelError> {
+            Ok(())
+        }
+
+        fn release(&self, op: &str, _n: u32) {
+            self.released.lock().unwrap().push(op.to_string());
+        }
+    }
+
+    #[test]
+    fn undo_releases_the_plan_kind_recorded_in_the_journal() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        let license = RecordingLicense::default();
+        let mut journal = TestJournal::default();
+        apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                Some("/data/b.txt"),
+                PlanAction::Rename,
+            )]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(journal.entries[0].plan_kind.as_deref(), Some("c05"));
+
+        let outcome = crate::apply::undo_plan(PLAN_ID, &fs, &license, &mut journal).unwrap();
+        assert_eq!(outcome.reverted, 1);
+        assert_eq!(*license.released.lock().unwrap(), vec!["c05".to_string()]);
     }
 
     #[test]

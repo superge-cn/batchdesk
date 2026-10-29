@@ -4,6 +4,8 @@
 //! `normalize` is best-effort and clamps absolute `..` at the root;
 //! `try_normalize` reports E1003 for paths that try to escape their root.
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 
@@ -102,7 +104,8 @@ fn split_root(path: &str) -> (String, &str) {
     (String::new(), path)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProtectedDir {
     pub literal: String,
     pub canonical: Option<String>,
