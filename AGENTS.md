@@ -39,6 +39,8 @@
 - 语料生成物校验：python fixtures/corpus/verify_corpus.py --hashes（加 `--rebuild` 校验幂等）
 - 文档/契约门禁：python scripts/check_docs.py；python fixtures/migrations/check_schema.py
 - 门禁：cargo fmt --check；cargo clippy --workspace --all-targets -- -D warnings；cargo deny check（白名单见 `deny.toml`；项目许可证 OQ-11 待法务）
+  - ⚠️ **门禁结论一律以命令退出码为准**：禁止 `cargo clippy … | grep …` / `| head` 等管道判断通过——管道会吞掉上游退出码，grep 无输出 ≠ 通过。用法为 `cmd > /tmp/x.log 2>&1; echo "EXIT=$?"`，或显式读 `${PIPESTATUS[0]}`。
+  - ⚠️ **本地工具链可能滞后于 CI**：CI 用最新 stable（`dtolnay/rust-toolchain@stable`），会引入本地尚未生效的新 lint；本地 clippy 绿灯不等于 CI 绿灯，以 CI 注解（`::error::`）为准。
 - 基准：cargo bench（仅主分支；基线对比脚本待实现）
 
 ## 硬性不变量（违反 = 打回）
@@ -58,7 +60,7 @@
 14. 持久化边界：用户设置只进 ConfigDocument；窗口/布局/最近目录/列宽/排序/模板运行偏好只进本机 UiState；任务/进度走 S03、撤销走 Journal、日志/授权/AI 对话各走专用存储，**不得写入 Config/UiState**；设置变更即保存，UiState 不导出、可重置；Web 端尽力而为、零强制力（方案 §15.3、设计 03 §11）
 
 ## 修改完成的定义（逐项自检后才算完成）
-- [ ] fmt --check 与 clippy -D warnings 零警告
+- [ ] fmt --check 与 clippy -D warnings 零警告（**以退出码判定**：禁止用管道 grep 判断；本地工具链可能滞后于 CI，新 lint 以 CI 注解为准）
 - [ ] 已跑 check_scope.py 并通过，且 `cargo test --workspace` 全绿（**先确认语料已生成**，见「常用命令」的注意事项）
 - [ ] 新增/改动批量写功能：有 plan/apply 结构与对应测试
 - [ ] 新增/改动处理模板或持久化：有 C37/T B9 覆盖，模板不保存敏感/路径数据，UiState 不混入 Config
