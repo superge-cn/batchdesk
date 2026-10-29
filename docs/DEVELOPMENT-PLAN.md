@@ -47,7 +47,7 @@
 
 | 域 | 已完成 | 未完成/缺口 |
 |---|---|---|
-| C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010）、Windows 文件身份（ADR-0012） | 长路径、C09 的 T 全量 UI 验收 |
+| C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010）、Windows 文件身份（ADR-0012）、Windows 长路径收口（设计 04 v1.3） | C09 的 T 全量 UI 验收（UNC 长路径行为矩阵待 Windows 实机） |
 | 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停、`retryTask` 手动重试、进度事件合帧、LicenseService 装配点注入、ConfigDocument + UiState + Recipe 存储与命令、通用执行器（rename/move/delete）+ 冲突枚举、S01 预检判定与采集、S02 目标路径执行期复核、S03 任务快照持久化与恢复 | C17a 操作/诊断日志、商业授权实现（注入口 seam 已建）、设置 UI、`loadRecipe`、Hashing 端口、`copy` 执行器 |
 | IPC/UI | C09 任务队列命令、`{taskId}+事件`、cleanup/storage 合约化、事件驱动 UI | CSP/capabilities、i18n、虚拟滚动、shadcn 完整组件、Vitest/Playwright、任务列表 UI |
 | 桌面工程 | Tauri 编译/启动、CI desktop check | Windows WebView 构建验证、`src-tauri` 独立 Cargo.lock 的 cargo-deny/SBOM、安装包/签名 |
@@ -68,7 +68,7 @@
 | 有几个产品功能完成 T 验收？ | **0** |
 | 有几个功能有可运行纵向切片？ | **1**（C09） |
 | 平台核心是否足够支撑第二个功能？ | **接近**：S01/S02/S03、Config/UiState、通用文件操作主链、retryTask/合帧/授权注入 seam 已建；仍缺 C17a 日志、商业授权实现与 Hashing 端口 |
-| 现在最该做什么？ | **Wave 1 收尾**：`retryTask`、事件合帧与 LicenseService 注入口已完成（切片）；下一步是 Wave 1-4 的 C17a 最小日志（设计 10 §7 载体/schema 选型待决，不自行拍板）与授权实现边界，随后进入 Wave 2；W0-6 仅剩 Windows 长路径与 C09 的 T 全量 UI 验收 |
+| 现在最该做什么？ | **Wave 1 收尾**：`retryTask`、事件合帧、LicenseService 注入口与 Windows 长路径收口已完成（切片）；下一步是 Wave 1-4 的 C17a 最小日志（设计 10 §7 载体/schema 选型待决，不自行拍板）与授权实现边界，随后进入 Wave 2；W0-6 仅剩 C09 的 T 全量 UI 验收（人工项） |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -100,7 +100,7 @@
 
 **完成判据**：UI 通过事件驱动完成 C09 全链路；Tauri WebView E2E 绿灯；设计 01 命令形状一致；`src-tauri` 依赖审计通过。
 
-**当前状态（2026-10-29）**：W0-1/W0-2/W0-3/W0-4/W0-5 已完成（W0-5 以 CI 六 job 全绿关闭）；W0-6 部分（仅剩 Windows 长路径与 C09 的 T 全量 UI 验收），Wave 0 仍为“部分”。
+**当前状态（2026-10-30）**：W0-1/W0-2/W0-3/W0-4/W0-5 已完成（W0-5 以 CI 六 job 全绿关闭）；W0-6 的工程项（内容再校验、Windows 文件身份、Windows 长路径收口）已全部落地——长路径经适配层 `\\?\`/`\\?\UNC\` 前缀统一收口（设计 04 v1.3，Windows CI 长路径回归待推送后复验）；仅剩 C09 的 T 全量 UI 验收（人工项），Wave 0 仍为“部分”。
 
 ### Wave 1：平台核心（阶段 0 的前置）
 
@@ -113,6 +113,7 @@
 4. **日志/诊断/授权注入**：C17a 最小日志、Journal 保留期、LicenseService 单机实现与商业接口边界。
    - **当前状态（2026-10-30）**：Journal 保留期已由 platform `retention` 覆盖（CLI/壳层 cleanup）；LicenseService 注入口 seam 已建——`TaskQueue::with_license` 为唯一构造器，lib.rs 装配点显式注入 AlwaysAllow（方案 13.8：接口不变、只换实现）；C17a 操作/诊断日志未开始，设计 10 §7 的数据库 schema/迁移策略待决，实现载体不得自行拍板。
 5. **Hashing/FsAdapter 能力补齐**：长路径、占位文件、分块读（Windows 文件身份已由 ADR-0012 落地）。
+   - **当前状态（2026-10-30）**：长路径已随 W0-6 收口（适配层 `\\?\`/`\\?\UNC\` 前缀统一，设计 04 v1.3）；剩余为占位文件探测增强与分块读（流式哈希已有 64 KiB 分块实现，缺口在大文件专用通道）。
 
 **完成判据**：新增任一阶段 0 功能可以只写“参数→PlanDocument 生成器”，不重复实现 plan/apply/Journal/冲突/日志/授权。
 
@@ -159,7 +160,7 @@
 | W0-3 Tauri WebView E2E | **完成** | WebDriver 脚本 `scripts/e2e-tauri.mjs` | plan→apply→undo/cleanup 演练 + 取消回滚 | W0-1、Tauri 系统依赖 |
 | W0-4 合约化 cleanup/storage 命令 | **完成** | 设计 01 §4.4.1 壳层追加行 | 文档/命令/DTO 一致 | 设计 01 评审 |
 | W0-5 src-tauri 依赖审计 | **完成** | cargo-deny/SBOM 覆盖独立 lock | CI deny job 全绿（run 40872864062；含 `cargo deny --manifest-path src-tauri/Cargo.toml` 与 4 份 SBOM artifact） | OQ-13、CI |
-| W0-6 C09 收尾 | 部分 | 内容再校验（expected+E2010+CLI 集成锚点）与 Windows 文件身份（WinAPI，ADR-0012）已落地；长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
+| W0-6 C09 收尾 | 部分 | 内容再校验（expected+E2010+CLI 集成锚点）、Windows 文件身份（WinAPI，ADR-0012）与 Windows 长路径收口（`\\?\`/`\\?\UNC\` 前缀统一走适配层，设计 04 v1.3；`scans_long_paths_beyond_the_win32_limit` >260 深树回归挂 Windows CI）已落地 | T C09 全量 UI 用例（人工）+ C-6/apply_flow；UNC 长路径行为矩阵待 Windows 实机 | W0-1、平台能力 |
 
 ## 6. 完成判定与维护
 
@@ -168,7 +169,7 @@
 - **每个 Wave**：更新本文件与 `TRACEABILITY`；Wave 完成不等于阶段验收，最终以 T 的四级验收为准。
 - **状态更新**：完成/切片/部分/未开始/阻塞五档只能按证据改；没有测试或 E2E 的不写“完成”。
 - **范围控制**：不因本计划新增产品阈值或行为；新增功能/改优先级回到方案 §11.6 或 T 升版。
-- **已知偏差**：S03 任务快照持久化与 `recoverTask` 已实现；`retryTask`（仅失败条目、新 taskId 引用原 planId、Journal 幂等排除）与 `task://progress` 壳层合帧（方案 §9.1 区间下限）已实现，E2E 尚未覆盖重试场景（需可复现失败注入）。S01/S02 已有内核/壳层判定与最小 UI 提示，TC 的 10–12 条 S01/S02 用例尚未逐条执行，S03 尚未做实机崩溃演练。`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计已由 CI deny job 覆盖（W0-5 完成）。W0-6 是 Wave 0 仅剩的关闭项（Windows 长路径、C09 的 T 全量 UI 验收），不是“已完成”。
+- **已知偏差**：S03 任务快照持久化与 `recoverTask` 已实现；`retryTask`（仅失败条目、新 taskId 引用原 planId、Journal 幂等排除）与 `task://progress` 壳层合帧（方案 §9.1 区间下限）已实现，E2E 尚未覆盖重试场景（需可复现失败注入）。Windows 长路径已收口（适配层统一 `\\?\` 前缀，设计 04 v1.3），UNC 长路径 canonicalize 行为矩阵仍需 Windows 实机核对。S01/S02 已有内核/壳层判定与最小 UI 提示，TC 的 10–12 条 S01/S02 用例尚未逐条执行，S03 尚未做实机崩溃演练。`cleanupRetention`/`getStorageInfo` 已作为壳层追加命令写入设计 01 §4.4.1；`src-tauri` 依赖审计已由 CI deny job 覆盖（W0-5 完成）。W0-6 仅剩 C09 的 T 全量 UI 验收（人工项），不是“已完成”。
 
 ### 6.1 状态更新记录（模板 + 当前示例）
 
@@ -190,6 +191,7 @@
 | 2026-10-29 | CI 六 job 全绿 + W0-5 关闭 | 完成 | run 40872864062（head 23c1f45，push，0 failure 注解）：lint / deny（advisories+licenses+bans+sources + SBOM artifact）/ test·ubuntu / test·windows / web / desktop / bench 全 success；Windows 侧 `apply_flow` 3 项（含真实 plan→apply E2010 场景，`stats.total=2`）通过 → Windows 文件身份可用、C09 计划非空 | W0-6 剩 Windows 长路径与 C09 的 T 全量 UI 验收 | 开发代理 |
 | 2026-10-29 | Wave 1-3 S01/S02/S03 | 切片 | kernel 新增 `preflight`（9 项单测：余量临界 ±1、临时峰值、200/259/260 分级、保护 canonical/字面、只读/占用/占位、UNC 超时降级、空输入逐项结论）；`generic_apply` 补目标路径保护复核（+2 项）；Journal 增可选 `planKind`（+2 项，旧日志兼容），undo 按 kind 退还配额；platform 新增 `preflight`（35 项中 +8：statvfs、写探测、UNC 2 秒超时、long-path、same-volume）；`src-tauri/src/tasks.rs` 快照持久化 + `interrupted` + `interrupted → resume/rollback/discard`（6 项测试，含已完成条目按 Journal 幂等跳过、回滚恢复、放弃保留、损坏快照备份）；壳层 `preflightPlan`/`recoverTask` 命令、`applyPlan` E2004 前置阻断与配置名单变更 E1002；web 预检报告与恢复提示条；`cargo test --workspace` 146 项、壳层 8 项、`./node_modules/.bin/tsc --noEmit`/`vite build`、fmt/clippy -D warnings/`cargo deny`（root + src-tauri）全绿；**CI run 40907291374（head 1420a3d）七 job 全 success** | TC S01/S02 的 10–12 条 UI 用例逐条执行、S03 实机崩溃演练、retryTask/事件合帧、UNC 超时线程残留（已知取舍）、C09 长路径 | 开发代理 |
 | 2026-10-30 | Wave 1-4a：`retryTask` + 进度合帧 + LicenseService 注入口 | 切片 | `src-tauri/src/tasks.rs` 新增 `retry`（仅对终态 partial-failed/failed 的 apply 任务；缺省重试全部失败条目、`entryIds` 子集校验 E1002、Journal 已 applied 幂等排除、编排级失败重跑全部条目、undo 任务拒绝；单测 3 项）与 `PROGRESS_COALESCE_WINDOW` 合帧（取方案 §9.1「进度刷新节流 100–200 ms」区间下限；同阶段合帧、阶段迁移即推并补发最新条目计数、`task://state`/`task://done` 不合帧；单测 1 项）；`with_license` 成为唯一构造器即方案 13.8 注入口，lib.rs 装配点显式注入 AlwaysAllow；lib.rs 注册 `retryTask` 命令；web 新增"重试失败项"入口（partial-failed/failed 终态）与 mock 失败→重试演示、undo 总数改按壳层 Journal 统计修正；设计 01 升 v1.5、设计 12 升 v0.6；`cargo test --workspace` 146 项、壳层 12 项、fmt/clippy -D warnings（root + src-tauri）、`pnpm build`、check_docs/check_schema、`cargo deny`（root + src-tauri）全绿（本地，待推送后 CI 复验） | C17a 操作/诊断日志（设计 10 §7 schema 待决）、商业授权实现、E2E 重试场景（需可复现失败注入）、TC S01/S02 UI 用例、S03 实机崩溃演练 | 开发代理 |
+| 2026-10-30 | W0-6 Windows 长路径收口 | 切片 | `platform::fs` 的 `fs_path`/`strip_extended_path` 提为 crate 收口点并新增 `canonicalize_display`（Windows canonicalize 恒带 `\\?\`，剥回显示形式）；`extended_path` Windows 分支加前缀前经 kernel `try_normalize` 归一分隔符与 `.`/`..` 段（`\\?\` 不吃 Win32 归一化；相对路径与 `C:` 盘符相对形式不加前缀）；`scan.rs` 枚举/哈希/文件身份、`preflight.rs` probe_root/probe_write/path_check/probe_unc、`protected.rs` prepare、CLI 与 src-tauri 的 PlanFile canonical 全部改走收口点；新增 Windows 单测 `extended_path_normalizes_before_prefixing_and_keeps_relative_paths` 与长路径回归 `scans_long_paths_beyond_the_win32_limit`（>260 字符真实深树，Windows CI 执行）；`cargo test --workspace` 146 项、clippy -D warnings、`cargo check --target x86_64-pc-windows-msvc`（临时 blake3 pure 绕过汇编后还原）零 error、check_docs 全绿（本地，待推送后 Windows CI 复验）；设计 04 升 v1.3 | T C09 全量 UI 验收（人工）、UNC/长路径 canonicalize 行为矩阵（Windows 实机，R01/R06）、retention cleanup 的直接 fs 调用（应用数据目录内，超长场景待定） | 开发代理 |
 
 ## 7. 关联
 
