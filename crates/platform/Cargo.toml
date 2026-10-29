@@ -15,3 +15,12 @@ batchdesk-kernel.workspace = true
 blake3 = "1.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Windows 文件身份（volume serial + file index）需经 GetFileInformationByHandle：
+# `std::os::windows::fs::MetadataExt` 的 volume_serial_number/file_index 仍受
+# `windows_by_handle` 不稳定特性门控（stable 编译报 E0658，见 ADR-0012）。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }

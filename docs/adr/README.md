@@ -62,3 +62,4 @@
 | [0009](./0009-授权状态清理与异常处置口径.md) | 授权状态清理与异常处置口径 | 已采纳 |
 | [0010](./0010-计划与日志序列化serde.md) | Plan/Apply/Journal 的 JSON 序列化选用 serde | 已采纳 |
 | [0011](./0011-桌面IPC与UI切片选型.md) | 桌面 IPC/UI 切片选用 Tauri v2 + React/Vite | 已采纳 |
+| [0012](./0012-Windows文件身份改用WinAPI.md) | Windows 文件身份改用 WinAPI（windows-sys） | 已采纳 |

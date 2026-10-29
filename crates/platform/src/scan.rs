@@ -95,7 +95,7 @@ pub fn scan_path(root: &Path, options: ScanOptions) -> std::io::Result<ScanOutco
             }
         };
         files.push(ScannedFile {
-            identity: identity_from(&metadata),
+            identity: identity_from(&path, &metadata),
             path,
             size: metadata.len(),
             mtime_nanos: modified_nanos(&metadata),
@@ -290,21 +290,37 @@ fn modified_nanos(metadata: &fs::Metadata) -> i128 {
 }
 
 #[cfg(unix)]
-fn identity_from(metadata: &fs::Metadata) -> Option<FileIdentity> {
+fn identity_from(_path: &Path, metadata: &fs::Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt;
     Some(FileIdentity::new(metadata.dev(), metadata.ino() as u128))
 }
 
-#[cfg(not(unix))]
-fn identity_from(_metadata: &fs::Metadata) -> Option<FileIdentity> {
-    // Windows：`MetadataExt::volume_serial_number`/`file_index` 仍受
-    // `windows_by_handle` 不稳定特性门控，stable 编译报 E0658（CI 2026-10-29
-    // run 40870120156 实证）。获取文件 ID 需经 WinAPI GetFileInformationByHandle
-    // 并新增依赖（须过 cargo-deny），属 W0-6 未完成项。
-    //
-    // 当前按设计 04 §7 / PDR-001 T8 的"身份不可用"回退：返回 None，
-    // kernel 将该组标 needs_manual_review 并排除自动清理（安全侧）。
-    // 其他非 unix／非 windows 平台同样无稳定身份，语义一致。
+#[cfg(windows)]
+fn identity_from(path: &Path, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    // `MetadataExt::volume_serial_number`/`file_index` 仍受 `windows_by_handle`
+    // 不稳定特性门控（stable 报 E0658），故走 WinAPI（ADR-0012）。设计 04 §7
+    // 要求的正是 volume serial + file index。
+    let file = fs::File::open(path).ok()?;
+    // SAFETY: `file` 在本调用期间持有有效句柄；`info` 是独占的出参结构，
+    // 不与任何别名共享；失败时按"身份不可用"回退（不 panic）。
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    let index = ((info.nFileIndexHigh as u128) << 32) | info.nFileIndexLow as u128;
+    Some(FileIdentity::new(info.dwVolumeSerialNumber as u64, index))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity_from(_path: &Path, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    // 其他平台没有稳定文件身份；kernel 将该组标 needs_manual_review，
+    // 不自动清理（设计 04 §7）。
     None
 }
 
@@ -468,13 +484,19 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_identity_falls_back_to_unknown_until_winapi_lands() {
+    fn windows_identity_uses_volume_and_file_index() {
         let dir = TempDir::new();
         let path = dir.0.join("identity.txt");
         fs::write(&path, b"content").unwrap();
         let metadata = fs::metadata(&path).unwrap();
-        // stable 无法取 volume serial/file index（`windows_by_handle` 未稳定）；
-        // 回退为"身份未知"，由 kernel 标 needs_manual_review（W0-6 待补）。
-        assert!(identity_from(&metadata).is_none());
+        // WinAPI GetFileInformationByHandle 可取得 volume serial + file index；
+        // 两路径指向同一文件时身份必须相同（硬链接判定依赖此点）。
+        let identity = identity_from(&path, &metadata);
+        assert!(identity.is_some());
+        let hard = dir.0.join("hard.txt");
+        if fs::hard_link(&path, &hard).is_ok() {
+            let metadata = fs::metadata(&hard).unwrap();
+            assert_eq!(identity_from(&hard, &metadata), identity);
+        }
     }
 }
