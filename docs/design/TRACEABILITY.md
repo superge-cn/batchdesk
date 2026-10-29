@@ -9,11 +9,11 @@
 
 | 契约 | 目标代码落点 | 当前实现 | 测试/语料锚点 | 主要缺口 |
 |---|---|---|---|---|
-| 01 内核接口/IPC | `crates/kernel` traits/DTO；`crates/platform`；`src-tauri/src/lib.rs`、`tasks.rs` | kernel + C09 plan/apply/undo；`ProgressSink`/`CancelToken` 已建；Tauri 任务队列与 `task://progress`/`task://state`/`task://done`，`applyPlan`/`undoPlan` 返回 taskId；`cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已注册 | kernel 42 + platform 13 + CLI 6 单测 + 2 集成 + shell 2；web build；WebView E2E | Clock/Rng 端口、OperationKind 完整枚举、`retryTask`、任务持久化、事件合帧；01 §4.4.1 已回写壳层命令 |
+| 01 内核接口/IPC | `crates/kernel` traits/DTO；`crates/platform`；`src-tauri/src/lib.rs`、`tasks.rs` | kernel + C09 plan/apply/undo；`ProgressSink`/`CancelToken` 已建；Tauri 任务队列与 `task://progress`/`task://state`/`task://done`，`applyPlan`/`undoPlan` 返回 taskId；`cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已注册 | kernel 46 + platform 15 + CLI 6 单测 + 3 集成 + shell 2；web build；WebView E2E | Clock/Rng 端口、OperationKind 完整枚举、`retryTask`、任务持久化、事件合帧；01 §4.4.1 已回写壳层命令 |
 | 02 Web 传输 | `web/`、WASM 导出面、云端（后置） | 均未建 | TW-A/B/C/D/F；TW-E mock 待建 | WASM 构建、Worker、OPFS 适配、生成绑定 |
 | 03 配置/模板/UiState | `crates/kernel` 类型；`src-tauri` 存储；`web` 设置区 | 无代码；`fixtures/migrations/v1` 样本 + `check_schema.py` | T v1.12 C37（8）＋B9（8）；TC v0.3；配置/模板/UiState 单测待建 | RecipeDocument v2/v3、getRecipe、UiState get/set/reset、迁移链、损坏兜底、导入导出 |
 | C09 重复文件查找（PDR-001） | `crates/kernel`、`crates/platform`、`crates/cli`、`src-tauri`、`web/src` | **CLI scan→plan→apply→undo+S02+保留期，以及桌面任务队列/IPC/UI 切片已建立**；apply→undo 与执行中取消回滚通过真实 WebView E2E；plan→apply 内容指纹复核（`expected`+E2010，设计 01 v1.3） | T v1.12 C09；C-6；`apply_flow.rs`（含 E2010 集成场景）；shell 队列测试；`scripts/e2e-tauri.mjs` | 长路径/Windows 文件 ID、i18n/虚拟滚动/shadcn、任务列表 UI |
-| 04 文件系统适配 | `crates/platform/src/fs.rs`；WASM 适配；`src-tauri` | Native std::fs 适配器已建（路径操作/隔离/stat/list/canonicalize/case）；scan 仍直接 std::fs；Windows 文件 ID、WASM 适配未建 | `apply_flow.rs`；CLI fs 单测 | scanDirectory 接入、完整占位探测、Windows 文件 ID、长路径矩阵、跨卷元数据保留 |
+| 04 文件系统适配 | `crates/platform/src/fs.rs`；WASM 适配；`src-tauri` | Native std::fs 适配器已建（路径操作/隔离/stat/list/canonicalize/case）；scan 仍直接 std::fs；Windows 文件身份按"不可用"回退（契约 §7 要求的 volume serial + file index 受 `windows_by_handle` 未稳定限制，需 W0-6 走 WinAPI）；WASM 适配未建 | `apply_flow.rs`；CLI fs 单测；platform Windows 交叉检查（`cargo check --target x86_64-pc-windows-msvc`） | scanDirectory 接入、完整占位探测、Windows 文件 ID（WinAPI）、长路径矩阵、跨卷元数据保留 |
 | 05 Web 强制力 | `web/`、WASM 导出面 | Web 仅有 C09 桌面 UI 切片；WASM/导出面未建 | TW-F3；WB-1…WB-4 | 编译期 feature gate、导出面断言、CI diff |
 | 06 错误码/文案 | kernel 错误类型、各端映射 | `KernelError` + Tauri `IpcError` 已建；文案资源未建 | `check_docs.py` 白名单；apply 单测 | 用户文案资源、其余码位覆盖 |
 | 07 云端服务端 | 服务端仓库（未建） | 未开始 | TW-E1…E13（mock 待建） | 身份/配额、会话/任务、限流、保留/清理 |
@@ -22,7 +22,7 @@
 | 10 日志/诊断 | `src-tauri/src/logging/`、kernel 记录 | Journal JSONL + CLI/桌面 undo 已建；操作/诊断日志未建 | `apply_flow.rs`；journal 单测；shell 队列测试 | 双轨落库、脱敏、轮转、支持包 |
 | 11 发布/签名/更新 | CI release、`src-tauri/src/update/` | CI 仅骨架；SBOM/bench 对比占位 | 发布清单（设计 11 §6） | 签名、更新清单、防降级、回滚 |
 | 12 前端/壳架构 | `web/`、`src-tauri/` | C09 React/Vite 事件驱动 UI + Tauri v2 任务队列/事件切片；`src-tauri` 独立 workspace；WebView E2E 脚本可运行 | `pnpm build`；`src-tauri` 队列测试；`scripts/e2e-tauri.mjs`；浏览器 mock 流 | `retryTask`/任务持久化、Playwright/Vitest、CSP/capabilities、i18n/虚拟滚动；src-tauri 依赖未纳入根 cargo-deny |
-| 13 CLI（P1） | `crates/cli` + `crates/platform` | C09 scan/plan/apply/undo + S02 + cleanup 切片（OQ-30 已追认为实验命令，设计 13 v0.2 §2.1）；通用命令面未建 | platform 13 + CLI 6 单测 + 2 集成；C-6 | 命令面、退出码矩阵、真实授权注入、进度/取消 |
+| 13 CLI（P1） | `crates/cli` + `crates/platform` | C09 scan/plan/apply/undo + S02 + cleanup 切片（OQ-30 已追认为实验命令，设计 13 v0.2 §2.1）；通用命令面未建 | platform 15 + CLI 6 单测 + 3 集成；C-6 | 命令面、退出码矩阵、真实授权注入、进度/取消 |
 | 14 AI 助手（F15 Phase 1/2/3） | `src-tauri/ai`、`web/src/features/ai` | 未开始 | `fixtures/ai/`、AI-01…AI-26 | FunctionCatalog、IntentGraph/PlanBundle、模型 Provider、工具 allowlist、同意/隐私、E6xxx、多计划冲突 |
 
 ## 2. 当前可走通性

@@ -295,19 +295,16 @@ fn identity_from(metadata: &fs::Metadata) -> Option<FileIdentity> {
     Some(FileIdentity::new(metadata.dev(), metadata.ino() as u128))
 }
 
-#[cfg(windows)]
-fn identity_from(metadata: &fs::Metadata) -> Option<FileIdentity> {
-    use std::os::windows::fs::MetadataExt;
-    Some(FileIdentity::new(
-        metadata.volume_serial_number()? as u64,
-        metadata.file_index()? as u128,
-    ))
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn identity_from(_metadata: &fs::Metadata) -> Option<FileIdentity> {
-    // Other hosts have no stable file identity; the kernel marks the group
-    // needs_manual_review and must not auto-clean it.
+    // Windows：`MetadataExt::volume_serial_number`/`file_index` 仍受
+    // `windows_by_handle` 不稳定特性门控，stable 编译报 E0658（CI 2026-10-29
+    // run 40870120156 实证）。获取文件 ID 需经 WinAPI GetFileInformationByHandle
+    // 并新增依赖（须过 cargo-deny），属 W0-6 未完成项。
+    //
+    // 当前按设计 04 §7 / PDR-001 T8 的"身份不可用"回退：返回 None，
+    // kernel 将该组标 needs_manual_review 并排除自动清理（安全侧）。
+    // 其他非 unix／非 windows 平台同样无稳定身份，语义一致。
     None
 }
 
@@ -471,11 +468,13 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_identity_uses_volume_and_file_index() {
+    fn windows_identity_falls_back_to_unknown_until_winapi_lands() {
         let dir = TempDir::new();
         let path = dir.0.join("identity.txt");
         fs::write(&path, b"content").unwrap();
         let metadata = fs::metadata(&path).unwrap();
-        assert!(identity_from(&metadata).is_some());
+        // stable 无法取 volume serial/file index（`windows_by_handle` 未稳定）；
+        // 回退为"身份未知"，由 kernel 标 needs_manual_review（W0-6 待补）。
+        assert!(identity_from(&metadata).is_none());
     }
 }

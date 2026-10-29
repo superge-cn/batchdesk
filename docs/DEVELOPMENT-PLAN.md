@@ -155,7 +155,7 @@
 | W0-3 Tauri WebView E2E | **完成** | WebDriver 脚本 `scripts/e2e-tauri.mjs` | plan→apply→undo/cleanup 演练 + 取消回滚 | W0-1、Tauri 系统依赖 |
 | W0-4 合约化 cleanup/storage 命令 | **完成** | 设计 01 §4.4.1 壳层追加行 | 文档/命令/DTO 一致 | 设计 01 评审 |
 | W0-5 src-tauri 依赖审计 | 部分 | cargo-deny/SBOM 覆盖独立 lock（CI deny job 步骤已起草） | CI 绿灯 | OQ-13、CI |
-| W0-6 C09 收尾 | 部分 | 内容再校验已落地（expected+E2010+CLI 集成锚点）；Windows ID/长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
+| W0-6 C09 收尾 | 部分 | 内容再校验已落地（expected+E2010+CLI 集成锚点）；Windows 文件身份按“不可用”回退（stable 的 `windows_by_handle` 未稳定，需 WinAPI）；长路径未开始 | T C09 全量用例 + C-6/apply_flow | W0-1、平台能力 |
 
 ## 6. 完成判定与维护
 
@@ -179,6 +179,7 @@
 | 2026-10-29 | C09 CLI/platform/IPC/UI 纵向切片 | 切片 | `cargo test --workspace` 63 项；C-6；`pnpm build`；`src-tauri` cargo check；WebView E2E | W0-5 依赖审计、W0-6 Windows/长路径/plan→apply 再校验、T 全量 UI 验收 | 开发代理 |
 | 2026-10-29 | CI 首次运行（run 40865148224） | 部分 | lint/bench/desktop/web/test·ubuntu 5 job 绿；deny（src-tauri advisories 命中 RUSTSEC-2024-0370）与 test·windows（check_docs）失败；已修复：`deny.toml` 带理由忽略项、`.gitattributes` LF 统一、`PYTHONUTF8=1`；本地离线复核实证 | 推送后复验全绿 | 开发代理 |
 | 2026-10-29 | W0-6 plan→apply 内容再校验 | 切片 | kernel `expected` 指纹 + E2010 复核（单测 3 项）+ platform `content_hash`（BLAKE3）；`apply_flow.rs` 新增真实 CLI 链路集成场景，`cargo test -p batchdesk-cli --test apply_flow` 3 passed | Windows 文件 ID、长路径、T 全量 UI 验收 | 开发代理 |
+| 2026-10-29 | Windows 编译缺陷（E0658）修复 | 切片 | CI run 40870120156 注解实证 `use of unstable library feature windows_by_handle`；`scan.rs` 的 Windows `identity_from` 改为“身份不可用”回退（None → kernel 标 needs_manual_review），Windows 测试同步断言回退；本地 `cargo check --target x86_64-pc-windows-msvc`（platform，临时 pure 绕过 blake3 汇编后还原）零 error；Linux `cargo test --workspace` 70 项仍全绿 | Windows 文件 ID 需 WinAPI GetFileInformationByHandle 并新增依赖（过 cargo-deny）；长路径矩阵 | 开发代理 |
 
 ## 7. 关联
 
