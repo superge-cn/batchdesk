@@ -9,11 +9,13 @@ import type {
   PlanDocument,
   PlanEntry,
   PlanOperationInput,
+  PreflightReport,
   ProgressEvent,
   ProgressPhase,
   StorageInfo,
   TaskDetail,
   TaskHandle,
+  TaskPage,
   TaskState,
   TaskSummary
 } from "./types";
@@ -294,6 +296,35 @@ export async function mockUndo(planId: string): Promise<TaskHandle> {
     .map((entry) => ({ entryId: entry.entryId, status: "ok" }));
   const task = createTask("undo", entries);
   return { taskId: task.taskId };
+}
+
+export function mockPreflightPlan(): PreflightReport {
+  return {
+    items: [
+      {
+        kind: "disk-space",
+        level: "pass",
+        message: "mock preflight: sufficient disk space"
+      }
+    ],
+    level: "pass",
+    pass: 1,
+    warn: 0,
+    block: 0,
+    taskBlocked: false
+  };
+}
+
+export function mockListTasks(): TaskPage {
+  const items = Array.from(tasks.values()).map(summary);
+  return { items, total: items.length };
+}
+
+export function mockRecoverTask(taskId: string): TaskHandle {
+  const task = tasks.get(taskId);
+  if (!task) fail("E1001", "任务不存在");
+  finish(task, "cancelled", "mock recovery: discarded");
+  return { taskId };
 }
 
 export function mockCancel(taskId: string) {

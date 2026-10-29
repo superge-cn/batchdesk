@@ -24,10 +24,33 @@ export type TaskState =
   | "running"
   | "paused"
   | "cancelling"
+  | "interrupted"
   | "completed"
   | "partial-failed"
   | "failed"
   | "cancelled";
+
+export type PreflightLevel = "pass" | "warn" | "block";
+
+export interface PreflightItem {
+  kind: string;
+  level: PreflightLevel;
+  message: string;
+  path?: string;
+  code?: string;
+  hint?: string;
+}
+
+export interface PreflightReport {
+  items: PreflightItem[];
+  level: PreflightLevel;
+  pass: number;
+  warn: number;
+  block: number;
+  taskBlocked: boolean;
+}
+
+export type RecoveryAction = "resume" | "rollback" | "discard";
 
 export interface IpcError {
   code: string;

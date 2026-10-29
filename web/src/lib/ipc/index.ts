@@ -7,22 +7,28 @@ import {
   mockGetStorageInfo,
   mockGetTask,
   mockListen,
+  mockListTasks,
   mockMeta,
   mockPause,
   mockPlan,
+  mockPreflightPlan,
+  mockRecoverTask,
   mockResume,
   mockUndo
 } from "./mock";
 import type {
   CleanupOutcome,
   IpcMeta,
+  PreflightReport,
   ProgressEvent,
   PlanDocument,
   PlanOperationInput,
+  RecoveryAction,
   StorageInfo,
   TaskDetail,
   TaskDoneEvent,
   TaskHandle,
+  TaskPage,
   TaskStateEvent
 } from "./types";
 
@@ -62,6 +68,27 @@ export async function applyPlan(
 
 export async function undoPlan(planId: string): Promise<TaskHandle> {
   return isTauri() ? invoke<TaskHandle>("undoPlan", { planId }) : mockUndo(planId);
+}
+
+export async function preflightPlan(planId: string): Promise<PreflightReport> {
+  return isTauri()
+    ? invoke<PreflightReport>("preflightPlan", { planId })
+    : mockPreflightPlan();
+}
+
+export async function listTasks(offset = 0, limit = 50): Promise<TaskPage> {
+  return isTauri()
+    ? invoke<TaskPage>("listTasks", { offset, limit })
+    : mockListTasks();
+}
+
+export async function recoverTask(
+  taskId: string,
+  action: RecoveryAction
+): Promise<TaskHandle> {
+  return isTauri()
+    ? invoke<TaskHandle>("recoverTask", { taskId, action })
+    : mockRecoverTask(taskId);
 }
 
 export async function cancelTask(taskId: string): Promise<void> {

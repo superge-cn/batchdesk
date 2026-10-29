@@ -27,11 +27,14 @@ import {
   getStorageInfo,
   getTask,
   isTauri,
+  listTasks,
   listenTaskDone,
   listenTaskProgress,
   listenTaskState,
   pauseTask,
   planOperation,
+  preflightPlan,
+  recoverTask,
   resumeTask,
   toIpcError,
   undoPlan
@@ -43,9 +46,12 @@ import type {
   IpcMeta,
   KeepPolicy,
   PlanDocument,
+  PreflightReport,
   ProgressPhase,
+  RecoveryAction,
   StorageInfo,
-  TaskState
+  TaskState,
+  TaskSummary
 } from "./lib/ipc/types";
 
 type Busy = "plan" | "cleanup" | null;
@@ -103,6 +109,7 @@ function stateBadge(state: TaskState) {
   if (state === "failed") return <span className="badge badge-danger">失败</span>;
   if (state === "paused") return <span className="badge badge-warn">已暂停</span>;
   if (state === "cancelling") return <span className="badge badge-warn">取消中</span>;
+  if (state === "interrupted") return <span className="badge badge-warn">已中断</span>;
   if (state === "running") return <span className="badge">执行中</span>;
   return <span className="badge">排队中</span>;
 }
@@ -195,6 +202,8 @@ function App() {
   const [purge, setPurge] = useState(false);
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [meta, setMeta] = useState<IpcMeta | null>(null);
+  const [preflight, setPreflight] = useState<PreflightReport | null>(null);
+  const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -203,6 +212,14 @@ function App() {
   useEffect(() => {
     getStorageInfo().then(setStorage).catch((value) => setError(toIpcError(value)));
     getIpcMeta().then(setMeta).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    listTasks()
+      .then((page) =>
+        setRecoverableTasks(page.items.filter((item) => item.state === "interrupted"))
+      )
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -325,6 +342,7 @@ function App() {
     setBusy("plan");
     setError(null);
     setNotice(null);
+    setPreflight(null);
     setTaskViews({});
     setApplyTaskId(null);
     setUndoTaskId(null);
@@ -342,6 +360,12 @@ function App() {
       });
       setPlan(next);
       setNotice(`计划已生成：${next.entries.length} 条待清理，${next.stats.blocked} 条受阻。请核对预览后执行。`);
+      try {
+        setPreflight(await preflightPlan(next.planId));
+      } catch (value) {
+        setPreflight(null);
+        setError(toIpcError(value));
+      }
     } catch (value) {
       setPlan(null);
       setError(toIpcError(value));
@@ -355,6 +379,20 @@ function App() {
     setError(null);
     setNotice(null);
     try {
+      const report = await preflightPlan(plan.planId);
+      setPreflight(report);
+      if (report.taskBlocked) {
+        const blocking = report.items.find(
+          (item) => item.level === "block" && item.kind === "disk-space"
+        );
+        setError({
+          code: blocking?.code ?? "E2004",
+          message: "预检阻断：磁盘空间不足，任务未执行（零副作用）",
+          detail: blocking?.message,
+          retryable: true
+        });
+        return;
+      }
       const handle = await applyPlan(plan.planId, {
         onConflict: "skip",
         overwriteConfirmed: false
@@ -428,6 +466,42 @@ function App() {
   async function onResume(taskId: string) {
     try {
       await resumeTask(taskId);
+    } catch (value) {
+      setError(toIpcError(value));
+    }
+  }
+
+  async function onRecover(taskId: string, action: RecoveryAction) {
+    setError(null);
+    setNotice(null);
+    try {
+      const handle = await recoverTask(taskId, action);
+      setRecoverableTasks((previous) =>
+        previous.filter((task) => task.taskId !== taskId)
+      );
+      if (action === "resume") {
+        setApplyTaskId(handle.taskId);
+        setTaskViews((previous) =>
+          previous[handle.taskId]
+            ? previous
+            : {
+                ...previous,
+                [handle.taskId]: {
+                  taskId: handle.taskId,
+                  state: "queued",
+                  phase: "queued",
+                  done: 0,
+                  total: 0
+                }
+              }
+        );
+        setNotice("未完成任务已续跑；已完成条目会按 Journal 幂等跳过。");
+      } else if (action === "rollback") {
+        setUndoTaskId(handle.taskId);
+        setNotice("已按 Journal 回滚未完成任务，回滚任务已加入队列。");
+      } else {
+        setNotice("已放弃恢复；已执行条目仍可通过 Journal 撤销。");
+      }
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -547,6 +621,64 @@ function App() {
             {notice && (
               <div className="banner banner-info" role="status">
                 <div>{notice}</div>
+              </div>
+            )}
+            {recoverableTasks.length > 0 && (
+              <div className="banner banner-info" role="status">
+                <div>
+                  <strong>检测到未完成任务</strong>
+                  <div className="muted">
+                    应用上次异常退出。请选择续跑、回滚或放弃；系统不会自动执行。
+                  </div>
+                  {recoverableTasks.map((task) => (
+                    <div className="button-row" key={task.taskId}>
+                      <span className="task-id" title={task.taskId}>{task.taskId}</span>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() => onRecover(task.taskId, "resume")}
+                      >
+                        <Play size={14} /> 续跑
+                      </button>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() => onRecover(task.taskId, "rollback")}
+                      >
+                        <Undo2 size={14} /> 回滚
+                      </button>
+                      <button
+                        className="button button-ghost"
+                        type="button"
+                        onClick={() => onRecover(task.taskId, "discard")}
+                      >
+                        放弃
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {preflight && (
+              <div
+                className={`banner ${preflight.taskBlocked ? "banner-danger" : "banner-info"}`}
+                role="status"
+              >
+                <div>
+                  预检 · 通过 {preflight.pass} · 警告 {preflight.warn} · 阻断 {preflight.block}
+                  {preflight.taskBlocked && (
+                    <div className="muted">磁盘空间不足：执行已阻断，任务零副作用。</div>
+                  )}
+                  {preflight.items
+                    .filter((item) => item.level !== "pass")
+                    .slice(0, 5)
+                    .map((item, index) => (
+                      <div className="muted" key={`${item.kind}-${index}`}>
+                        {item.level === "block" ? "阻断" : "警告"} · {item.kind}
+                        {item.code ? ` (${item.code})` : ""} · {item.message}
+                      </div>
+                    ))}
+                </div>
               </div>
             )}
 
