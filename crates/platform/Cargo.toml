@@ -1,0 +1,17 @@
+[package]
+name = "batchdesk-platform"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "batchdesk 共享壳层适配（扫描/原生 FsAdapter/Journal/保留期），供 CLI 与桌面壳复用"
+
+[lib]
+name = "platform"
+path = "src/lib.rs"
+
+[dependencies]
+batchdesk-kernel.workspace = true
+blake3 = "1.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
