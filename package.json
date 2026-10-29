@@ -1,0 +1,15 @@
+{
+  "name": "batchdesk",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@12.16.1",
+  "scripts": {
+    "dev": "pnpm --dir web dev",
+    "build": "pnpm --dir web build",
+    "e2e:tauri": "node scripts/e2e-tauri.mjs",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
