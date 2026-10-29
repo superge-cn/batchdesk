@@ -1,0 +1,1025 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>batchdesk · 浅色液态玻璃样式示例</title>
+<style>
+  :root {
+    --ink-1: #F2F7FF;
+    --ink-2: #C6D6EE;
+    --ink-3: #93A9C9;
+    --ink-4: #6C84A8;
+    --brand-300: #9CC8FF;
+    --brand-400: #6AA6FF;
+    --brand-500: #2F6BFF;
+    --brand-600: #1C4FE0;
+    --cyan: #22C7FF;
+    --aqua: #7BE0FF;
+    --safe: #3FBF7F;
+    --warn: #E3A008;
+    --danger: #F2726B;
+    --line: rgba(158, 197, 255, .14);
+    --line-strong: rgba(178, 211, 255, .26);
+    --fill: rgba(10, 24, 52, .44);
+    --radius: 16px;
+    --font: "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1600px; height: 1000px; overflow: hidden;
+    background: #040A18;
+    color: var(--ink-1);
+    font-family: var(--font);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  .i {
+    width: 16px; height: 16px; display: block; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .i.sm { width: 14px; height: 14px; }
+  .i.xs { width: 12px; height: 12px; }
+
+  /* ── 背景：截图取样色相（亮部 #78BCFC / 高光 #0EA9FC / 深部 #2359FC）── */
+  .stage {
+    position: relative; width: 1600px; height: 1000px; overflow: hidden;
+    background:
+      radial-gradient(820px 660px at 6% 90%, rgba(35, 89, 252, .92), transparent 64%),
+      radial-gradient(640px 480px at 46% 12%, rgba(14, 169, 252, .42), transparent 66%),
+      radial-gradient(760px 620px at 96% 58%, rgba(47, 107, 255, .52), transparent 68%),
+      radial-gradient(520px 420px at 78% 108%, rgba(120, 188, 252, .24), transparent 70%),
+      linear-gradient(152deg, #07142E 0%, #050D21 46%, #030814 100%);
+  }
+  .blob { position: absolute; border-radius: 50%; filter: blur(80px); pointer-events: none; }
+  .blob-a { width: 720px; height: 560px; left: -220px; bottom: -180px; background: radial-gradient(closest-side, rgba(47, 107, 255, .95), rgba(35, 89, 252, .25) 62%, transparent 76%); }
+  .blob-b { width: 620px; height: 420px; left: 440px; top: -190px; background: radial-gradient(closest-side, rgba(34, 199, 255, .42), transparent 72%); }
+  .blob-c { width: 660px; height: 520px; right: -190px; top: 300px; background: radial-gradient(closest-side, rgba(28, 79, 224, .55), transparent 72%); }
+  .liquid { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .grain { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .032; pointer-events: none; mix-blend-mode: overlay; }
+
+  /* ── 液态玻璃基元 ── */
+  .glass {
+    position: relative;
+    background:
+      linear-gradient(155deg, rgba(52, 82, 138, .46), rgba(11, 25, 52, .58) 56%, rgba(7, 17, 38, .64)),
+      radial-gradient(120% 90% at 12% 0%, rgba(140, 192, 255, .15), transparent 58%);
+    -webkit-backdrop-filter: blur(34px) saturate(140%);
+    backdrop-filter: blur(34px) saturate(140%);
+    border: 1px solid rgba(168, 205, 255, .20);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, .20),
+      inset 0 -1px 0 rgba(0, 6, 20, .45),
+      0 30px 70px rgba(0, 5, 18, .48);
+  }
+  .glass::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(130% 58% at 16% -10%, rgba(255, 255, 255, .20), transparent 56%);
+    opacity: .72; mix-blend-mode: screen;
+  }
+  .edge::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+    background: linear-gradient(142deg, rgba(255,255,255,.58), rgba(255,255,255,.05) 36%, rgba(118,190,255,.38) 68%, rgba(255,255,255,.14));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+  .card {
+    position: relative;
+    background: linear-gradient(160deg, rgba(36, 62, 110, .22), rgba(8, 20, 44, .28));
+    -webkit-backdrop-filter: blur(24px) saturate(130%);
+    backdrop-filter: blur(24px) saturate(130%);
+    border: 1px solid rgba(170, 207, 255, .16);
+    border-radius: var(--radius);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 10px 28px rgba(0, 6, 22, .25);
+  }
+
+  /* ── 应用外壳 ── */
+  .shell {
+    position: absolute; inset: 24px; border-radius: 26px; overflow: hidden;
+    display: flex; flex-direction: column;
+    background:
+      radial-gradient(85% 65% at 10% -8%, rgba(110, 170, 255, .16), transparent 56%),
+      radial-gradient(60% 55% at 104% 62%, rgba(34, 199, 255, .12), transparent 62%),
+      linear-gradient(155deg, rgba(24, 48, 94, .38), rgba(6, 16, 38, .42) 58%, rgba(4, 10, 26, .50));
+    -webkit-backdrop-filter: blur(40px) saturate(150%);
+    backdrop-filter: blur(40px) saturate(150%);
+  }
+  .ambient { position: absolute; border-radius: 50%; filter: blur(72px); pointer-events: none; z-index: 0; }
+  .amb-blue { width: 660px; height: 580px; left: -170px; bottom: -210px; background: radial-gradient(closest-side, rgba(47, 107, 255, .55), transparent 72%); }
+  .amb-cyan { width: 600px; height: 520px; right: -60px; top: 80px; background: radial-gradient(closest-side, rgba(34, 199, 255, .34), transparent 72%); }
+  .inside-liquid { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; opacity: .72; }
+  .topbar, .workbench { position: relative; z-index: 2; }
+  .topbar {
+    height: 66px; flex: none; display: flex; align-items: center; gap: 14px;
+    padding: 0 20px; border-bottom: 1px solid rgba(158, 197, 255, .12);
+    background: linear-gradient(180deg, rgba(24, 44, 82, .28), rgba(5, 13, 30, .12));
+  }
+  .brand { display: flex; align-items: center; gap: 10px; flex: none; }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 11px; position: relative; display: grid; place-items: center;
+    background:
+      radial-gradient(120% 120% at 22% 12%, rgba(255,255,255,.55), transparent 38%),
+      linear-gradient(145deg, #78BCFC 0%, #2F6BFF 52%, #1C4FE0 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 -2px 6px rgba(4, 16, 48, .45), 0 8px 20px rgba(35, 89, 252, .38);
+    color: #F4FAFF;
+  }
+  .brand-name { display: flex; flex-direction: column; gap: 2px; }
+  .brand-name b { font-size: 16px; font-weight: 700; letter-spacing: .3px; color: var(--ink-1); }
+  .brand-name span { font-size: 11px; color: var(--ink-4); letter-spacing: .06em; }
+  .style-tag {
+    margin-left: 2px; flex: none; font-size: 10.5px; letter-spacing: .12em; color: var(--brand-300);
+    padding: 4px 8px; border-radius: 999px; border: 1px solid rgba(140, 190, 255, .26);
+    background: rgba(47, 107, 255, .12); white-space: nowrap;
+  }
+  .top-divider { width: 1px; height: 24px; background: var(--line); flex: none; }
+  .workspace {
+    display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 9px;
+    border-radius: 10px; border: 1px solid transparent; color: var(--ink-2); flex: none;
+    background: rgba(10, 24, 52, .30);
+  }
+  .workspace:hover { border-color: var(--line-strong); }
+  .workspace .path { font-size: 12.5px; color: var(--ink-3); }
+  .workspace .path b { color: var(--ink-1); font-weight: 600; }
+  .workspace .i.xs { color: var(--ink-4); }
+  .search {
+    margin-left: auto; width: 300px; height: 34px; flex: none;
+    display: flex; align-items: center; gap: 8px; padding: 0 10px;
+    border-radius: 10px; border: 1px solid rgba(158, 197, 255, .13);
+    background: rgba(4, 12, 28, .42); color: var(--ink-4);
+  }
+  .search span { font-size: 12.5px; }
+  .search kbd {
+    margin-left: auto; font-family: var(--font); font-size: 10.5px; color: var(--ink-4);
+    padding: 2px 5px; border-radius: 5px; border: 1px solid rgba(158,197,255,.16);
+    background: rgba(255,255,255,.03);
+  }
+  .icon-btn {
+    width: 32px; height: 32px; flex: none; display: grid; place-items: center;
+    border-radius: 9px; border: 1px solid transparent; color: var(--ink-3); position: relative;
+  }
+  .icon-btn:hover { background: rgba(255,255,255,.05); border-color: var(--line); }
+  .dot { position: absolute; top: 7px; right: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none;
+    font-size: 11px; font-weight: 700; color: #F2F8FF;
+    background: linear-gradient(145deg, #5C9BFF, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 0 0 1px rgba(178, 211, 255, .3);
+  }
+  .user { display: flex; align-items: center; gap: 8px; flex: none; }
+  .user .who { display: flex; flex-direction: column; gap: 1px; }
+  .user .who b { font-size: 12.5px; font-weight: 600; color: var(--ink-1); }
+  .user .who span { font-size: 11px; color: var(--ink-4); }
+
+  /* ── 工作区 ── */
+  .workbench { display: flex; flex: 1; min-height: 0; }
+  .sidebar {
+    width: 230px; flex: none; padding: 14px 12px 14px; display: flex; flex-direction: column;
+    border-right: 1px solid rgba(158, 197, 255, .11);
+    background: linear-gradient(180deg, rgba(10, 24, 52, .18), rgba(4, 12, 28, .10));
+  }
+  .nav-label { font-size: 11px; letter-spacing: .14em; color: var(--ink-4); padding: 0 10px; margin: 6px 0 7px; }
+  .nav-label + .nav-label { margin-top: 0; }
+  .nav { display: flex; flex-direction: column; gap: 3px; }
+  .nav-item {
+    height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 10px;
+    border-radius: 10px; font-size: 13px; color: var(--ink-3); border: 1px solid transparent; position: relative;
+  }
+  .nav-item .i { color: var(--ink-4); }
+  .nav-item .count {
+    margin-left: auto; font-size: 11px; color: var(--ink-4);
+    padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.05);
+  }
+  .nav-item.active {
+    color: var(--ink-1); font-weight: 600; border-color: rgba(140, 190, 255, .26);
+    background: linear-gradient(90deg, rgba(76, 137, 255, .30), rgba(76, 137, 255, .08));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 6px 18px rgba(35, 89, 252, .16);
+  }
+  .nav-item.active .i { color: var(--brand-300); }
+  .nav-item.active::before {
+    content: ""; position: absolute; left: -13px; top: 9px; width: 3px; height: 18px; border-radius: 0 3px 3px 0;
+    background: linear-gradient(180deg, var(--aqua), var(--brand-500)); box-shadow: 0 0 10px rgba(34, 199, 255, .55);
+  }
+  .side-spacer { flex: 1; }
+  .storage { padding: 12px; border-radius: 12px; margin: 10px 2px 8px; }
+  .storage-head { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-3); }
+  .storage-head .i { color: var(--ink-4); }
+  .storage-head b { margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
+  .bar { height: 4px; border-radius: 999px; background: rgba(255,255,255,.08); margin: 9px 0 7px; overflow: hidden; }
+  .bar i { display: block; width: 38.5%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand-500), var(--cyan)); box-shadow: 0 0 8px rgba(34,199,255,.45); }
+  .storage-foot { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-4); }
+  .side-version { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-4); padding: 0 10px; }
+  .side-version .ok { width: 5px; height: 5px; border-radius: 50%; background: var(--safe); box-shadow: 0 0 6px rgba(63,191,127,.7); }
+
+  /* ── 主区 ── */
+  .main { flex: 1; min-width: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 13px; overflow: hidden; }
+  .crumbs { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-4); }
+  .crumbs b { font-weight: 500; color: var(--ink-3); }
+  .page-head { display: flex; align-items: flex-start; gap: 12px; }
+  .page-title h1 { margin: 5px 0 4px; font-size: 20px; line-height: 1.25; font-weight: 700; letter-spacing: .2px; color: var(--ink-1); }
+  .page-title p { margin: 0; font-size: 12px; color: var(--ink-4); }
+  .page-title p b { color: var(--ink-3); font-weight: 500; }
+  .page-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+    border-radius: 999px; font-size: 12px; color: #F3C568;
+    border: 1px solid rgba(227, 160, 8, .34); background: rgba(227, 160, 8, .12);
+  }
+  .status-pill .dotw { width: 5px; height: 5px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 7px rgba(227,160,8,.7); }
+  .btn {
+    height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 0 13px; border-radius: 9px; font-size: 13px; font-family: var(--font); font-weight: 500;
+    color: var(--ink-2); border: 1px solid var(--line-strong);
+    background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.02));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14); cursor: default;
+  }
+  .btn.primary {
+    color: #F6FAFF; border-color: rgba(150, 200, 255, .55);
+    background:
+      radial-gradient(120% 130% at 20% 0%, rgba(255,255,255,.32), transparent 42%),
+      linear-gradient(135deg, #6AA6FF 0%, #2F6BFF 48%, #1C4FE0 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 8px 24px rgba(35, 89, 252, .42), 0 0 0 1px rgba(47,107,255,.15);
+    font-weight: 600;
+  }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--ink-3); padding: 0 8px; }
+  .btn.lg { height: 38px; padding: 0 18px; font-size: 14px; }
+
+  /* ── 统计卡 ── */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; }
+  .stat { padding: 13px 15px; border-radius: 14px; display: flex; align-items: flex-start; gap: 11px; }
+  .stat-ico {
+    width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex: none;
+    border: 1px solid rgba(255,255,255,.10); box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  .stat-ico.blue { color: var(--brand-300); background: linear-gradient(150deg, rgba(88,148,255,.28), rgba(30,79,216,.12)); }
+  .stat-ico.cyan { color: var(--aqua); background: linear-gradient(150deg, rgba(34,199,255,.24), rgba(14,120,190,.10)); }
+  .stat-ico.green { color: #6FE3AD; background: linear-gradient(150deg, rgba(63,191,127,.24), rgba(20,90,60,.10)); }
+  .stat-ico.amber { color: #F3C568; background: linear-gradient(150deg, rgba(227,160,8,.22), rgba(120,80,0,.10)); }
+  .stat-body { min-width: 0; }
+  .stat-label { font-size: 12px; color: var(--ink-4); letter-spacing: .03em; }
+  .stat-value { margin-top: 3px; font-size: 17px; font-weight: 700; letter-spacing: .2px; color: var(--ink-1); line-height: 1.15; }
+  .stat-value small { font-size: 12px; font-weight: 500; color: var(--ink-4); margin-left: 3px; }
+  .stat-foot { margin-top: 3px; font-size: 11.5px; color: var(--ink-4); white-space: nowrap; }
+  .stat-foot em { font-style: normal; color: var(--ink-3); }
+  .stat-foot .up { color: #7BE0B0; }
+
+  /* ── 计划表 ── */
+  .plan { flex: 1; min-height: 0; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; }
+  .plan-toolbar {
+    height: 54px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabs { display: flex; align-items: center; gap: 2px; }
+  .tab {
+    height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 8px;
+    font-size: 12px; color: var(--ink-3); border: 1px solid transparent;
+  }
+  .tab b { font-weight: 600; color: var(--ink-4); font-size: 11px; }
+  .tab.active { color: var(--ink-1); background: rgba(255,255,255,.07); border-color: rgba(178,211,255,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.14); }
+  .tab.active b { color: var(--brand-300); }
+  .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .selection { font-size: 11.5px; color: var(--ink-4); }
+  .selection b { color: var(--ink-2); font-weight: 600; }
+  .tool-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
+  .plan-head, .row {
+    display: grid; grid-template-columns: 26px minmax(0, 1.5fr) 22px minmax(0, 1.75fr) 78px 88px 20px;
+    align-items: center; gap: 8px; padding: 0 14px;
+  }
+  .plan-head {
+    height: 34px; flex: none; font-size: 11.5px; letter-spacing: .06em; color: var(--ink-4);
+    border-bottom: 1px solid rgba(158,197,255,.09); background: rgba(4, 12, 28, .18);
+  }
+  .rows { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .row { height: 58px; border-bottom: 1px solid rgba(158,197,255,.075); position: relative; }
+  .row:last-child { border-bottom: 0; }
+  .row:hover { background: rgba(120, 170, 255, .045); }
+  .row.selected { background: linear-gradient(90deg, rgba(76, 137, 255, .07), rgba(76, 137, 255, 0)); }
+  .row.selected::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; border-radius: 0 2px 2px 0; background: linear-gradient(180deg, var(--cyan), var(--brand-500)); opacity: .8; }
+  .check {
+    width: 16px; height: 16px; border-radius: 5px; border: 1px solid rgba(178,211,255,.32);
+    background: rgba(4,12,28,.35); display: grid; place-items: center; color: #F6FAFF;
+  }
+  .check.on {
+    border-color: rgba(150,200,255,.65);
+    background: linear-gradient(145deg, #6AA6FF, #2F6BFF);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 0 10px rgba(47,107,255,.35);
+  }
+  .file { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .ftype {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none;
+    border: 1px solid rgba(255,255,255,.08); box-shadow: inset 0 1px 0 rgba(255,255,255,.10);
+  }
+  .ftype.img { color: #8FC2FF; background: linear-gradient(150deg, rgba(88,148,255,.26), rgba(30,79,216,.08)); }
+  .ftype.dup { color: #F3C568; background: linear-gradient(150deg, rgba(227,160,8,.20), rgba(120,80,0,.07)); }
+  .ftype.vid { color: #C2A6FF; background: linear-gradient(150deg, rgba(150,110,255,.24), rgba(80,50,160,.08)); }
+  .ftype.doc { color: #F79A95; background: linear-gradient(150deg, rgba(242,114,107,.20), rgba(140,40,35,.07)); }
+  .ftype.arc { color: var(--ink-3); background: rgba(255,255,255,.05); }
+  .fname { min-width: 0; }
+  .fname b { display: block; font-size: 13px; font-weight: 500; color: var(--ink-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fname span { display: block; margin-top: 2px; font-size: 11.5px; color: var(--ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .arrow { color: var(--ink-4); display: grid; place-items: center; }
+  .target { min-width: 0; }
+  .target b { display: block; font-size: 12.5px; font-weight: 500; color: var(--brand-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .target span { display: block; margin-top: 2px; font-size: 11.5px; color: var(--ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .target.skip b { color: var(--ink-4); font-weight: 400; }
+  .size { font-size: 11.5px; color: var(--ink-3); text-align: right; }
+  .tag {
+    justify-self: start; font-size: 11.5px; padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .tag.safe { color: #7BE0B0; border-color: rgba(63,191,127,.30); background: rgba(63,191,127,.10); }
+  .tag.warn { color: #F3C568; border-color: rgba(227,160,8,.30); background: rgba(227,160,8,.10); }
+  .tag.muted { color: var(--ink-4); border-color: rgba(158,197,255,.16); background: rgba(255,255,255,.03); }
+  .tag.dup { color: #F3C568; border-color: rgba(227,160,8,.30); background: rgba(227,160,8,.10); }
+  .row-more { color: var(--ink-4); display: grid; place-items: center; }
+  .plan-foot {
+    height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+    border-top: 1px solid rgba(158,197,255,.09); font-size: 11px; color: var(--ink-4);
+    background: rgba(4, 12, 28, .16);
+  }
+  .plan-foot .spacer { flex: 1; }
+  .virtual { display: inline-flex; align-items: center; gap: 5px; }
+  .virtual i { width: 4px; height: 4px; border-radius: 50%; background: var(--safe); box-shadow: 0 0 6px rgba(63,191,127,.6); }
+
+  /* ── 底部操作条 ── */
+  .actionbar {
+    height: 66px; flex: none; border-radius: 14px; display: flex; align-items: center; gap: 12px; padding: 0 15px;
+  }
+  .apply-note { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .shield {
+    width: 31px; height: 31px; border-radius: 8px; display: grid; place-items: center; flex: none;
+    color: #7BE0B0; background: rgba(63,191,127,.10); border: 1px solid rgba(63,191,127,.22);
+  }
+  .apply-note .txt b { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .apply-note .txt span { display: block; margin-top: 2px; font-size: 11.5px; color: var(--ink-4); }
+  .apply-note .txt span em { font-style: normal; color: var(--ink-3); }
+  .action-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .split { display: flex; align-items: stretch; }
+  .split .btn.primary { border-radius: 9px 0 0 9px; padding-right: 13px; }
+  .split .caret { width: 28px; height: 38px; border-radius: 0 9px 9px 0; border-left: 1px solid rgba(4, 22, 60, .35); padding: 0; }
+
+  /* ── AI 助手 ── */
+  .copilot-wrap { width: 380px; flex: none; padding: 16px 16px 16px 0; display: flex; }
+  .copilot {
+    flex: 1; border-radius: 18px; display: flex; flex-direction: column; overflow: hidden;
+    background:
+      radial-gradient(90% 52% at 82% 0%, rgba(34, 199, 255, .12), transparent 62%),
+      linear-gradient(155deg, rgba(38, 68, 120, .46), rgba(7, 18, 42, .54) 58%, rgba(5, 13, 32, .60));
+  }
+  .cp-head { height: 60px; flex: none; display: flex; align-items: center; gap: 9px; padding: 0 15px; border-bottom: 1px solid var(--line); }
+  .cp-mark {
+    width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex: none; color: #F4FAFF;
+    background:
+      radial-gradient(120% 120% at 20% 0%, rgba(255,255,255,.45), transparent 42%),
+      linear-gradient(145deg, #22C7FF, #2F6BFF 58%, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 6px 18px rgba(34, 160, 255, .35);
+  }
+  .cp-title { display: flex; flex-direction: column; gap: 1px; }
+  .cp-title b { font-size: 16px; font-weight: 600; letter-spacing: .2px; }
+  .cp-title span { font-size: 11px; color: var(--ink-4); }
+  .remote {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
+    border-radius: 999px; font-size: 10.5px; color: var(--ink-3);
+    border: 1px solid rgba(158,197,255,.16); background: rgba(255,255,255,.03);
+  }
+  .remote i { width: 4px; height: 4px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  .cp-scroll { flex: 1; min-height: 0; padding: 13px 14px 8px; display: flex; flex-direction: column; gap: 9px; overflow: hidden; }
+  .context-chip {
+    display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 7px;
+    border: 1px dashed rgba(158,197,255,.20); background: rgba(10,24,52,.26);
+    font-size: 11px; color: var(--ink-3); align-self: flex-start;
+  }
+  .context-chip b { color: var(--ink-2); font-weight: 500; }
+  .context-chip .ro { margin-left: 2px; font-size: 10px; color: var(--ink-4); }
+  .msg { display: flex; gap: 8px; align-items: flex-start; }
+  .msg .mic {
+    width: 23px; height: 23px; border-radius: 7px; flex: none; display: grid; place-items: center;
+    color: var(--aqua); background: rgba(34,199,255,.10); border: 1px solid rgba(34,199,255,.20);
+  }
+  .bubble {
+    max-width: 300px; padding: 9px 12px; border-radius: 4px 12px 12px 12px;
+    font-size: 13px; line-height: 1.58; color: var(--ink-2);
+    background: linear-gradient(155deg, rgba(48,76,126,.50), rgba(12,27,56,.54));
+    border: 1px solid rgba(158,197,255,.14); box-shadow: inset 0 1px 0 rgba(255,255,255,.10);
+  }
+  .bubble b { color: var(--ink-1); font-weight: 600; }
+  .msg.user { justify-content: flex-end; }
+  .msg.user .bubble {
+    max-width: 276px; border-radius: 12px 4px 12px 12px; color: #F4F9FF;
+    background:
+      radial-gradient(120% 120% at 18% 0%, rgba(255,255,255,.22), transparent 45%),
+      linear-gradient(140deg, rgba(76,137,255,.78), rgba(28,79,224,.68));
+    border-color: rgba(150,200,255,.30); box-shadow: inset 0 1px 0 rgba(255,255,255,.30), 0 8px 22px rgba(28,79,224,.25);
+  }
+  .plan-bubble { padding: 11px 12px 10px; }
+  .plan-bubble .lead { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+  .plan-bubble .lead b { font-weight: 600; color: var(--ink-1); }
+  .steps { margin-top: 8px; display: flex; flex-direction: column; }
+  .step { display: flex; gap: 8px; position: relative; padding-bottom: 7px; }
+  .step:last-child { padding-bottom: 1px; }
+  .step:not(:last-child)::before {
+    content: ""; position: absolute; left: 8px; top: 19px; bottom: 1px; width: 1px;
+    background: linear-gradient(180deg, rgba(34,199,255,.45), rgba(47,107,255,.10));
+  }
+  .step-n {
+    width: 17px; height: 17px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 9px; font-weight: 700; color: #F6FAFF;
+    background: linear-gradient(145deg, #4C89FF, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 0 0 2px rgba(47,107,255,.12);
+  }
+  .step-t { font-size: 12px; line-height: 1.45; color: var(--ink-2); }
+  .step-t b { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink-1); }
+  .step-t span { color: var(--ink-4); font-size: 11px; }
+  .plan-bubble .safe-line {
+    margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(158,197,255,.10);
+    display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-4);
+  }
+  .plan-bubble .safe-line .i { color: #7BE0B0; }
+  .prompts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 1px; }
+  .prompt {
+    font-size: 11.5px; color: var(--ink-3); padding: 5px 10px; border-radius: 999px;
+    border: 1px solid rgba(158,197,255,.15); background: rgba(255,255,255,.025);
+  }
+  .audit { padding: 8px 11px 7px; border-radius: 11px; }
+  .audit-head { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--ink-4); margin-bottom: 4px; }
+  .audit-head .i { color: var(--ink-4); }
+  .audit-head span {
+    margin-left: auto; font-size: 9px; letter-spacing: .08em; color: var(--ink-4);
+    padding: 1px 5px; border-radius: 999px; border: 1px solid rgba(158,197,255,.14);
+  }
+  .audit-row { display: flex; align-items: center; gap: 7px; height: 21px; font-size: 10.5px; }
+  .audit-row code { font-family: "Source Han Mono SC", "Cascadia Mono", monospace; font-size: 10px; color: var(--brand-300); }
+  .audit-row span { color: var(--ink-4); }
+  .audit-row .ok { margin-left: auto; color: #7BE0B0; font-size: 9.5px; display: flex; align-items: center; gap: 3px; }
+  .cp-foot-note { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--ink-4); padding: 0 2px; margin-top: auto; }
+  .composer { margin: 0 12px 12px; flex: none; border-radius: 12px; padding: 10px 11px 9px; }
+  .composer .ph { font-size: 13px; color: var(--ink-4); padding: 2px 2px 9px; }
+  .composer .tools { display: flex; align-items: center; gap: 3px; }
+  .ctool {
+    width: 25px; height: 25px; border-radius: 7px; display: grid; place-items: center;
+    color: var(--ink-3); border: 1px solid rgba(158,197,255,.12); background: rgba(255,255,255,.03);
+  }
+  .send {
+    margin-left: auto; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #F6FAFF;
+    background: linear-gradient(145deg, #6AA6FF, #2F6BFF 55%, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 5px 14px rgba(35,89,252,.32);
+  }
+  .composer .meta { margin-left: 5px; font-size: 10px; color: var(--ink-4); }
+</style>
+<style>
+
+  /* ── 浅色模式覆盖：亮蓝壁纸色 + 乳白液态玻璃 ── */
+  :root {
+    --ink-1: #111827;
+    --ink-2: #334155;
+    --ink-3: #4A5568;
+    --ink-4: #5C6876;
+    --brand-300: #1C4FE0;
+    --brand-400: #2F6BFF;
+    --brand-500: #2359FC;
+    --brand-600: #0B3FA8;
+    --cyan: #0787B8;
+    --aqua: #0891C6;
+    --safe: #17794A;
+    --warn: #8A6100;
+    --danger: #B3261E;
+    --line: rgba(28, 79, 224, .12);
+    --line-strong: rgba(28, 79, 224, .22);
+  }
+
+  .stage {
+    background:
+      radial-gradient(820px 660px at 6% 90%, rgba(35, 89, 252, .62), transparent 64%),
+      radial-gradient(640px 480px at 46% 12%, rgba(14, 169, 252, .55), transparent 66%),
+      radial-gradient(760px 620px at 96% 58%, rgba(47, 107, 255, .46), transparent 68%),
+      radial-gradient(520px 420px at 78% 108%, rgba(120, 188, 252, .62), transparent 70%),
+      linear-gradient(152deg, #DFF1FF 0%, #C2E0FF 46%, #A8CFFF 100%);
+  }
+  .blob-a { background: radial-gradient(closest-side, rgba(35, 89, 252, .52), rgba(35, 89, 252, .16) 62%, transparent 76%); }
+  .blob-b { background: radial-gradient(closest-side, rgba(14, 169, 252, .48), transparent 72%); }
+  .blob-c { background: radial-gradient(closest-side, rgba(47, 107, 255, .38), transparent 72%); }
+  .grain { opacity: .032; mix-blend-mode: multiply; }
+
+  .glass {
+    background:
+      linear-gradient(155deg, rgba(255, 255, 255, .34), rgba(225, 241, 255, .18) 56%, rgba(210, 233, 255, .26)),
+      radial-gradient(120% 90% at 12% 0%, rgba(255, 255, 255, .56), transparent 58%);
+    border-color: rgba(255, 255, 255, .74);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, .96),
+      inset 0 -1px 0 rgba(80, 130, 200, .12),
+      0 30px 70px rgba(35, 89, 160, .20);
+  }
+  .glass::before {
+    background: radial-gradient(130% 58% at 16% -10%, rgba(255, 255, 255, .88), transparent 56%);
+    opacity: .72; mix-blend-mode: normal;
+  }
+  .edge::after {
+    background: linear-gradient(142deg, rgba(255, 255, 255, .98), rgba(255, 255, 255, .18) 36%, rgba(47, 107, 255, .22) 68%, rgba(255, 255, 255, .70));
+  }
+  .card {
+    background: linear-gradient(160deg, rgba(218, 238, 255, .32), rgba(245, 251, 255, .18));
+    border-color: rgba(255, 255, 255, .72);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 10px 28px rgba(35, 89, 160, .12);
+  }
+  .shell {
+    background:
+      radial-gradient(85% 65% at 10% -8%, rgba(255, 255, 255, .32), transparent 56%),
+      radial-gradient(60% 55% at 104% 62%, rgba(14, 169, 252, .20), transparent 62%),
+      linear-gradient(155deg, rgba(235, 247, 255, .24), rgba(210, 233, 255, .14) 58%, rgba(195, 225, 255, .20));
+  }
+  .amb-blue { background: radial-gradient(closest-side, rgba(35, 89, 252, .30), transparent 72%); }
+  .amb-cyan { background: radial-gradient(closest-side, rgba(14, 169, 252, .26), transparent 72%); }
+  .inside-liquid { opacity: .95; }
+
+  .topbar {
+    border-bottom-color: rgba(255, 255, 255, .58);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .24), rgba(225, 242, 255, .07));
+  }
+  .brand-mark {
+    background:
+      radial-gradient(120% 120% at 22% 12%, rgba(255, 255, 255, .30), transparent 38%),
+      linear-gradient(145deg, #78BCFC 0%, #2359FC 52%, #1C4FE0 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .65), inset 0 -2px 6px rgba(4, 16, 48, .22), 0 8px 20px rgba(35, 89, 252, .32);
+  }
+  .style-tag {
+    color: #1C4FE0; border-color: rgba(35, 89, 252, .22); background: rgba(35, 89, 252, .07);
+  }
+  .workspace { background: rgba(255, 255, 255, .40); }
+  .workspace:hover { border-color: rgba(35, 89, 252, .18); }
+  .search { border-color: rgba(255, 255, 255, .66); background: rgba(255, 255, 255, .44); }
+  .search kbd { border-color: rgba(28, 79, 224, .12); background: rgba(255, 255, 255, .50); }
+  .icon-btn:hover { background: rgba(255, 255, 255, .48); border-color: rgba(255, 255, 255, .68); }
+  .avatar { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 0 0 1px rgba(255, 255, 255, .85), 0 4px 12px rgba(35, 89, 252, .22); }
+
+  .sidebar {
+    border-right-color: rgba(255, 255, 255, .58);
+    background: linear-gradient(180deg, rgba(225, 242, 255, .13), rgba(205, 230, 255, .06));
+  }
+  .nav-item .count { background: rgba(35, 89, 252, .07); }
+  .nav-item.active {
+    color: var(--ink-1); border-color: rgba(35, 89, 252, .24);
+    background: linear-gradient(90deg, rgba(35, 89, 252, .26), rgba(35, 89, 252, .08));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .82), 0 6px 18px rgba(35, 89, 252, .10);
+  }
+  .nav-item.active .i { color: #1C4FE0; }
+  .nav-item.active::before { background: linear-gradient(180deg, #0EA9FC, #2359FC); box-shadow: 0 0 10px rgba(35, 89, 252, .35); }
+  .bar { background: rgba(28, 79, 224, .10); }
+  .bar i { background: linear-gradient(90deg, #2359FC, #0EA9FC); box-shadow: 0 0 8px rgba(14, 169, 252, .30); }
+  .side-version .ok { background: #17794A; box-shadow: 0 0 6px rgba(23, 121, 74, .40); }
+
+  .status-pill { color: #8A6100; border-color: rgba(183, 121, 0, .34); background: #FFF3D1; }
+  .status-pill .dotw { background: #B77900; box-shadow: 0 0 7px rgba(183, 121, 0, .35); }
+  .btn {
+    color: var(--ink-2); border-color: rgba(255, 255, 255, .80);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .74), rgba(255, 255, 255, .42));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 4px 12px rgba(35, 89, 160, .10);
+  }
+  .btn.primary {
+    border-color: rgba(255, 255, 255, .55);
+    background:
+      radial-gradient(120% 130% at 20% 0%, rgba(255, 255, 255, .32), transparent 42%),
+      linear-gradient(135deg, #2F6BFF 0%, #2359FC 48%, #1C4FE0 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .48), 0 8px 24px rgba(35, 89, 252, .30);
+  }
+  .btn.ghost { color: var(--ink-3); }
+
+  .stat-ico.blue { color: #1C4FE0; background: linear-gradient(150deg, rgba(35, 89, 252, .14), rgba(35, 89, 252, .05)); }
+  .stat-ico.cyan { color: #0787B8; background: linear-gradient(150deg, rgba(14, 169, 252, .14), rgba(14, 169, 252, .05)); }
+  .stat-ico.green { color: #17794A; background: linear-gradient(150deg, rgba(23, 121, 74, .14), rgba(23, 121, 74, .05)); }
+  .stat-ico.amber { color: #8A6100; background: linear-gradient(150deg, rgba(183, 121, 0, .14), rgba(183, 121, 0, .05)); }
+  .stat-foot .up { color: #17794A; }
+
+  .plan-toolbar { border-bottom-color: rgba(28, 79, 224, .10); }
+  .tab.active {
+    color: var(--ink-1); background: rgba(255, 255, 255, .66); border-color: rgba(255, 255, 255, .82);
+    box-shadow: inset 0 1px 0 #FFF, 0 2px 8px rgba(35, 89, 160, .08);
+  }
+  .tab.active b { color: #1C4FE0; }
+  .tool-sep { background: rgba(28, 79, 224, .12); }
+  .plan-head { border-bottom-color: rgba(28, 79, 224, .14); background: rgba(190, 219, 255, .40); }
+  .row { border-bottom-color: rgba(28, 79, 224, .11); }
+  .row:hover { background: rgba(35, 89, 252, .045); }
+  .row.selected { background: linear-gradient(90deg, rgba(35, 89, 252, .19), rgba(35, 89, 252, .02)); }
+  .row.selected::before { background: linear-gradient(180deg, #0EA9FC, #2359FC); }
+  .check { border-color: rgba(28, 79, 224, .26); background: rgba(255, 255, 255, .55); }
+  .check.on {
+    border-color: rgba(255, 255, 255, .72);
+    background: linear-gradient(145deg, #2F6BFF, #2359FC 55%, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .50), 0 0 10px rgba(35, 89, 252, .22);
+  }
+  .ftype { border-color: rgba(255, 255, 255, .66); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .82); }
+  .ftype.img { color: #1C4FE0; background: linear-gradient(150deg, rgba(35, 89, 252, .13), rgba(35, 89, 252, .04)); }
+  .ftype.dup { color: #9A6B00; background: linear-gradient(150deg, rgba(227, 160, 8, .16), rgba(227, 160, 8, .05)); }
+  .ftype.vid { color: #6B46C9; background: linear-gradient(150deg, rgba(120, 80, 220, .13), rgba(120, 80, 220, .04)); }
+  .ftype.doc { color: #B3261E; background: linear-gradient(150deg, rgba(179, 38, 30, .10), rgba(179, 38, 30, .03)); }
+  .ftype.arc { color: #5B6B80; background: rgba(255, 255, 255, .50); }
+  .target b { color: #1C4FE0; }
+  .target.skip b { color: var(--ink-4); }
+  .tag.safe { color: #17794A; border-color: rgba(23, 121, 74, .28); background: #E8F5EE; }
+  .tag.warn, .tag.dup { color: #8A6100; border-color: rgba(138, 97, 0, .28); background: #FFF3D1; }
+  .tag.muted { color: #66707B; border-color: rgba(102, 112, 123, .22); background: #F1F5F9; }
+  .plan-foot { border-top-color: rgba(28, 79, 224, .14); background: rgba(190, 219, 255, .30); }
+  .plan-foot .virtual i { background: #17794A; box-shadow: 0 0 6px rgba(23, 121, 74, .40); }
+
+  .shield { color: #17794A; background: #E8F5EE; border-color: rgba(23, 121, 74, .22); }
+  .split .caret { border-left-color: rgba(255, 255, 255, .30); }
+
+  .copilot {
+    background:
+      radial-gradient(90% 52% at 82% 0%, rgba(14, 169, 252, .20), transparent 62%),
+      linear-gradient(155deg, rgba(228, 243, 255, .36), rgba(205, 230, 255, .24) 58%, rgba(195, 225, 255, .30));
+  }
+  .cp-mark {
+    background:
+      radial-gradient(120% 120% at 20% 0%, rgba(255, 255, 255, .16), transparent 42%),
+      linear-gradient(145deg, #0EA9FC, #2F6BFF 58%, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 6px 18px rgba(35, 89, 252, .30);
+  }
+  .remote { border-color: rgba(28, 79, 224, .15); background: rgba(255, 255, 255, .42); }
+  .remote i { background: #0787B8; box-shadow: 0 0 6px rgba(8, 145, 184, .50); }
+  .context-chip { border-color: rgba(28, 79, 224, .18); background: rgba(255, 255, 255, .36); }
+  .context-chip b { color: var(--ink-2); }
+  .msg .mic { color: #1C4FE0; background: rgba(35, 89, 252, .08); border-color: rgba(35, 89, 252, .16); }
+  .bubble {
+    background: linear-gradient(155deg, rgba(255, 255, 255, .68), rgba(240, 248, 255, .54));
+    border-color: rgba(255, 255, 255, .78);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 4px 14px rgba(35, 89, 160, .06);
+  }
+  .msg.user .bubble {
+    border-color: rgba(255, 255, 255, .52);
+    background:
+      radial-gradient(120% 120% at 18% 0%, rgba(255, 255, 255, .24), transparent 45%),
+      linear-gradient(140deg, #2F6BFF, #2359FC 58%, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .36), 0 8px 22px rgba(35, 89, 252, .22);
+  }
+  .step:not(:last-child)::before { background: linear-gradient(180deg, rgba(14, 169, 252, .35), rgba(35, 89, 252, .08)); }
+  .step-n { background: linear-gradient(145deg, #2F6BFF, #2359FC 55%, #1C4FE0); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .42), 0 0 0 2px rgba(35, 89, 252, .10); }
+  .plan-bubble .safe-line { border-top-color: rgba(28, 79, 224, .10); }
+  .prompt { border-color: rgba(28, 79, 224, .14); background: rgba(255, 255, 255, .42); }
+  .audit-head span { border-color: rgba(28, 79, 224, .12); }
+  .audit-row code { color: #1C4FE0; }
+  .audit-row .ok { color: #17794A; }
+  .ctool { border-color: rgba(28, 79, 224, .12); background: rgba(255, 255, 255, .46); }
+  .send {
+    background: linear-gradient(145deg, #2F6BFF, #2359FC 55%, #1C4FE0);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .40), 0 5px 14px rgba(35, 89, 252, .28);
+  }
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="ico-layers" viewBox="0 0 24 24"><path d="m12 3 8.5 4.7L12 12.4 3.5 7.7 12 3Z"/><path d="m4 12 8 4.4 8-4.4"/><path d="m4 16.3 8 4.4 8-4.4"/></symbol>
+    <symbol id="ico-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+    <symbol id="ico-folder" viewBox="0 0 24 24"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h4l2 2.5h6A2.5 2.5 0 0 1 20.5 10v6.5A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5v-9Z"/></symbol>
+    <symbol id="ico-wand" viewBox="0 0 24 24"><path d="M5 19 16 8"/><path d="m14.5 4 .8 2.2L17.5 7l-2.2.8L14.5 10l-.8-2.2L11.5 7l2.2-.8L14.5 4Z"/><path d="m19 11.5.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5.5-1.5Z"/></symbol>
+    <symbol id="ico-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6A2.5 2.5 0 0 0 13 3.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></symbol>
+    <symbol id="ico-rename" viewBox="0 0 24 24"><path d="M4 7h10"/><path d="M4 12h7"/><path d="M4 17h10"/><path d="m15.5 15.5 4-4a1.6 1.6 0 0 1 2.3 2.3l-4 4-3 .7.7-3Z"/></symbol>
+    <symbol id="ico-convert" viewBox="0 0 24 24"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></symbol>
+    <symbol id="ico-camera" viewBox="0 0 24 24"><path d="M4 8.5h3l1.5-2h7L17 8.5h3v10H4v-10Z"/><circle cx="12" cy="13.3" r="3.2"/></symbol>
+    <symbol id="ico-broom" viewBox="0 0 24 24"><path d="m14 4 6 6"/><path d="m16.5 6.5-7 7"/><path d="M9.5 13.5 4 19c2.8 1.2 5.4.9 7.5-1.1 1.6-1.6 2-3.4 1.4-5.6l-3.4 1.2Z"/></symbol>
+    <symbol id="ico-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6L4 8.6"/><path d="M4 4v4.6h4.6"/><path d="M12 8v4.4l3 1.8"/></symbol>
+    <symbol id="ico-recipe" viewBox="0 0 24 24"><path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
+    <symbol id="ico-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4 6 18M18 18l-1.6-1.6M7.6 7.6 6 6"/></symbol>
+    <symbol id="ico-bell" viewBox="0 0 24 24"><path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 3 1 4.5 2 5.5H4.5c1-1 2-2.5 2-5.5Z"/><path d="M10 19a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="ico-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.8 9.4a2.3 2.3 0 1 1 3.5 2c-.8.5-1.3 1-1.3 2"/><path d="M12 16.6v.1"/></symbol>
+    <symbol id="ico-chevron-down" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+    <symbol id="ico-chevron-right" viewBox="0 0 24 24"><path d="m10 7 5 5-5 5"/></symbol>
+    <symbol id="ico-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="ico-arrow-right" viewBox="0 0 24 24"><path d="M4 12h15"/><path d="m14 7 5 5-5 5"/></symbol>
+    <symbol id="ico-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="ico-shield" viewBox="0 0 24 24"><path d="M12 3.5 19 6v6c0 4.4-3 7.4-7 8.5-4-1.1-7-4.1-7-8.5V6l7-2.5Z"/><path d="m8.8 12 2.2 2.2 4.2-4.4"/></symbol>
+    <symbol id="ico-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2.5"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/></symbol>
+    <symbol id="ico-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-4 16-4-6-8-2Z"/><path d="m12 14 4-6"/></symbol>
+    <symbol id="ico-attach" viewBox="0 0 24 24"><path d="m9 12.5 5.5-5.5a3 3 0 0 1 4.2 4.2l-7 7a4.5 4.5 0 0 1-6.4-6.4l6.5-6.5"/></symbol>
+    <symbol id="ico-filter" viewBox="0 0 24 24"><path d="M4 6h16l-6 7v5l-4 2v-7L4 6Z"/></symbol>
+    <symbol id="ico-hard" viewBox="0 0 24 24"><path d="M4 13h16v5H4z"/><path d="M5.5 13 8 6h8l2.5 7"/><path d="M8 16h.1M11 16h.1"/></symbol>
+    <symbol id="ico-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.5"/><path d="m6 17 4.5-4.5 3 3 2.5-2.5 2 2"/></symbol>
+    <symbol id="ico-video" viewBox="0 0 24 24"><rect x="3.5" y="6" width="12" height="12" rx="2.5"/><path d="m15.5 10 5-2.5v9l-5-2.5"/></symbol>
+    <symbol id="ico-pdf" viewBox="0 0 24 24"><path d="M6 3.5h7l5 5v12H6v-17Z"/><path d="M13 3.5v5h5"/><path d="M9 14h6M9 17h4"/></symbol>
+    <symbol id="ico-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="ico-spark" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.2 1.8-5.2 1.8L12 18l-1.8-5.4L5 10.8 10.2 9 12 3.5Z"/><path d="M19 16.5l.6 1.9 1.9.6-1.9.6-.6 1.9-.6-1.9-1.9-.6 1.9-.6.6-1.9Z"/></symbol>
+  </defs>
+</svg>
+
+<div class="stage">
+  <div class="blob blob-a"></div>
+  <div class="blob blob-b"></div>
+  <div class="blob blob-c"></div>
+  <svg class="liquid" viewBox="0 0 1600 1000" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="curve-a" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#2359FC" stop-opacity="0"/>
+        <stop offset=".42" stop-color="#2F6BFF" stop-opacity=".75"/>
+        <stop offset=".72" stop-color="#0EA9FC" stop-opacity=".35"/>
+        <stop offset="1" stop-color="#78BCFC" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="curve-b" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#2359FC" stop-opacity="0"/>
+        <stop offset=".5" stop-color="#2F6BFF" stop-opacity=".45"/>
+        <stop offset="1" stop-color="#0EA9FC" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="wave-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#0EA9FC" stop-opacity=".10"/>
+        <stop offset="1" stop-color="#0EA9FC" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <path d="M-80 756C250 560 500 402 812 476c312 74 486 296 868 320v260H-80V756Z" fill="url(#wave-fill)"/>
+    <path d="M-100 714C246 480 540 418 824 500c284 82 470 312 900 258" fill="none" stroke="url(#curve-a)" stroke-width="2.2"/>
+    <path d="M-60 878c440-238 752-262 1032-166 232 80 408 176 716 142" fill="none" stroke="url(#curve-b)" stroke-width="1.2"/>
+    <path d="M1090 40c96 120 138 250 128 410" fill="none" stroke="url(#curve-b)" stroke-width="1"/>
+  </svg>
+  <svg class="grain" aria-hidden="true">
+    <filter id="noise"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/></filter>
+    <rect width="100%" height="100%" filter="url(#noise)" opacity=".7"/>
+  </svg>
+
+  <div class="shell glass edge">
+    <div class="ambient amb-blue"></div>
+    <div class="ambient amb-cyan"></div>
+    <svg class="inside-liquid" viewBox="0 0 1552 952" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <radialGradient id="glow-blue-in" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stop-color="#2359FC" stop-opacity=".50"/>
+          <stop offset="1" stop-color="#2359FC" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="glow-cyan-in" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stop-color="#0EA9FC" stop-opacity=".34"/>
+          <stop offset="1" stop-color="#0EA9FC" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="liq-line-a" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#2359FC" stop-opacity="0"/>
+          <stop offset=".45" stop-color="#2F6BFF" stop-opacity=".60"/>
+          <stop offset=".78" stop-color="#0EA9FC" stop-opacity=".22"/>
+          <stop offset="1" stop-color="#0EA9FC" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="liq-line-b" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#2359FC" stop-opacity="0"/>
+          <stop offset=".55" stop-color="#2F6BFF" stop-opacity=".36"/>
+          <stop offset="1" stop-color="#0EA9FC" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <ellipse cx="250" cy="880" rx="560" ry="400" fill="url(#glow-blue-in)"/>
+      <ellipse cx="1350" cy="430" rx="440" ry="340" fill="url(#glow-cyan-in)"/>
+      <path d="M-40 748C260 604 520 494 862 556c290 52 456 200 738 160" fill="none" stroke="url(#liq-line-a)" stroke-width="1.7"/>
+      <path d="M-30 862c410-160 790-200 1110-120 220 56 360 120 520 100" fill="none" stroke="url(#liq-line-b)" stroke-width="1.1"/>
+    </svg>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><svg class="i"><use href="#ico-layers"/></svg></div>
+        <div class="brand-name"><b>batchdesk</b><span>批量文件工作台</span></div>
+      </div>
+      <span class="style-tag">LIGHT · LIQUID GLASS · U v1.3</span>
+      <div class="top-divider"></div>
+      <div class="workspace">
+        <svg class="i sm" style="color:var(--brand-300)"><use href="#ico-folder"/></svg>
+        <span class="path">设计评审 / <b>2026 年度照片库</b></span>
+        <svg class="i xs"><use href="#ico-chevron-down"/></svg>
+      </div>
+      <div class="search">
+        <svg class="i sm"><use href="#ico-search"/></svg>
+        <span>搜索文件、任务或配方</span>
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="icon-btn"><svg class="i sm"><use href="#ico-bell"/></svg><span class="dot"></span></div>
+      <div class="icon-btn"><svg class="i sm"><use href="#ico-help"/></svg></div>
+      <div class="user">
+        <div class="avatar">陈</div>
+        <div class="who"><b>陈默</b><span>项目管理员</span></div>
+        <svg class="i xs" style="color:var(--ink-4)"><use href="#ico-chevron-down"/></svg>
+      </div>
+    </header>
+
+    <div class="workbench">
+      <aside class="sidebar">
+        <div class="nav-label">工作区</div>
+        <nav class="nav">
+          <div class="nav-item active"><svg class="i"><use href="#ico-wand"/></svg>智能整理<span class="count">12</span></div>
+          <div class="nav-item"><svg class="i"><use href="#ico-copy"/></svg>重复文件<span class="count">94</span></div>
+          <div class="nav-item"><svg class="i"><use href="#ico-rename"/></svg>批量重命名</div>
+          <div class="nav-item"><svg class="i"><use href="#ico-convert"/></svg>格式转换</div>
+          <div class="nav-item"><svg class="i"><use href="#ico-camera"/></svg>元数据 EXIF</div>
+          <div class="nav-item"><svg class="i"><use href="#ico-broom"/></svg>安全清理</div>
+        </nav>
+        <div class="nav-label" style="margin-top:16px">管理</div>
+        <nav class="nav">
+          <div class="nav-item"><svg class="i"><use href="#ico-history"/></svg>任务与日志</div>
+          <div class="nav-item"><svg class="i"><use href="#ico-recipe"/></svg>规则配方</div>
+          <div class="nav-item"><svg class="i"><use href="#ico-settings"/></svg>设置</div>
+        </nav>
+        <div class="side-spacer"></div>
+        <div class="storage card">
+          <div class="storage-head"><svg class="i sm"><use href="#ico-hard"/></svg>索引空间<b>46.2 / 120 GB</b></div>
+          <div class="bar"><i></i></div>
+          <div class="storage-foot"><span>已用 38.5%</span><span>保留 90 天日志</span></div>
+        </div>
+        <div class="side-version"><span class="ok"></span>v0.1.0 · 单机版 · 已授权</div>
+      </aside>
+
+      <main class="main">
+        <div class="page-head">
+          <div class="page-title">
+            <div class="crumbs">工作台 <svg class="i xs"><use href="#ico-chevron-right"/></svg> 照片库 <svg class="i xs"><use href="#ico-chevron-right"/></svg> <b>整理计划</b></div>
+            <h1>整理「2026 年度照片库」</h1>
+            <p>基于 <b>12,480</b> 个文件的扫描结果 · 生成于 14:32 · 未做任何改动</p>
+          </div>
+          <div class="page-actions">
+            <span class="status-pill"><span class="dotw"></span>待确认</span>
+            <button class="btn ghost">查看规则</button>
+            <div class="icon-btn"><svg class="i sm"><use href="#ico-more"/></svg></div>
+          </div>
+        </div>
+
+        <section class="stats">
+          <div class="stat card">
+            <div class="stat-ico blue"><svg class="i sm"><use href="#ico-search"/></svg></div>
+            <div class="stat-body"><div class="stat-label">扫描文件</div><div class="stat-value">12,480</div><div class="stat-foot"><span class="up">+318</span> 较昨日</div></div>
+          </div>
+          <div class="stat card">
+            <div class="stat-ico cyan"><svg class="i sm"><use href="#ico-rename"/></svg></div>
+            <div class="stat-body"><div class="stat-label">计划变更</div><div class="stat-value">3,742</div><div class="stat-foot">占全部 <em>30.0%</em></div></div>
+          </div>
+          <div class="stat card">
+            <div class="stat-ico green"><svg class="i sm"><use href="#ico-broom"/></svg></div>
+            <div class="stat-body"><div class="stat-label">预计释放</div><div class="stat-value">8.6<small>GB</small></div><div class="stat-foot">重复 <em>6.1 GB</em> · 缓存 <em>2.5 GB</em></div></div>
+          </div>
+          <div class="stat card">
+            <div class="stat-ico amber"><svg class="i sm"><use href="#ico-shield"/></svg></div>
+            <div class="stat-body"><div class="stat-label">需人工确认</div><div class="stat-value">12</div><div class="stat-foot">命名冲突 <em>5</em> · 低置信 <em>7</em></div></div>
+          </div>
+        </section>
+
+        <section class="plan card">
+          <div class="plan-toolbar">
+            <div class="tabs">
+              <span class="tab active">全部 <b>3,742</b></span>
+              <span class="tab">归档 <b>2,845</b></span>
+              <span class="tab">重复 <b>94</b></span>
+              <span class="tab">跳过 <b>803</b></span>
+            </div>
+            <div class="toolbar-right">
+              <span class="selection">已选 <b>3,648</b> 项</span>
+              <span class="tool-sep"></span>
+              <div class="icon-btn" style="width:26px;height:26px"><svg class="i sm"><use href="#ico-filter"/></svg></div>
+              <div class="icon-btn" style="width:26px;height:26px"><svg class="i sm"><use href="#ico-check"/></svg></div>
+              <div class="icon-btn" style="width:26px;height:26px"><svg class="i sm"><use href="#ico-more"/></svg></div>
+            </div>
+          </div>
+          <div class="plan-head">
+            <span></span><span>原文件</span><span></span><span>计划变更</span><span style="text-align:right">大小</span><span>判定</span><span></span>
+          </div>
+          <div class="rows">
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype img"><svg class="i sm"><use href="#ico-image"/></svg></div><div class="fname"><b>IMG_2041.HEIC</b><span>01_旅行 / 2024_京都</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>2024-06_京都 / IMG_2041.HEIC</b><span>按拍摄年份与地点归档</span></div>
+              <span class="size">4.2 MB</span><span class="tag safe">安全</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype dup"><svg class="i sm"><use href="#ico-copy"/></svg></div><div class="fname"><b>IMG_2041 (1).HEIC</b><span>01_旅行 / 2024_京都</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>移入隔离区（重复，保留清晰度最高）</b><span>与 IMG_2041 相似度 99.4% · 隔离期内可恢复</span></div>
+              <span class="size">4.1 MB</span><span class="tag dup">重复</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype img"><svg class="i sm"><use href="#ico-image"/></svg></div><div class="fname"><b>微信图片_20230618.jpg</b><span>02_家庭</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>2023-06_家庭 / 20230618_家庭聚会_01.jpg</b><span>按拍摄日期重命名</span></div>
+              <span class="size">2.8 MB</span><span class="tag safe">安全</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype img"><svg class="i sm"><use href="#ico-image"/></svg></div><div class="fname"><b>Screenshot 2024-11-02.png</b><span>03_截图 / 待归档</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>2024-11_截图 / 20241102_截图_01.png</b><span>无 EXIF，使用文件时间推断</span></div>
+              <span class="size">860 KB</span><span class="tag warn">注意</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype img"><svg class="i sm"><use href="#ico-image"/></svg></div><div class="fname"><b>DSC_8891.NEF</b><span>04_下载 / 未命名文件夹</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>2022-09_婚礼 / DSC_8891.NEF</b><span>按拍摄时间归档</span></div>
+              <span class="size">28.6 MB</span><span class="tag safe">安全</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype vid"><svg class="i sm"><use href="#ico-video"/></svg></div><div class="fname"><b>VID_20210815.mp4</b><span>05_视频 / 手机导出</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>2021-08_家庭 / 20210815_家庭视频.mp4</b><span>按拍摄年份归档</span></div>
+              <span class="size">642 MB</span><span class="tag safe">安全</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row selected">
+              <span class="check on"><svg class="i xs"><use href="#ico-check"/></svg></span>
+              <div class="file"><div class="ftype doc"><svg class="i sm"><use href="#ico-pdf"/></svg></div><div class="fname"><b>扫描件0001.pdf</b><span>06_杂项 / 发票</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target"><b>2025-03_票据 / 20250312_发票_01.pdf</b><span>低置信：日期来自 OCR，请确认</span></div>
+              <span class="size">1.8 MB</span><span class="tag warn">低置信</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+            <div class="row">
+              <span class="check"></span>
+              <div class="file"><div class="ftype arc"><svg class="i sm"><use href="#ico-folder"/></svg></div><div class="fname"><b>archive_2020.zip</b><span>04_下载</span></div></div>
+              <span class="arrow"><svg class="i xs"><use href="#ico-arrow-right"/></svg></span>
+              <div class="target skip"><b>保持原位（不在本计划处理范围）</b><span>压缩包需解包后重新扫描</span></div>
+              <span class="size">1.3 GB</span><span class="tag muted">已跳过</span>
+              <span class="row-more"><svg class="i sm"><use href="#ico-more"/></svg></span>
+            </div>
+          </div>
+          <div class="plan-foot">
+            <span>仅展示前 8 项</span><span class="tool-sep"></span><span>差异预览与目标路径均由 plan 阶段计算，未写入磁盘</span>
+            <span class="spacer"></span>
+            <span class="virtual"><i></i>虚拟滚动 · 3,742 项</span>
+          </div>
+        </section>
+
+        <div class="actionbar card">
+          <div class="apply-note">
+            <div class="shield"><svg class="i sm"><use href="#ico-shield"/></svg></div>
+            <div class="txt"><b>应用后可整体撤销</b><span>3 步计划 · 预计 <em>2 分 40 秒</em> · 操作将写入审计日志</span></div>
+          </div>
+          <div class="action-right">
+            <button class="btn">保存为配方</button>
+            <div class="split">
+              <button class="btn primary lg"><svg class="i sm"><use href="#ico-check"/></svg>应用计划</button>
+              <button class="btn primary caret"><svg class="i xs"><use href="#ico-chevron-down"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <div class="copilot-wrap">
+        <aside class="copilot glass edge">
+          <div class="cp-head">
+            <div class="cp-mark"><svg class="i sm"><use href="#ico-spark"/></svg></div>
+            <div class="cp-title"><b>AI 助手</b><span>只生成计划 · 不会直接执行</span></div>
+            <span class="remote"><i></i>远程 · 已允许</span>
+          </div>
+          <div class="cp-scroll">
+            <div class="context-chip"><svg class="i xs" style="color:var(--brand-300)"><use href="#ico-folder"/></svg>已授权读取：<b>2026 年度照片库</b><span class="ro">只读</span></div>
+            <div class="msg">
+              <div class="mic"><svg class="i xs"><use href="#ico-spark"/></svg></div>
+              <div class="bubble">我可以把这次整理生成一份<b>可预览的计划</b>。要按拍摄年份归档，并合并重复照片吗？</div>
+            </div>
+            <div class="msg user">
+              <div class="bubble">按拍摄年份归档，重复的只保留最清晰的一张。</div>
+            </div>
+            <div class="msg">
+              <div class="mic"><svg class="i xs"><use href="#ico-spark"/></svg></div>
+              <div class="bubble plan-bubble">
+                <div class="lead"><svg class="i xs" style="color:var(--aqua)"><use href="#ico-spark"/></svg>已生成 <b>3 步计划</b>，共影响 <b>1,284</b> 个文件</div>
+                <div class="steps">
+                  <div class="step"><span class="step-n">1</span><div class="step-t"><b>扫描照片与 EXIF</b><span>读取 1,284 个文件 · 只读</span></div></div>
+                  <div class="step"><span class="step-n">2</span><div class="step-t"><b>按年份与事件归档</b><span>计划移动 1,190 个文件</span></div></div>
+                  <div class="step"><span class="step-n">3</span><div class="step-t"><b>标记 94 组重复</b><span>每组保留清晰度最高的一张</span></div></div>
+                </div>
+                <div class="safe-line"><svg class="i xs"><use href="#ico-shield"/></svg>已放入右侧预览，确认前不会改动任何文件</div>
+              </div>
+            </div>
+            <div class="msg user">
+              <div class="bubble">第 3 步会删除文件吗？</div>
+            </div>
+            <div class="msg">
+              <div class="mic"><svg class="i xs"><use href="#ico-spark"/></svg></div>
+              <div class="bubble">不会。重复文件只会移入<b>隔离区</b>，隔离期内可恢复；应用后也能整体撤销。</div>
+            </div>
+            <div class="prompts">
+              <span class="prompt">按月份归档</span>
+              <span class="prompt">只处理重复项</span>
+              <span class="prompt">导出为规则配方</span>
+            </div>
+            <div class="audit card">
+              <div class="audit-head"><svg class="i xs"><use href="#ico-shield"/></svg>本次工具调用<span>ALLOWLIST</span></div>
+              <div class="audit-row"><code>scanDirectory</code><span>只读 · 12,480 项</span><span class="ok"><svg class="i xs"><use href="#ico-check"/></svg>完成</span></div>
+              <div class="audit-row"><code>planOperation</code><span>生成 3 步计划</span><span class="ok"><svg class="i xs"><use href="#ico-check"/></svg>完成</span></div>
+            </div>
+            <div class="cp-foot-note"><svg class="i xs"><use href="#ico-lock"/></svg>文件内容不会发送给模型；文件名默认也不发送</div>
+          </div>
+          <div class="composer card">
+            <div class="ph">描述你想怎么整理…</div>
+            <div class="tools">
+              <span class="ctool"><svg class="i xs"><use href="#ico-attach"/></svg></span>
+              <span class="ctool"><svg class="i xs"><use href="#ico-folder"/></svg></span>
+              <span class="meta">Enter 发送 · Shift+Enter 换行</span>
+              <span class="send"><svg class="i sm"><use href="#ico-send"/></svg></span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

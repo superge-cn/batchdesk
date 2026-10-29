@@ -1,0 +1,49 @@
+# 契约到实现/测试追踪
+
+> 状态快照：2026-10-29 ｜ 用途：一眼看出“契约已冻结但代码/测试还没落地”的差距；实现推进时同步更新。
+>
+> 这不是新的权威：契约以 `docs/design/` 为准，测试以 T v1.12 与 `docs/testing/` 为准。
+> 移植来源与移植部件见 [`docs/porting/feature-source-map.md`](../porting/feature-source-map.md)；**L2a 未批准前不得写代码**。
+
+## 1. 追踪表
+
+| 契约 | 目标代码落点 | 当前实现 | 测试/语料锚点 | 主要缺口 |
+|---|---|---|---|---|
+| 01 内核接口/IPC | `crates/kernel` traits/DTO；`crates/platform`；`src-tauri/src/lib.rs`、`tasks.rs` | kernel + C09 plan/apply/undo；`ProgressSink`/`CancelToken` 已建；Tauri 任务队列与 `task://progress`/`task://state`/`task://done`，`applyPlan`/`undoPlan` 返回 taskId；`cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已注册 | kernel 42 + platform 13 + CLI 6 单测 + 2 集成 + shell 2；web build；WebView E2E | Clock/Rng 端口、OperationKind 完整枚举、`retryTask`、任务持久化、事件合帧；01 §4.4.1 已回写壳层命令 |
+| 02 Web 传输 | `web/`、WASM 导出面、云端（后置） | 均未建 | TW-A/B/C/D/F；TW-E mock 待建 | WASM 构建、Worker、OPFS 适配、生成绑定 |
+| 03 配置/模板/UiState | `crates/kernel` 类型；`src-tauri` 存储；`web` 设置区 | 无代码；`fixtures/migrations/v1` 样本 + `check_schema.py` | T v1.12 C37（8）＋B9（8）；TC v0.3；配置/模板/UiState 单测待建 | RecipeDocument v2/v3、getRecipe、UiState get/set/reset、迁移链、损坏兜底、导入导出 |
+| C09 重复文件查找（PDR-001） | `crates/kernel`、`crates/platform`、`crates/cli`、`src-tauri`、`web/src` | **CLI scan→plan→apply→undo+S02+保留期，以及桌面任务队列/IPC/UI 切片已建立**；apply→undo 与执行中取消回滚通过真实 WebView E2E | T v1.12 C09；C-6；`apply_flow.rs`；shell 队列测试；`scripts/e2e-tauri.mjs` | plan→apply 内容再校验、长路径/Windows 文件 ID、i18n/虚拟滚动/shadcn、任务列表 UI |
+| 04 文件系统适配 | `crates/platform/src/fs.rs`；WASM 适配；`src-tauri` | Native std::fs 适配器已建（路径操作/隔离/stat/list/canonicalize/case）；scan 仍直接 std::fs；Windows 文件 ID、WASM 适配未建 | `apply_flow.rs`；CLI fs 单测 | scanDirectory 接入、完整占位探测、Windows 文件 ID、长路径矩阵、跨卷元数据保留 |
+| 05 Web 强制力 | `web/`、WASM 导出面 | Web 仅有 C09 桌面 UI 切片；WASM/导出面未建 | TW-F3；WB-1…WB-4 | 编译期 feature gate、导出面断言、CI diff |
+| 06 错误码/文案 | kernel 错误类型、各端映射 | `KernelError` + Tauri `IpcError` 已建；文案资源未建 | `check_docs.py` 白名单；apply 单测 | 用户文案资源、其余码位覆盖 |
+| 07 云端服务端 | 服务端仓库（未建） | 未开始 | TW-E1…E13（mock 待建） | 身份/配额、会话/任务、限流、保留/清理 |
+| 08 授权签发 | kernel 判定、src-tauri 注入、签发工具 | `LicenseService` + `AlwaysAllowLicense` 已建；商业授权/签发未开始 | apply 授权拒绝单测；C-7 阻塞 | 载荷/签名/序列化、设备指纹、激活流程、QuotaBased |
+| 09 i18n | `web/src/locales/`、设置区 | 未建 | 设计 09 §6 的 I18N-01…08；T v1.12 B8 | 资源 key、语言切换、英文排版 |
+| 10 日志/诊断 | `src-tauri/src/logging/`、kernel 记录 | Journal JSONL + CLI/桌面 undo 已建；操作/诊断日志未建 | `apply_flow.rs`；journal 单测；shell 队列测试 | 双轨落库、脱敏、轮转、支持包 |
+| 11 发布/签名/更新 | CI release、`src-tauri/src/update/` | CI 仅骨架；SBOM/bench 对比占位 | 发布清单（设计 11 §6） | 签名、更新清单、防降级、回滚 |
+| 12 前端/壳架构 | `web/`、`src-tauri/` | C09 React/Vite 事件驱动 UI + Tauri v2 任务队列/事件切片；`src-tauri` 独立 workspace；WebView E2E 脚本可运行 | `pnpm build`；`src-tauri` 队列测试；`scripts/e2e-tauri.mjs`；浏览器 mock 流 | `retryTask`/任务持久化、Playwright/Vitest、CSP/capabilities、i18n/虚拟滚动；src-tauri 依赖未纳入根 cargo-deny |
+| 13 CLI（P1） | `crates/cli` + `crates/platform` | C09 scan/plan/apply/undo + S02 + cleanup 切片（OQ-30 已追认为实验命令，设计 13 v0.2 §2.1）；通用命令面未建 | platform 13 + CLI 6 单测 + 2 集成；C-6 | 命令面、退出码矩阵、真实授权注入、进度/取消 |
+| 14 AI 助手（F15 Phase 1/2/3） | `src-tauri/ai`、`web/src/features/ai` | 未开始 | `fixtures/ai/`、AI-01…AI-26 | FunctionCatalog、IntentGraph/PlanBundle、模型 Provider、工具 allowlist、同意/隐私、E6xxx、多计划冲突 |
+
+## 2. 当前可走通性
+
+- **可运行**：`cargo test --workspace`（kernel 42 + platform 13 + CLI 6 单测 + CLI 2 集成）；`cargo fmt/clippy`；`web` 的 `pnpm build`；`cargo test --manifest-path src-tauri/Cargo.toml`（队列 2）；C-6 只读/计划预览断言（本地手动）。
+- **可端到端走通的功能**：**C09 CLI 切片**（扫描→计划→隔离清理→Journal 撤销）与**桌面任务队列切片**（plan→apply→undo、执行中取消回滚）均走通；后者已通过真实 Tauri WebView E2E（`scripts/e2e-tauri.mjs`），浏览器 mock 流保留。
+- **C09**：CLI scan/plan/apply/undo + S02 + cleanup，以及 Tauri 任务队列/事件/React UI；apply 只处理 C09 delete，移入隔离目录、逐条写 Journal、AlwaysAllow 授权；取消在条目边界回滚并终态 `cancelled`；快速窗口由调用方显式传入（OQ-28 待确认）；保留策略默认 `earliest`（OQ-29 已确认，待基线收编）。
+- **C37 处理模板/持久化**：只有契约与 T 用例，未实现 ConfigDocument/UiState/Recipe 命令/UI。
+- **F15/授权/队列/日志/撤销**：AlwaysAllow 已建；任务队列已建（retry/持久化未建）；商业授权、操作日志、F15 UI 未实现；Journal 为 CLI JSONL + 桌面 undo。
+- **测试**：无逐条语料断言 harness；TC v0.3 已展开 C37/B9 实例；C-6 覆盖只读/预览，`apply_flow.rs` 覆盖 apply/undo/保留期；shell 队列测试覆盖事件/暂停/取消状态；`scripts/e2e-tauri.mjs` 覆盖真实 WebView apply→undo 与取消回滚；不能把 CI 绿灯表述为功能验收。
+
+## 3. 状态口径
+
+- **已实现**：代码存在且通过对应测试；当前**没有产品级完整功能**，C09 有 CLI scan/plan/apply/undo 切片（纯分组 + 三阶段哈希 + `PlanDocument` + 隔离 + Journal，见上表）。
+- **部分**：只有脚本/样本/文档，没有执行路径；表中“当前实现”列会写明。
+- **未开始**：目录/代码均不存在。
+
+## 4. 更新规则
+
+1. 每次合并涉及契约的 PR，更新对应行与“当前实现”列；
+2. 新增测试/语料时，把锚点写到“测试/语料锚点”列；
+3. 未实现项不得在 README/AGENTS 中写成已实现；
+4. 本表不替代 `docs/OPEN-QUESTIONS.md`：需要人决策的仍登记在后者。
+5. **完成即标注**（[AGENTS.md](../../AGENTS.md) 协作纪律第 4 条）：任务/功能/切片状态变化当日同步本表“当前实现/测试锚点/主要缺口”与 `docs/DEVELOPMENT-PLAN.md`（Wave 状态、§6.1 状态记录）；证据须可复核（测试命令与结果、门禁、日期、文件/章节回链）。

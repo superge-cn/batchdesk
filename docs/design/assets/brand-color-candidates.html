@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>batchdesk 品牌主色候选对比</title>
+<style>
+  :root {
+    --n-000: #FFFFFF;
+    --n-100: #F5F7F9;
+    --n-200: #E7EBEF;
+    --n-300: #D2D8DE;
+    --n-500: #87929D;
+    --n-600: #66707B;
+    --n-700: #4A535C;
+    --n-800: #242B33;
+    --n-900: #171C22;
+    --safe-fg: #17794A;
+    --safe-bg: #E8F5EE;
+    --safe-border: #7FC3A0;
+    --warn-fg: #8A6100;
+    --warn-bg: #FFF3D1;
+    --warn-border: #D9A521;
+    --danger-fg: #B3261E;
+    --danger-bg: #FDE7E5;
+    --danger-border: #D64C42;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--n-200);
+    color: var(--n-900);
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page-title {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 0 0 16px 2px;
+  }
+  .page-title h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .page-title p { margin: 0; font-size: 12px; color: var(--n-600); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .panel {
+    background: var(--n-000);
+    border: 1px solid var(--n-300);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(23,28,34,.06);
+    display: flex;
+    flex-direction: column;
+    min-height: 560px;
+  }
+  .panel.blue { --brand-500: #0B5CAD; --brand-600: #084A8C; --brand-100: #E6F0FA; }
+  .panel.teal { --brand-500: #00796B; --brand-600: #00665A; --brand-100: #E0F2EF; }
+  .panel.slate { --brand-500: #2F4F4F; --brand-600: #263F3F; --brand-100: #E6EDED; }
+  .panel-head {
+    display: flex; align-items: center; gap: 9px;
+    padding: 13px 15px; border-bottom: 1px solid var(--n-300);
+    background: var(--n-000);
+  }
+  .brand-dot { width: 11px; height: 11px; border-radius: 3px; background: var(--brand-500); }
+  .brand-name { font-weight: 700; font-size: 13px; letter-spacing: .2px; }
+  .variant {
+    margin-left: auto; font-size: 11px; color: var(--n-600);
+    background: var(--n-100); border: 1px solid var(--n-300);
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .app { display: grid; grid-template-columns: 84px 1fr; flex: 1; }
+  .side { background: var(--n-100); border-right: 1px solid var(--n-300); padding: 10px 0; }
+  .nav-item {
+    font-size: 11px; color: var(--n-600); padding: 9px 10px 9px 11px;
+    border-left: 3px solid transparent; margin: 1px 0;
+  }
+  .nav-item.active {
+    color: var(--n-900); background: var(--brand-100);
+    border-left-color: var(--brand-500); font-weight: 600;
+  }
+  .content { padding: 15px 16px 14px; }
+  .content h2 { font-size: 16px; margin: 0 0 4px; }
+  .sub { font-size: 11px; color: var(--n-600); margin-bottom: 14px; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .btn {
+    border: 0; border-radius: 7px; padding: 8px 13px; font-size: 12px;
+    font-family: inherit; cursor: default;
+  }
+  .btn-primary { background: var(--brand-500); color: #FFFFFF; font-weight: 600; }
+  .btn-secondary { background: var(--n-200); color: var(--n-900); }
+  .link { font-size: 11px; color: var(--brand-600); margin-left: auto; }
+  .card { border: 1px solid var(--n-300); border-radius: 8px; overflow: hidden; }
+  .card-head {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--n-100); padding: 8px 10px; font-size: 11px; color: var(--n-600);
+  }
+  .card-head strong { color: var(--n-900); font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { text-align: left; color: var(--n-600); font-weight: 500; padding: 7px 8px; border-bottom: 1px solid var(--n-300); }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--n-200); color: var(--n-900); }
+  tr:last-child td { border-bottom: 0; }
+  tr.selected td { background: var(--brand-100); }
+  tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--brand-500); }
+  .chip {
+    display: inline-block; font-size: 10px; line-height: 1;
+    padding: 4px 7px; border-radius: 999px; border: 1px solid;
+  }
+  .chip.safe { color: var(--safe-fg); background: var(--safe-bg); border-color: var(--safe-border); }
+  .chip.warn { color: var(--warn-fg); background: var(--warn-bg); border-color: var(--warn-border); }
+  .chip.danger { color: var(--danger-fg); background: var(--danger-bg); border-color: var(--danger-border); }
+  .field { margin-top: 12px; }
+  .field label { display: block; font-size: 11px; color: var(--n-600); margin-bottom: 5px; }
+  .select {
+    display: flex; justify-content: space-between; align-items: center;
+    border: 1px solid var(--n-300); border-radius: 7px; padding: 8px 10px;
+    font-size: 11px; color: var(--n-900); background: var(--n-000);
+  }
+  .select.focus { border-color: var(--brand-500); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-500) 22%, transparent); }
+  .dark-strip {
+    margin-top: 12px; background: var(--n-800); border-radius: 8px;
+    padding: 9px 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .dark-label { font-size: 10px; color: var(--n-300); }
+  .dark-btn {
+    margin-left: auto; background: var(--brand-500); color: #FFFFFF;
+    border-radius: 6px; padding: 6px 10px; font-size: 10px; font-weight: 600;
+  }
+  .swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 12px; }
+  .swatch { border: 1px solid var(--n-300); border-radius: 7px; overflow: hidden; }
+  .swatch .color { height: 28px; background: var(--c); }
+  .swatch .meta { padding: 5px 6px; font-size: 9px; color: var(--n-600); background: var(--n-000); }
+  .footnote {
+    margin-top: 16px; font-size: 11px; color: var(--n-600);
+    padding: 10px 12px; background: var(--n-000); border: 1px solid var(--n-300);
+    border-radius: 8px;
+  }
+  @media (max-width: 900px) {
+    body { padding: 12px; }
+    .page-title { display: block; margin-bottom: 12px; }
+    .page-title p { margin-top: 4px; }
+    .grid { grid-template-columns: 1fr; gap: 14px; }
+    .panel { min-height: auto; }
+  }
+</style>
+</head>
+<body>
+  <div class="page-title">
+    <h1>batchdesk 品牌主色候选 · 版面示例</h1>
+    <p>OQ-03 审核用；使用 U v1.2 的中性色/状态色，品牌色为候选示例值，最终以 U 定稿为准。</p>
+  </div>
+
+  <div class="grid">
+    <section class="panel blue">
+      <div class="panel-head">
+        <span class="brand-dot"></span><span class="brand-name">batchdesk</span>
+        <span class="variant">A 沉稳蓝（推荐）</span>
+      </div>
+      <div class="app">
+        <aside class="side">
+          <div class="nav-item">工作区</div>
+          <div class="nav-item active">批量重命名</div>
+          <div class="nav-item">任务中心</div>
+          <div class="nav-item">日志</div>
+          <div class="nav-item">设置</div>
+        </aside>
+        <main class="content">
+          <h2>批量重命名 · 预览</h2>
+          <div class="sub">12 个文件 · 3 个冲突 · 1 个警告</div>
+          <div class="toolbar">
+            <button class="btn btn-primary">执行计划</button>
+            <button class="btn btn-secondary">取消</button>
+            <span class="link">保存为配方</span>
+          </div>
+          <div class="card">
+            <div class="card-head"><strong>预览差异</strong><span>逐项确认后执行</span></div>
+            <table>
+              <thead><tr><th>原文件名</th><th>新文件名</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr class="selected"><td>合同_01.pdf</td><td>2026_合同_01.pdf</td><td><span class="chip safe">安全</span></td></tr>
+                <tr><td>报表.xlsx</td><td>2026_报表.xlsx</td><td><span class="chip warn">注意</span></td></tr>
+                <tr><td>CON.txt</td><td>2026_CON.txt</td><td><span class="chip danger">危险</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="field">
+            <label>冲突处理</label>
+            <div class="select focus"><span>跳过并报告</span><span>⌄</span></div>
+          </div>
+          <div class="dark-strip"><span class="dark-label">暗色预览</span><span class="dark-btn">执行计划</span></div>
+          <div class="swatches">
+            <div class="swatch" style="--c:#0B5CAD"><div class="color"></div><div class="meta">brand-500<br>#0B5CAD</div></div>
+            <div class="swatch" style="--c:#084A8C"><div class="color"></div><div class="meta">brand-600<br>#084A8C</div></div>
+            <div class="swatch" style="--c:#E6F0FA"><div class="color"></div><div class="meta">brand-100<br>#E6F0FA</div></div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <section class="panel teal">
+      <div class="panel-head">
+        <span class="brand-dot"></span><span class="brand-name">batchdesk</span>
+        <span class="variant">B 青绿</span>
+      </div>
+      <div class="app">
+        <aside class="side">
+          <div class="nav-item">工作区</div>
+          <div class="nav-item active">批量重命名</div>
+          <div class="nav-item">任务中心</div>
+          <div class="nav-item">日志</div>
+          <div class="nav-item">设置</div>
+        </aside>
+        <main class="content">
+          <h2>批量重命名 · 预览</h2>
+          <div class="sub">12 个文件 · 3 个冲突 · 1 个警告</div>
+          <div class="toolbar">
+            <button class="btn btn-primary">执行计划</button>
+            <button class="btn btn-secondary">取消</button>
+            <span class="link">保存为配方</span>
+          </div>
+          <div class="card">
+            <div class="card-head"><strong>预览差异</strong><span>逐项确认后执行</span></div>
+            <table>
+              <thead><tr><th>原文件名</th><th>新文件名</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr class="selected"><td>合同_01.pdf</td><td>2026_合同_01.pdf</td><td><span class="chip safe">安全</span></td></tr>
+                <tr><td>报表.xlsx</td><td>2026_报表.xlsx</td><td><span class="chip warn">注意</span></td></tr>
+                <tr><td>CON.txt</td><td>2026_CON.txt</td><td><span class="chip danger">危险</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="field">
+            <label>冲突处理</label>
+            <div class="select focus"><span>跳过并报告</span><span>⌄</span></div>
+          </div>
+          <div class="dark-strip"><span class="dark-label">暗色预览</span><span class="dark-btn">执行计划</span></div>
+          <div class="swatches">
+            <div class="swatch" style="--c:#00796B"><div class="color"></div><div class="meta">brand-500<br>#00796B</div></div>
+            <div class="swatch" style="--c:#00665A"><div class="color"></div><div class="meta">brand-600<br>#00665A</div></div>
+            <div class="swatch" style="--c:#E0F2EF"><div class="color"></div><div class="meta">brand-100<br>#E0F2EF</div></div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <section class="panel slate">
+      <div class="panel-head">
+        <span class="brand-dot"></span><span class="brand-name">batchdesk</span>
+        <span class="variant">C 深青灰</span>
+      </div>
+      <div class="app">
+        <aside class="side">
+          <div class="nav-item">工作区</div>
+          <div class="nav-item active">批量重命名</div>
+          <div class="nav-item">任务中心</div>
+          <div class="nav-item">日志</div>
+          <div class="nav-item">设置</div>
+        </aside>
+        <main class="content">
+          <h2>批量重命名 · 预览</h2>
+          <div class="sub">12 个文件 · 3 个冲突 · 1 个警告</div>
+          <div class="toolbar">
+            <button class="btn btn-primary">执行计划</button>
+            <button class="btn btn-secondary">取消</button>
+            <span class="link">保存为配方</span>
+          </div>
+          <div class="card">
+            <div class="card-head"><strong>预览差异</strong><span>逐项确认后执行</span></div>
+            <table>
+              <thead><tr><th>原文件名</th><th>新文件名</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr class="selected"><td>合同_01.pdf</td><td>2026_合同_01.pdf</td><td><span class="chip safe">安全</span></td></tr>
+                <tr><td>报表.xlsx</td><td>2026_报表.xlsx</td><td><span class="chip warn">注意</span></td></tr>
+                <tr><td>CON.txt</td><td>2026_CON.txt</td><td><span class="chip danger">危险</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="field">
+            <label>冲突处理</label>
+            <div class="select focus"><span>跳过并报告</span><span>⌄</span></div>
+          </div>
+          <div class="dark-strip"><span class="dark-label">暗色预览</span><span class="dark-btn">执行计划</span></div>
+          <div class="swatches">
+            <div class="swatch" style="--c:#2F4F4F"><div class="color"></div><div class="meta">brand-500<br>#2F4F4F</div></div>
+            <div class="swatch" style="--c:#263F3F"><div class="color"></div><div class="meta">brand-600<br>#263F3F</div></div>
+            <div class="swatch" style="--c:#E6EDED"><div class="color"></div><div class="meta">brand-100<br>#E6EDED</div></div>
+          </div>
+        </main>
+      </div>
+    </section>
+  </div>
+
+  <div class="footnote">
+    审核要点：① 主按钮/选中行/焦点环是否足够醒目；② 品牌色与“安全/注意/危险”三状态色是否混淆；
+    ③ 暗色预览下白字是否清晰。青绿与安全绿的色相距离较近，需要重点看第 1 行“安全”标签与品牌色是否互相抢眼。
+  </div>
+</body>
+</html>
