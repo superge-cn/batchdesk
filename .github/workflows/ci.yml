@@ -56,7 +56,26 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy（零容忍）
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: |
+          # 失败时把 lint 明细以 ::error:: 注解输出：日志下载需仓库管理权限，
+          # 注解可经 check-runs API 匿名读取，避免"只看到 exit code"。
+          # 新版 stable 可能引入新 lint，而本地工具链版本滞后——注解是唯一
+          # 可靠的定位手段。
+          set +e
+          log="clippy-output.log"
+          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            escape() { printf '%s' "$1" | tr -d '\r' | sed 's/%/%25/g'; }
+            fails=$(grep -E "^error|^warning: .*generated|--> |^note: " "$log" | head -20)
+            if [ -n "$fails" ]; then
+              while IFS= read -r line; do echo "::error::$(escape "$line")"; done <<< "$fails"
+            else
+              msg=$(tail -n 60 "$log" | tr -d '\r' | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error::$msg"
+            fi
+            exit "$status"
+          fi
 
   # ── ② 许可证与漏洞 + SBOM（CONTRIBUTING §1②）────────────────────
   # SBOM 工具已选 cargo-cyclonedx（ADR-0008）；同时覆盖根 workspace 与
