@@ -138,6 +138,86 @@ fn apply_and_undo_restore_files() {
 }
 
 #[test]
+fn apply_skips_entries_changed_between_plan_and_apply() {
+    let dir = TempDir::new();
+    let data = dir.0.join("data");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&data).unwrap();
+    // 同内容三份：earliest 保留最先写入的 a.txt，b/c 进入清理计划
+    fs::write(data.join("a.txt"), b"same-content").unwrap();
+    fs::write(data.join("b.txt"), b"same-content").unwrap();
+    fs::write(data.join("c.txt"), b"same-content").unwrap();
+
+    // 用真实 CLI 生成计划：plan_c09 会写入 expected 内容指纹（设计 01 §5，E2010 的前提）
+    let plan_run = batchdesk(&[
+        "c09",
+        path_text(&data),
+        "--quick-window-bytes",
+        "4",
+        "--plan",
+        "--json",
+    ]);
+    assert!(
+        plan_run.status.success(),
+        "plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan_run.stdout),
+        String::from_utf8_lossy(&plan_run.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&plan_run.stdout).unwrap();
+    assert_eq!(plan["stats"]["total"], 2);
+    for entry in plan["entries"].as_array().unwrap() {
+        assert!(
+            entry["expected"]["hash"].as_str().is_some(),
+            "plan entry must carry a content fingerprint"
+        );
+        assert_eq!(entry["expected"]["algorithm"], "blake3");
+    }
+    fs::write(&plan_path, plan_run.stdout).unwrap();
+
+    // plan→apply 之间篡改两份待清理文件：b.txt 改大小，c.txt 同尺寸改内容
+    fs::write(data.join("b.txt"), b"same-content-longer").unwrap();
+    fs::write(data.join("c.txt"), b"same-contenf").unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    for entry in report["report"]["entries"].as_array().unwrap() {
+        assert_eq!(entry["status"], "skipped");
+        assert_eq!(entry["error"]["code"], "E2010");
+    }
+    // 变更条目保留原位；隔离目录与 Journal 均不产生任何动作
+    assert!(data.join("a.txt").exists());
+    assert!(data.join("b.txt").exists());
+    assert!(data.join("c.txt").exists());
+    if journal_path.exists() {
+        assert_eq!(
+            fs::read_to_string(&journal_path).unwrap().lines().count(),
+            0
+        );
+    }
+    if quarantine.exists() {
+        assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn cleanup_and_undo_respect_retention_window() {
     let dir = TempDir::new();
     let quarantine = dir.0.join("quarantine");
