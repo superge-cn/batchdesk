@@ -456,6 +456,13 @@ pub(crate) fn is_placeholder(_metadata: &fs::Metadata) -> bool {
     false
 }
 
+/// 供 S01 预检使用的占位文件探测（只读元数据，不下载内容）。
+pub fn is_placeholder_file(path: &Path) -> bool {
+    fs::metadata(fs_path(path))
+        .map(|metadata| is_placeholder(&metadata))
+        .unwrap_or(false)
+}
+
 fn mtime(metadata: &fs::Metadata) -> String {
     metadata
         .modified()

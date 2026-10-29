@@ -128,6 +128,35 @@ impl JournalSink for FileJournal {
             plan_id: plan_id.to_string(),
             entry_id: entry_id.to_string(),
             ts: ts.to_string(),
+            plan_kind: None,
+            forward,
+            reverse,
+            status: JournalStatus::Applied,
+        };
+        self.entries.push(entry.clone());
+        if let Err(error) = self.flush() {
+            self.entries.pop();
+            return Err(error);
+        }
+        Ok(entry)
+    }
+
+    fn append_with_kind(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        plan_kind: &str,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> Result<JournalEntry, KernelError> {
+        let seq = self.entries.last().map(|entry| entry.seq).unwrap_or(0) + 1;
+        let entry = JournalEntry {
+            seq,
+            plan_id: plan_id.to_string(),
+            entry_id: entry_id.to_string(),
+            ts: ts.to_string(),
+            plan_kind: Some(plan_kind.to_string()),
             forward,
             reverse,
             status: JournalStatus::Applied,
@@ -230,5 +259,25 @@ mod tests {
         let entries = reopened.entries_for_plan("plan-1").unwrap();
         assert_eq!(entries[0].status, JournalStatus::Applied);
         assert_eq!(entries[1].status, JournalStatus::Reverted);
+    }
+
+    #[test]
+    fn append_with_kind_persists_plan_kind() {
+        let dir = TempDir::new();
+        let path = dir.0.join("journal.jsonl");
+        let mut journal = FileJournal::open(path.clone()).unwrap();
+        journal
+            .append_with_kind(
+                "plan-2",
+                "entry-1",
+                "2026-10-29T00:00:00Z",
+                "c05",
+                rename_op("a", "b"),
+                rename_op("b", "a"),
+            )
+            .unwrap();
+        let reopened = FileJournal::open(path).unwrap();
+        let entries = reopened.entries_for_plan("plan-2").unwrap();
+        assert_eq!(entries[0].plan_kind.as_deref(), Some("c05"));
     }
 }
