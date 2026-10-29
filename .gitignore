@@ -24,6 +24,10 @@ fixtures/bench/*/out/
 /bench-results/
 /criterion/
 
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+
 # ── 编辑器与系统 ────────────────────────────────────────
 .vscode/*
 !.vscode/settings.json
