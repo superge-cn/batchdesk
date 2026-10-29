@@ -5,7 +5,7 @@
 //! `platform`. Apply/undo are synchronous in this slice; task queue/progress
 //! events are the next step.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -13,15 +13,21 @@ use kernel::apply::ApplyOptions;
 use kernel::duplicate::{group_duplicates, DuplicateCandidate, GroupingMode, GroupingOptions};
 use kernel::error::KernelError;
 use kernel::fs::FsAdapter;
-use kernel::plan::{plan_c09, KeepPolicy, PlanAction, PlanC09Input, PlanDocument, PlanFile};
-use kernel::recipe::{
-    migrate_recipe_value, RecipeDocumentV3, RecipeMatch, TemplateStep,
+use kernel::path::ProtectedDir;
+use kernel::plan::{
+    plan_c09, KeepPolicy, PlanAction, PlanC09Input, PlanDocument, PlanFile, PlanResolution,
 };
+use kernel::preflight::{run_preflight, DiskSpaceCheck, PreflightInput, PreflightReport};
+use kernel::recipe::{RecipeDocumentV3, RecipeMatch, TemplateStep};
 use kernel::ui_state::UiState;
-use platform::config_store::{ConfigStore, RecipeList};
+use platform::config_store::ConfigStore;
 use platform::fs::CliFsAdapter;
 use platform::ids::{new_plan_id, new_ulid};
 use platform::journal::FileJournal;
+use platform::preflight::{
+    available_space, is_network_path, long_path_supported, path_check, probe_root, probe_unc,
+    same_volume, DEFAULT_DISK_MARGIN_FLOOR_BYTES, DEFAULT_DISK_MARGIN_RATIO,
+};
 use platform::protected::{make_absolute, protected_dirs_from_strings};
 use platform::retention::{
     cleanup, validate_retention_days, CleanupOutcome, DEFAULT_RETENTION_DAYS,
@@ -33,7 +39,9 @@ use tauri::{Emitter, Manager, State};
 
 mod tasks;
 
-use tasks::{StoredPlan, TaskDetail, TaskPage, TaskPaths, TaskQueue};
+use tasks::{
+    ProtectedSource, RecoveryAction, StoredPlan, TaskDetail, TaskPage, TaskPaths, TaskQueue,
+};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +98,7 @@ fn io_error(error: std::io::Error) -> IpcError {
 struct DataPaths {
     quarantine_dir: PathBuf,
     journal_path: PathBuf,
+    queue_path: PathBuf,
     config_dir: PathBuf,
 }
 
@@ -105,6 +114,7 @@ impl DataPaths {
         Ok(Self {
             quarantine_dir,
             journal_path: base.join("journal.jsonl"),
+            queue_path: base.join("tasks.json"),
             config_dir,
         })
     }
@@ -221,9 +231,12 @@ fn planOperation(
             include_zero_byte,
         },
     );
-    let protected_dirs =
-        protected_dirs_from_strings(params.protected_dirs.as_deref().unwrap_or(&[]))
-            .map_err(IpcError::from)?;
+    let (config_protected, _, _) = security_settings(&state);
+    let (protected_list, protected_source) = match params.protected_dirs.as_deref() {
+        Some(list) => (list.to_vec(), ProtectedSource::Params),
+        None => (config_protected, ProtectedSource::Config),
+    };
+    let protected_dirs = protected_dirs_from_strings(&protected_list).map_err(IpcError::from)?;
     let case_sense = CliFsAdapter::new(None).case_sensitivity();
     let files = outcome
         .files
@@ -268,6 +281,7 @@ fn planOperation(
             plan: plan.clone(),
             protected_dirs,
             case_sense,
+            protected_source,
         },
     );
     Ok(plan)
@@ -286,15 +300,66 @@ fn applyPlan(
     plan_id: String,
     options: Option<ApplyOptions>,
 ) -> Result<TaskHandle, IpcError> {
-    let stored = state
-        .plans
-        .lock()
-        .unwrap()
-        .remove(&plan_id)
-        .ok_or_else(|| IpcError::new("E1001", "plan not found; generate a fresh preview"))?;
+    let stored = {
+        let plans = state.plans.lock().unwrap();
+        plans
+            .get(&plan_id)
+            .cloned()
+            .ok_or_else(|| IpcError::new("E1001", "plan not found; generate a fresh preview"))?
+    };
+    // S02：配置来源的保护名单在 plan→apply 间变化 → 旧预览失效，必须重新预览。
+    if stored.protected_source == ProtectedSource::Config {
+        let (current_list, _, _) = security_settings(&state);
+        let current = protected_dirs_from_strings(&current_list).map_err(IpcError::from)?;
+        if !same_protected_dirs(&stored.protected_dirs, &current) {
+            return Err(IpcError::new(
+                "E1002",
+                "protectedDirs changed after preview; regenerate preview",
+            ));
+        }
+    }
+    // S01：执行前预检；磁盘空间不足整任务阻断，零副作用，且不提供跳过入口。
+    let report = preflight_stored_plan(&state, &stored).map_err(IpcError::from)?;
+    if report.is_task_blocked() {
+        return Err(IpcError {
+            code: "E2004".to_string(),
+            message: "preflight blocked: insufficient disk space".to_string(),
+            detail: serde_json::to_string(&report).ok(),
+            retryable: true,
+            task_id: None,
+        });
+    }
+    state.plans.lock().unwrap().remove(&plan_id);
     let task_id = state
         .tasks
         .enqueue_apply(stored, options.unwrap_or_default());
+    Ok(TaskHandle { task_id })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn preflightPlan(state: State<'_, AppState>, plan_id: String) -> Result<PreflightReport, IpcError> {
+    let stored = {
+        let plans = state.plans.lock().unwrap();
+        plans
+            .get(&plan_id)
+            .cloned()
+            .ok_or_else(|| IpcError::new("E1001", "plan not found; generate a fresh preview"))?
+    };
+    preflight_stored_plan(&state, &stored).map_err(IpcError::from)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn recoverTask(
+    state: State<'_, AppState>,
+    task_id: String,
+    action: RecoveryAction,
+) -> Result<TaskHandle, IpcError> {
+    let task_id = state
+        .tasks
+        .recover(&task_id, action)
+        .map_err(IpcError::from)?;
     Ok(TaskHandle { task_id })
 }
 
@@ -364,6 +429,119 @@ fn config_store(state: &State<'_, AppState>) -> ConfigStore {
     ConfigStore::new(state.paths.config_dir.clone())
 }
 
+/// 读取安全 scope 的生效值；缺失时回落到基线默认（方案 §9.1、§3.3）。
+fn security_settings(state: &State<'_, AppState>) -> (Vec<String>, u64, f64) {
+    let store = config_store(state);
+    match store.load_config() {
+        Ok(load) => {
+            if let Some(warning) = &load.warning {
+                eprintln!("{}: {}", warning.code, warning.message);
+            }
+            let security = load.document.scopes.security.unwrap_or_default();
+            (
+                security.protected_dirs.unwrap_or_default(),
+                security
+                    .disk_space_margin_floor_bytes
+                    .unwrap_or(DEFAULT_DISK_MARGIN_FLOOR_BYTES),
+                security
+                    .disk_space_margin_ratio
+                    .unwrap_or(DEFAULT_DISK_MARGIN_RATIO),
+            )
+        }
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            (
+                Vec::new(),
+                DEFAULT_DISK_MARGIN_FLOOR_BYTES,
+                DEFAULT_DISK_MARGIN_RATIO,
+            )
+        }
+    }
+}
+
+fn same_protected_dirs(left: &[ProtectedDir], right: &[ProtectedDir]) -> bool {
+    let mut left: Vec<(String, Option<String>)> = left
+        .iter()
+        .map(|entry| (entry.literal.clone(), entry.canonical.clone()))
+        .collect();
+    let mut right: Vec<(String, Option<String>)> = right
+        .iter()
+        .map(|entry| (entry.literal.clone(), entry.canonical.clone()))
+        .collect();
+    left.sort();
+    right.sort();
+    left.dedup();
+    right.dedup();
+    left == right
+}
+
+/// S01：采集事实并交给 kernel 纯函数判定；不产生任何写操作。
+fn preflight_stored_plan(
+    state: &State<'_, AppState>,
+    stored: &StoredPlan,
+) -> Result<PreflightReport, KernelError> {
+    let plan = &stored.plan;
+    let mut input = PreflightInput {
+        protected_dirs: stored.protected_dirs.clone(),
+        case_sense: stored.case_sense,
+        ..Default::default()
+    };
+    let long_paths = long_path_supported();
+    let mut unc_roots = BTreeSet::new();
+    if is_network_path(&state.paths.quarantine_dir) {
+        unc_roots.insert(
+            probe_root(&state.paths.quarantine_dir)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+
+    if plan.kind == "c09" {
+        let (_, margin_floor, margin_ratio) = security_settings(state);
+        let mut required = 0u64;
+        for entry in &plan.entries {
+            if entry.blocked.is_some() || entry.resolution == Some(PlanResolution::Skip) {
+                continue;
+            }
+            let size = entry
+                .expected
+                .as_ref()
+                .map(|expected| expected.size)
+                .unwrap_or(0);
+            if !same_volume(Path::new(&entry.source), &state.paths.quarantine_dir) {
+                required = required.saturating_add(size);
+            }
+        }
+        input.disk = Some(DiskSpaceCheck {
+            required_bytes: required,
+            available_bytes: available_space(&state.paths.quarantine_dir)?,
+            temp_peak_bytes: 0,
+            margin_floor_bytes: margin_floor,
+            margin_ratio,
+        });
+    }
+
+    for entry in &plan.entries {
+        if entry.blocked.is_some() || entry.resolution == Some(PlanResolution::Skip) {
+            continue;
+        }
+        let source = Path::new(&entry.source);
+        input.paths.push(path_check(source, long_paths));
+        if let Some(target) = &entry.target {
+            input.paths.push(path_check(Path::new(target), long_paths));
+        }
+        if is_network_path(source) {
+            unc_roots.insert(probe_root(source).to_string_lossy().into_owned());
+        }
+    }
+    for root in unc_roots {
+        if let Some(check) = probe_unc(Path::new(&root)) {
+            input.unc.push(check);
+        }
+    }
+    Ok(run_preflight(&input))
+}
+
 fn to_value<T: Serialize>(value: &T) -> Result<Value, IpcError> {
     serde_json::to_value(value).map_err(|error| IpcError::new("E9001", error.to_string()))
 }
@@ -392,11 +570,7 @@ fn getConfig(state: State<'_, AppState>, scope: Option<String>) -> Result<Value,
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
-fn setConfig(
-    state: State<'_, AppState>,
-    scope: String,
-    patch: Value,
-) -> Result<Value, IpcError> {
+fn setConfig(state: State<'_, AppState>, scope: String, patch: Value) -> Result<Value, IpcError> {
     let store = config_store(&state);
     let mut load = store.load_config().map_err(IpcError::from)?;
     if load.read_only {
@@ -408,7 +582,9 @@ fn setConfig(
     load.document
         .apply_patch(&scope, &patch_object(patch)?)
         .map_err(IpcError::from)?;
-    store.save_config(&mut load.document).map_err(IpcError::from)?;
+    store
+        .save_config(&mut load.document)
+        .map_err(IpcError::from)?;
     to_value(&load.document.scope_view(&scope).map_err(IpcError::from)?)
 }
 
@@ -424,7 +600,9 @@ fn resetScope(state: State<'_, AppState>, scope: String) -> Result<Value, IpcErr
         ));
     }
     load.document.reset_scope(&scope).map_err(IpcError::from)?;
-    store.save_config(&mut load.document).map_err(IpcError::from)?;
+    store
+        .save_config(&mut load.document)
+        .map_err(IpcError::from)?;
     to_value(&load.document.scope_view(&scope).map_err(IpcError::from)?)
 }
 
@@ -449,7 +627,9 @@ fn setUiState(state: State<'_, AppState>, patch: Value) -> Result<UiState, IpcEr
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 fn resetUiState(state: State<'_, AppState>) -> Result<UiState, IpcError> {
-    config_store(&state).reset_ui_state().map_err(IpcError::from)
+    config_store(&state)
+        .reset_ui_state()
+        .map_err(IpcError::from)
 }
 
 #[derive(Debug, Deserialize)]
@@ -493,9 +673,9 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
             pinned: None,
         },
         None => {
-            let kind = input.kind.ok_or_else(|| {
-                IpcError::new("E1001", "saveRecipe requires kind or steps")
-            })?;
+            let kind = input
+                .kind
+                .ok_or_else(|| IpcError::new("E1001", "saveRecipe requires kind or steps"))?;
             let params = input.params_snapshot.unwrap_or_default();
             let mut document =
                 RecipeDocumentV3::from_single_step(recipe_id, input.name, kind, params, created_at);
@@ -558,10 +738,7 @@ struct ExportPayload {
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
-fn exportRecipe(
-    state: State<'_, AppState>,
-    recipe_id: String,
-) -> Result<ExportPayload, IpcError> {
+fn exportRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<ExportPayload, IpcError> {
     let payload = config_store(&state)
         .export_recipe(&recipe_id)
         .map_err(IpcError::from)?;
@@ -570,10 +747,7 @@ fn exportRecipe(
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
-fn importRecipe(
-    state: State<'_, AppState>,
-    payload: String,
-) -> Result<RecipeDocumentV3, IpcError> {
+fn importRecipe(state: State<'_, AppState>, payload: String) -> Result<RecipeDocumentV3, IpcError> {
     // 导入即低版本迁移、高版本 E1007；导入后必须重新预览（不变量 13）。
     config_store(&state)
         .import_recipe(&payload)
@@ -616,6 +790,7 @@ pub fn run() {
                 TaskPaths {
                     quarantine_dir: paths.quarantine_dir.clone(),
                     journal_path: paths.journal_path.clone(),
+                    queue_path: paths.queue_path.clone(),
                 },
                 Arc::new(move |event, payload| {
                     if let Err(error) = handle.emit(event, payload) {
@@ -631,6 +806,8 @@ pub fn run() {
             getStorageInfo,
             planOperation,
             applyPlan,
+            preflightPlan,
+            recoverTask,
             undoPlan,
             cancelTask,
             pauseTask,
@@ -653,4 +830,32 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run BatchDesk desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protected_snapshot_comparison_ignores_order_and_duplicates() {
+        let left = vec![ProtectedDir::new("/a"), ProtectedDir::new("/b")];
+        let right = vec![
+            ProtectedDir::new("/b"),
+            ProtectedDir::new("/a"),
+            ProtectedDir::new("/a"),
+        ];
+        assert!(same_protected_dirs(&left, &right));
+        assert!(!same_protected_dirs(&left, &[ProtectedDir::new("/a")]));
+        assert!(!same_protected_dirs(
+            &left,
+            &[ProtectedDir::new("/a"), ProtectedDir::new("/c")]
+        ));
+    }
+
+    #[test]
+    fn protected_snapshot_comparison_sees_canonical_changes() {
+        let left = vec![ProtectedDir::with_canonical("/a", Some("/real/a".into()))];
+        let right = vec![ProtectedDir::with_canonical("/a", Some("/real/b".into()))];
+        assert!(!same_protected_dirs(&left, &right));
+    }
 }
