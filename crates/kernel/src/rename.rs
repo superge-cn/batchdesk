@@ -115,11 +115,9 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
     let mut mappings = Vec::new();
     let mut blocked_items = Vec::new();
     let mut no_change = Vec::new();
-    let mut source_keys = BTreeSet::new();
 
     for item in &input.items {
         let source_key = conflict_key(&item.path, input.case_sense);
-        source_keys.insert(source_key.clone());
         let target_name = match apply_rule(&item.name, &input.rule) {
             Ok(name) => name,
             Err(reason) => {
@@ -176,19 +174,24 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
     let mut existing_effective: BTreeSet<String> = input
         .existing_targets
         .iter()
-        .map(|path| conflict_key(path, input.case_sense))
+        .map(|path| crate::path::normalize(path))
         .collect();
-    for key in &moving_sources {
-        existing_effective.remove(key);
-    }
-    for key in &source_keys {
-        if !moving_sources.contains(key) {
-            existing_effective.insert(key.clone());
+    existing_effective
+        .retain(|path| !moving_sources.contains(&conflict_key(path, input.case_sense)));
+    for item in &input.items {
+        let key = conflict_key(&item.path, input.case_sense);
+        if !moving_sources.contains(&key) {
+            existing_effective.insert(crate::path::normalize(&item.path));
         }
     }
     let pairs: Vec<(String, String)> = mappings
         .iter()
-        .map(|mapping| (mapping.source.clone(), mapping.target.clone()))
+        .map(|mapping| {
+            (
+                crate::path::normalize(&mapping.source),
+                crate::path::normalize(&mapping.target),
+            )
+        })
         .collect();
     let scan = scan_conflicts(&pairs, &existing_effective, input.case_sense);
 
@@ -593,6 +596,65 @@ mod tests {
         assert_eq!(plan.entries.len(), 2);
         assert_eq!(plan.entries[0].target.as_deref(), Some("/data/new_a.txt"));
         assert_eq!(plan.params["twoPhase"], PlanParamValue::Bool(false));
+    }
+
+    #[test]
+    fn existing_target_conflict_is_detected_on_case_insensitive_hosts() {
+        let plan = plan_f12(PlanF12Input {
+            case_sense: CaseSense::CaseInsensitive,
+            existing_targets: vec!["/data/a.txt".to_string(), "/data/x.txt".to_string()],
+            ..input(
+                vec![item("a.txt"), item("x.txt")],
+                PlanF12Rule {
+                    prefix: None,
+                    suffix: None,
+                    find: Some("a".to_string()),
+                    replace: "x".to_string(),
+                    scope: RenameScope::Full,
+                },
+            )
+        })
+        .unwrap();
+        assert!(plan.entries.iter().any(|entry| {
+            entry
+                .conflict
+                .as_ref()
+                .map(|conflict| conflict.kind.as_str())
+                == Some("existing-target")
+        }));
+    }
+
+    #[test]
+    fn windows_style_targets_still_match_existing_conflicts() {
+        let plan = plan_f12(PlanF12Input {
+            case_sense: CaseSense::CaseInsensitive,
+            existing_targets: vec![r"C:\data\a.txt".to_string(), r"C:\data\x.txt".to_string()],
+            ..input(
+                vec![
+                    PlanF12Item {
+                        path: r"C:\data\a.txt".to_string(),
+                        name: "a.txt".to_string(),
+                    },
+                    PlanF12Item {
+                        path: r"C:\data\x.txt".to_string(),
+                        name: "x.txt".to_string(),
+                    },
+                ],
+                PlanF12Rule {
+                    prefix: None,
+                    suffix: None,
+                    find: Some("a".to_string()),
+                    replace: "x".to_string(),
+                    scope: RenameScope::Full,
+                },
+            )
+        })
+        .unwrap();
+        assert!(plan.entries.iter().any(|entry| entry
+            .conflict
+            .as_ref()
+            .map(|conflict| conflict.kind.as_str())
+            == Some("existing-target")));
     }
 
     #[test]
