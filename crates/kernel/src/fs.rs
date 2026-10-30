@@ -117,6 +117,28 @@ pub trait FsAdapter: Send + Sync {
             false,
         ))
     }
+    /// 从源文件的字节区间 `[start, end)` 流式写入目标（临时文件＋原子改名）。
+    ///
+    /// F01 分片专用：适配层按固定块流式复制，不得整文件读入内存
+    /// （方案 §4.8/§5.1）。目标冲突按 `policy` 处理（`Sequence` 由调用方
+    /// 预先解析成具体路径，适配层只接受 `Skip`/`Overwrite`）。
+    /// 适配层不支持时返回 E5001，调用方按契约拒绝该动作，不静默降级。
+    fn copy_range_atomic(
+        &self,
+        _source: &str,
+        _start: u64,
+        _end: u64,
+        _target: &str,
+        _policy: ConflictPolicy,
+    ) -> Result<PathOutcome, KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "range copy is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+
     /// 在隔离目录内为目标文件名预留一个不存在的新路径（不创建文件）。
     ///
     /// 设计 01 §8：新建产物（无原始内容可备份）的撤销语义是"产物进隔离目录"，

@@ -11,10 +11,10 @@ K07	partial	疑似混合编码不被修复：needs_manual=true，plan_c01 产出
 K08	partial	detect 判定 UTF-16LE+BOM；转码 UTF-8 替换计数 0、6 行	分片后每片写 BOM 属 F05 输出策略，未实现
 T01	pending	—	需 RFC 4180 流式解析器（F05），当前 kernel 无 CSV 结构层
 T02	pending	—	引号内真实换行需 CSV 解析器（F05）
-T03	pending	—	超长行计数已由 platform::text::stream_segments 提供，未接入 plan 告警
+T03	asserted	plan_f01 产出 overlong-line-single-part 警告；超长行独占一片（part 2，size > target）	—
 T04	pending	—	列数不一致报告需 CSV 解析器（F05）
-T05	pending	—	空文件处理路径待 F01/C01 接线
-T06	pending	—	无换行信号已由 platform::text 提供，未接入 plan 告警
+T05	asserted	plan_f01 对空文件返回 0 条目＋empty-file 警告	—
+T06	asserted	plan_f01 产出 no-newline-hard-cut 警告；分片数=ceil(size/target) 且全部标注硬切	—
 T07	pending	—	无表头判定属 F05
 T08	pending	—	重复列名与首尾空白规范化属 F05
 R01	pending	—	长路径分级已在 preflight；语料为路径串样本，缺 plan 级断言入口

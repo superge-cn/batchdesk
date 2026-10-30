@@ -65,3 +65,4 @@
 | [0012](./0012-Windows文件身份改用WinAPI.md) | Windows 文件身份改用 WinAPI（windows-sys） | 已采纳 |
 | [0013](./0013-C17a操作日志存储选型rusqlite.md) | C17a 操作日志存储选用 rusqlite（bundled）＋user_version 迁移 | 已采纳 |
 | [0014](./0014-编码检测管道选型.md) | 编码检测管道选用 chardetng＋encoding_rs，零阈值置信规则 | 已采纳 |
+| [0015](./0015-F01分片计划与撤销语义.md) | F01 分片计划与撤销语义（split 动作＋range＋流式区间复制） | 已采纳 |

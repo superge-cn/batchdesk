@@ -266,6 +266,28 @@ where
     Ok(summary)
 }
 
+/// F01 分片布局：流式扫描全文件，逐行驱动 kernel 的纯分片累加器。
+///
+/// 只保留分片边界（内存 O(分片数)），不缓存文件内容（方案 §5.1）。
+pub fn split_layout(path: &Path, target_bytes: u64) -> io::Result<kernel::split::SplitLayout> {
+    let file_size = File::open(fs_path(path))?.metadata()?.len();
+    let mut accumulator = kernel::split::SplitAccumulator::new(target_bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
+    let mut line_bytes = 0u64;
+    stream_segments(path, None, |segment| {
+        line_bytes += segment.bytes.len() as u64;
+        if segment.ends_line {
+            accumulator.push_line(line_bytes, true);
+            line_bytes = 0;
+        }
+        StreamFlow::Continue
+    })?;
+    if line_bytes > 0 {
+        accumulator.push_line(line_bytes, false);
+    }
+    Ok(accumulator.finish(file_size))
+}
+
 fn overlong(threshold: Option<u64>, line_bytes: u64) -> u64 {
     match threshold {
         Some(limit) if line_bytes > limit => 1,

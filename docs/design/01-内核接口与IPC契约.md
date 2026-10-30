@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.7（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords 与 §8 reverse 推导规则） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.8（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -307,8 +307,8 @@ interface PlanEntry {
   source: string;
   target?: string;           // 无目标动作（如删除→隔离）可省
   action: "rename" | "move" | "copy" | "archive" | "extract" | "create-dir"
-        | "transcode" | "edit-content" | "delete";
-                             // extract=解压产物（C10）、create-dir=建目录（F11）；追加式枚举，只增不改
+        | "transcode" | "edit-content" | "delete" | "split";
+                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01）；追加式枚举，只增不改
   relation?: PlanRelation;   // 1:N / N:1 分组（拆分/合并/压缩解压），见下方语义
   reason: string;            // 预览面板展示（§6.4）
   conflict?: ConflictInfo;   // §5.13 三类冲突，预览期全部暴露；默认处置=跳过（不变量 7）
@@ -318,6 +318,10 @@ interface PlanEntry {
                              // 预检判定不可执行（如 §5.13 长路径分级）；apply 时记 skipped，不报错
   expected?: { size: number; algorithm: string; hash?: string };
                              // plan 期内容指纹；apply 前复核，变化记 skipped + E2010
+                             // split 条目：size=该分片输出字节数，algorithm="byte-range"，hash 省略
+  range?: { start: number; end: number };
+                             // 追加式可选字段：分片在源文件中的字节区间（左闭右开），仅 split 使用；
+                             // apply 复核 range.end ≤ 源文件当前大小，否则 skipped + E2010
 }
 interface PlanRelation {
   groupId: string;           // 同一逻辑操作组（ULID）：1:N 的全部输出分片、N:1 的全部输入共享同组
@@ -420,7 +424,7 @@ interface JournalEntry {
 - **备份与 `dataRef`**：`overwrite` 与 `quarantine` 类动作的 `reverse` 需要原始内容——apply 期先把原文件/原内容落为备份文件（隔离目录内，经 FsAdapter），Journal 的 `dataRef` 指向备份路径；无备份需求的动作（如纯 rename 的 reverse 是逆 rename）`dataRef` 省略。
 - **备份生命周期**：备份在撤销窗口内保留，窗口长度引用方案 §7.8 的"剩余可撤销时间"呈现与 §9.6 日志保留策略，本文不设数值；Journal 关账（窗口过期或用户确认不再撤销）后，备份随任务日志清理批次一并删除，备份清理动作本身不记 Journal（不可撤销，删除走隔离目录机制，不变量 7）。
 - Journal 文件与 SQLite 任务日志（§4.4/§9.6）并存：Journal 管"怎么撤"，任务日志管"发生了什么"。
-- **reverse 推导规则（v1.7，覆盖 `copy` 与内容写回）**：`rename`/`move`/`quarantine` 的逆由 `FsOp::inverse` 规范推导（逆改名/改名还原）；`copy` 新建目标的逆是**产物进隔离目录**（reverse=`Quarantine{from: 产物, to: 适配层预留路径}`，方案 §4.5 删除一律进隔离目录）；`copy` 覆盖与 `write_atomic` 先经 FsAdapter `backup_to_quarantine` 备份原内容（`dataRef`），逆是 `WriteAtomic{path, dataRef}` 备份还原；新建产物（无原始内容）的 forward `dataRef` 省略。执行侧由共享的 `execute_reverse` 按字面执行三类 reverse（撤销任务与执行中取消回滚同一实现，执行期不发明新操作）。
+- **reverse 推导规则（v1.7，覆盖 `copy` 与内容写回；v1.8 追加 `split`）**：`rename`/`move`/`quarantine` 的逆由 `FsOp::inverse` 规范推导（逆改名/改名还原）；`copy` 新建目标的逆是**产物进隔离目录**（reverse=`Quarantine{from: 产物, to: 适配层预留路径}`，方案 §4.5 删除一律进隔离目录）；`copy` 覆盖与 `write_atomic` 先经 FsAdapter `backup_to_quarantine` 备份原内容（`dataRef`），逆是 `WriteAtomic{path, dataRef}` 备份还原；新建产物（无原始内容）的 forward `dataRef` 省略。`split` 新建分片与 `copy` 新建同规则：forward=`WriteAtomic{path, dataRef 省略}`、reverse=`Quarantine`；分片为覆盖时按 `copy` 覆盖流程备份还原。执行侧由共享的 `execute_reverse` 按字面执行三类 reverse（撤销任务与执行中取消回滚同一实现，执行期不发明新操作）。
 
 ## 9. 版本与兼容
 
@@ -449,3 +453,4 @@ interface JournalEntry {
 | v1.5 | 2026-10-30 | `retryTask` 实现语义定稿（仅失败条目、新 taskId 引用原 planId、Journal 幂等排除、undo 不可重试）；§3.2 节流行标注壳层合帧已实现（窗口取方案 §9.1 区间下限）；LicenseService 注入口收敛为壳层装配点（方案 13.8）。 |
 | v1.6 | 2026-10-30 | §4.4.1 `CleanupOutcome` 追加可选字段 `removedLogRecords`（C17a 操作日志随保留期清理，ADR-0013；只增不改）。 |
 | v1.7 | 2026-10-30 | §8 追加 reverse 推导规则：copy 新建目标逆为产物进隔离目录（reverse=Quarantine）、copy 覆盖与 write_atomic 逆为 dataRef 备份还原、新建产物 forward 的 `dataRef` 省略（对齐既定契约字面）；`copy`/`edit-content` 纳入通用执行器，回滚统一走共享 `execute_reverse`。 |
+| v1.8 | 2026-10-30 | §5 追加 `split` 动作与可选 `range{start,end}`（F01 1:N 分片，追加式）；§8 明确 split 新建分片 reverse=Quarantine、覆盖按 copy 流程备份还原；split 的 `expected.size` 为分片输出长度（algorithm="byte-range"）。决策见 [ADR-0015](../adr/0015-F01分片计划与撤销语义.md)。 |

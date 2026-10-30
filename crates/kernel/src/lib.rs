@@ -20,6 +20,7 @@ pub mod plan;
 pub mod preflight;
 pub mod progress;
 pub mod recipe;
+pub mod split;
 pub mod ui_state;
 
 /// 引擎版本，供 IPC 握手与诊断使用（契约见 docs/design/01-内核接口与IPC契约.md §9 第 1 条）。

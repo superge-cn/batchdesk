@@ -67,7 +67,8 @@ pub fn apply_generic_plan(
             | PlanAction::Move
             | PlanAction::Delete
             | PlanAction::Copy
-            | PlanAction::EditContent => {}
+            | PlanAction::EditContent
+            | PlanAction::Split => {}
             other => {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries need a dedicated executor",
@@ -86,11 +87,26 @@ pub fn apply_generic_plan(
                     "edit-content entries edit in place and must not have a target",
                 ))
             }
-            PlanAction::Rename | PlanAction::Move | PlanAction::Copy if entry.target.is_none() => {
+            PlanAction::Rename | PlanAction::Move | PlanAction::Copy | PlanAction::Split
+                if entry.target.is_none() =>
+            {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries require a target",
                     entry.action.as_str()
                 )))
+            }
+            PlanAction::Split if entry.range.is_none() => {
+                return Err(KernelError::invalid_params(
+                    "split entries require a byte range",
+                ))
+            }
+            PlanAction::Split => {
+                let range = entry.range.expect("checked above");
+                if range.start >= range.end {
+                    return Err(KernelError::invalid_params(
+                        "split byte range must be non-empty",
+                    ));
+                }
             }
             _ => {}
         }
@@ -223,6 +239,22 @@ pub fn apply_generic_plan(
             reports.push(skipped_entry(entry.entry_id.clone(), error));
             continue;
         }
+        if entry.action == PlanAction::Split {
+            if let Some(range) = entry.range {
+                if range.end > stat.size {
+                    reports.push(skipped_entry(
+                        entry.entry_id.clone(),
+                        KernelError::new(
+                            "E2010",
+                            "source file shrank since plan preview; re-plan before applying",
+                            None,
+                            true,
+                        ),
+                    ));
+                    continue;
+                }
+            }
+        }
 
         let decision = match &entry.target {
             Some(target) => match resolve_target(entry, target, options, context) {
@@ -245,7 +277,7 @@ pub fn apply_generic_plan(
         };
         if matches!(
             entry.action,
-            PlanAction::Rename | PlanAction::Move | PlanAction::Copy
+            PlanAction::Rename | PlanAction::Move | PlanAction::Copy | PlanAction::Split
         ) {
             if let Some(error) = protected_target_hit(context, &target) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
@@ -500,6 +532,47 @@ fn perform(
                     reverse,
                 })
             }
+            PlanAction::Split => {
+                let target = target.expect("validated: split requires a target");
+                let range = entry
+                    .range
+                    .ok_or_else(|| KernelError::invalid_params("split entries require a range"))?;
+                let backup = if overwrite {
+                    Some(context.fs.backup_to_quarantine(target)?)
+                } else {
+                    None
+                };
+                let outcome = context.fs.copy_range_atomic(
+                    &entry.source,
+                    range.start,
+                    range.end,
+                    target,
+                    policy,
+                )?;
+                let final_path = outcome.final_path.clone();
+                let reverse = match backup {
+                    Some(backup) => FsOp::WriteAtomic {
+                        path: final_path.clone(),
+                        data_ref: Some(backup),
+                    },
+                    None => FsOp::Quarantine {
+                        from: final_path.clone(),
+                        to: context
+                            .fs
+                            .quarantine_target_path(&file_name_of(&final_path))?,
+                    },
+                };
+                Ok(Performed {
+                    skipped: outcome.outcome == PathOutcomeKind::Skipped,
+                    replaced: outcome.outcome == PathOutcomeKind::Replaced,
+                    final_path: final_path.clone(),
+                    forward: FsOp::WriteAtomic {
+                        path: final_path,
+                        data_ref: None,
+                    },
+                    reverse,
+                })
+            }
             PlanAction::EditContent => {
                 // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。
                 let backup = context.fs.backup_to_quarantine(&entry.source)?;
@@ -584,6 +657,10 @@ fn fingerprint_mismatch(
     entry: &crate::plan::PlanEntry,
     size: u64,
 ) -> Option<KernelError> {
+    // split 的 `expected.size` 是分片输出长度而非源文件大小，按区间单独复核。
+    if entry.action == PlanAction::Split {
+        return None;
+    }
     let expected = entry.expected.as_ref()?;
     if size != expected.size {
         return Some(KernelError::new(
@@ -712,6 +789,7 @@ mod tests {
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
     use crate::plan::{PlanEntry, PlanExpected, PlanStats};
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
+    use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
@@ -839,6 +917,48 @@ mod tests {
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
             self.rename(from, to, policy)
+        }
+
+        fn copy_range_atomic(
+            &self,
+            source: &str,
+            start: u64,
+            end: u64,
+            target: &str,
+            policy: ConflictPolicy,
+        ) -> Result<PathOutcome, KernelError> {
+            let mut files = self.files.lock().unwrap();
+            let data = files
+                .get(source)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            if start >= end || end > data.len() as u64 {
+                return Err(KernelError::new(
+                    "E2010",
+                    "range is out of bounds",
+                    None,
+                    false,
+                ));
+            }
+            let slice = data[start as usize..end as usize].to_vec();
+            if files.contains_key(target) {
+                if policy != ConflictPolicy::Overwrite {
+                    return Ok(PathOutcome {
+                        outcome: PathOutcomeKind::Skipped,
+                        final_path: target.to_string(),
+                    });
+                }
+                files.insert(target.to_string(), slice);
+                return Ok(PathOutcome {
+                    outcome: PathOutcomeKind::Replaced,
+                    final_path: target.to_string(),
+                });
+            }
+            files.insert(target.to_string(), slice);
+            Ok(PathOutcome {
+                outcome: PathOutcomeKind::Applied,
+                final_path: target.to_string(),
+            })
         }
 
         fn backup_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
@@ -1019,6 +1139,7 @@ mod tests {
             resolution: None,
             blocked: None,
             expected: None,
+            range: None,
         }
     }
 
@@ -1109,6 +1230,67 @@ mod tests {
             journal.entries[1].forward,
             FsOp::Quarantine { .. }
         ));
+    }
+
+    #[test]
+    fn split_plan_writes_line_aligned_parts_and_undo_quarantines_them() {
+        let fs = TestFs::default();
+        fs.write_file("/data/big.txt", b"aaa\nbbb\nccc\n");
+        let mut accumulator = SplitAccumulator::new(6).unwrap();
+        for _ in 0..3 {
+            accumulator.push_line(4, true);
+        }
+        let layout = accumulator.finish(12);
+        let plan = plan_f01(PlanF01Input {
+            plan_id: PLAN_ID.to_string(),
+            target_bytes: 6,
+            output_dir: "/out".to_string(),
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            existing_targets: Vec::new(),
+            files: vec![PlanF01File {
+                path: "/data/big.txt".to_string(),
+                canonical_path: None,
+                group_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+                layout,
+            }],
+        })
+        .unwrap();
+
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(outcome.report.entries.len(), 2);
+        assert_eq!(fs.read_file("/out/big.1.txt"), b"aaa\nbbb\n");
+        assert_eq!(fs.read_file("/out/big.2.txt"), b"ccc\n");
+        assert_eq!(journal.entries.len(), 2);
+        assert!(matches!(
+            &journal.entries[0].forward,
+            FsOp::WriteAtomic { path, data_ref: None } if path == "/out/big.1.txt"
+        ));
+        assert!(matches!(
+            &journal.entries[0].reverse,
+            FsOp::Quarantine { from, .. } if from == "/out/big.1.txt"
+        ));
+
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 2);
+        assert!(!fs.exists("/out/big.1.txt"), "undo quarantines the part");
+        assert!(!fs.exists("/out/big.2.txt"), "undo quarantines the part");
+        assert!(fs.exists("/data/big.txt"), "split keeps the source");
     }
 
     #[test]

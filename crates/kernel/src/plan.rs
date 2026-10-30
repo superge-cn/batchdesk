@@ -99,6 +99,8 @@ pub enum PlanAction {
     Transcode,
     EditContent,
     Delete,
+    /// F01 文本分片产物（1:N，每个分片一条 entry；方案 §5.1、设计 01 §5）。
+    Split,
 }
 
 impl PlanAction {
@@ -113,6 +115,7 @@ impl PlanAction {
             Self::Transcode => "transcode",
             Self::EditContent => "edit-content",
             Self::Delete => "delete",
+            Self::Split => "split",
         }
     }
 }
@@ -189,6 +192,13 @@ pub struct PlanExpected {
     pub hash: Option<String>,
 }
 
+/// F01 分片在源文件中的字节区间（左闭右开；仅 `split` 动作使用）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanRange {
+    pub start: u64,
+    pub end: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
@@ -208,6 +218,9 @@ pub struct PlanEntry {
     pub blocked: Option<PlanBlocked>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected: Option<PlanExpected>,
+    /// 追加式可选字段：分片产物的源字节区间（仅 `split` 动作使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<PlanRange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,6 +387,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                     algorithm: input.hash_algorithm.clone(),
                     hash: member.full_hash.as_deref().map(hex_encode),
                 }),
+                range: None,
             });
         }
     }
@@ -583,6 +597,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
                 algorithm: "size".to_string(),
                 hash: None,
             }),
+            range: None,
         });
     }
 
@@ -704,7 +719,7 @@ fn path_len(file: &PlanFile) -> usize {
     file.path.chars().count()
 }
 
-fn is_ulid(value: &str) -> bool {
+pub(crate) fn is_ulid(value: &str) -> bool {
     value.len() == 26
         && value.as_bytes()[0] <= b'7'
         && value.bytes().all(|byte| CROCKFORD.contains(&byte))

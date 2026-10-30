@@ -945,6 +945,7 @@ mod tests {
             resolution: None,
             blocked: None,
             expected: None,
+            range: None,
         }
     }
 

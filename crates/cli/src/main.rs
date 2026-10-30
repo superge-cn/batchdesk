@@ -23,6 +23,7 @@ use kernel::license::AlwaysAllowLicense;
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
 };
+use kernel::split::{plan_f01, PlanF01File, PlanF01Input};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -31,7 +32,7 @@ use platform::retention::{
     cleanup, validate_retention_days, CleanupOutcome, DEFAULT_RETENTION_DAYS,
 };
 use platform::scan::{scan_path, ScanMode, ScanOptions, ScanOutcome};
-use platform::text::{sample_bytes, SampleSpec};
+use platform::text::{sample_bytes, split_layout, SampleSpec};
 
 const USAGE: &str = "usage:
   batchdesk c09 <path> [--mode full|fast] [--quick-window-bytes N]
@@ -41,6 +42,8 @@ const USAGE: &str = "usage:
                 --sample-window <bytes> --sample-blocks <n>
                 [--source <encoding>] [--invalid replace-and-count|abort]
                 [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
@@ -69,9 +72,17 @@ c01 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
+f01 options:
+  --file PATH             repeatable source text file
+  --target-bytes N        target part size in bytes (no fixed minimum; §5.1)
+  --output-dir DIR        directory for generated parts
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --json                  machine-readable plan output
+
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place (backup in quarantine, undo restores from the Journal);
+  f01 entries write line-aligned parts (undo moves the parts into quarantine);
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -103,6 +114,9 @@ fn main() {
     }
     if args[1] == "c01" {
         std::process::exit(run_c01(&args));
+    }
+    if args[1] == "f01" {
+        std::process::exit(run_f01(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -640,6 +654,158 @@ fn run_c01(args: &[String]) -> i32 {
         files: plan_files,
     };
     match plan_c01(input) {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f01(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut target_bytes = None;
+    let mut output_dir = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--target-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target-bytes requires a byte count");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => target_bytes = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --target-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f01 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: f01 requires at least one --file <path>");
+    }
+    let Some(target_bytes) = target_bytes else {
+        return input_error("E1001: f01 requires --target-bytes <n>");
+    };
+    let Some(output_dir) = output_dir else {
+        return input_error("E1001: f01 requires --output-dir <dir>");
+    };
+    let output_dir = make_absolute(&output_dir);
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    let mut existing_targets = Vec::new();
+    for path in &files {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: f01 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let layout = match split_layout(&absolute, target_bytes) {
+            Ok(layout) => layout,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot scan file for split layout ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let file_name = absolute
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file");
+        let total = layout.spans.len() as u32;
+        for span in &layout.spans {
+            let target = output_dir.join(kernel::split::shard_name(file_name, span.index, total));
+            if target.exists() {
+                existing_targets.push(target.to_string_lossy().into_owned());
+            }
+        }
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanF01File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            group_id: new_ulid("f01"),
+            layout,
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f01"));
+    let input = PlanF01Input {
+        plan_id,
+        target_bytes,
+        output_dir: output_dir.to_string_lossy().into_owned(),
+        protected_dirs,
+        case_sense,
+        existing_targets,
+        files: plan_files,
+    };
+    match plan_f01(input) {
         Ok(plan) => {
             if json {
                 print_plan_json(&plan);

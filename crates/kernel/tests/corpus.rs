@@ -15,7 +15,8 @@ use kernel::encoding::{
     TargetEncoding,
 };
 use kernel::fs::CaseSense;
-use kernel::plan::{plan_c01, PlanC01File, PlanC01Input};
+use kernel::plan::{plan_c01, PlanC01File, PlanC01Input, PlanDocument};
+use kernel::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator, SplitLayout};
 
 /// 台账：`assertions.tsv` 是"哪条语料断言到什么程度"的唯一登记处。
 const TABLE: &str = include_str!("assertions.tsv");
@@ -64,6 +65,40 @@ fn blocked_code(corpus: &str, sample: &[u8]) -> Option<String> {
         .map(|blocked| blocked.code.clone())
 }
 
+/// 按 `\n` 逐行喂入纯分片累加器（测试侧 I/O，kernel 不读盘）。
+fn split_layout_of(data: &[u8], target: u64) -> SplitLayout {
+    let mut accumulator = SplitAccumulator::new(target).expect("target bytes");
+    let mut line_start = 0usize;
+    for (index, byte) in data.iter().enumerate() {
+        if *byte == b'\n' {
+            accumulator.push_line((index + 1 - line_start) as u64, true);
+            line_start = index + 1;
+        }
+    }
+    if line_start < data.len() {
+        accumulator.push_line((data.len() - line_start) as u64, false);
+    }
+    accumulator.finish(data.len() as u64)
+}
+
+fn f01_plan(data: &[u8], target: u64, path: &str) -> PlanDocument {
+    plan_f01(PlanF01Input {
+        plan_id: PLAN_ID.to_string(),
+        target_bytes: target,
+        output_dir: "/corpus/out".to_string(),
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        existing_targets: Vec::new(),
+        files: vec![PlanF01File {
+            path: path.to_string(),
+            canonical_path: None,
+            group_id: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9".to_string(),
+            layout: split_layout_of(data, target),
+        }],
+    })
+    .expect("plan_f01 生成计划")
+}
+
 fn assert_utf8_lines(text: &str, expected_lines: usize, columns: usize) {
     assert!(!text.contains('\u{FFFD}'), "转码后不得出现替换字符");
     let lines: Vec<&str> = text.lines().collect();
@@ -71,6 +106,55 @@ fn assert_utf8_lines(text: &str, expected_lines: usize, columns: usize) {
     for (index, line) in lines.iter().enumerate() {
         assert_eq!(line.split(',').count(), columns, "第 {} 行列数", index + 1);
     }
+}
+
+#[test]
+fn t03_overlong_line_occupies_its_own_part_and_is_flagged() {
+    let data = sample("T03", "T03.csv");
+    let plan = f01_plan(&data, 1024 * 1024, "/corpus/T03.csv");
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|warning| warning.kind == "overlong-line-single-part"),
+        "超长行必须显著标注"
+    );
+    let overlong = plan
+        .entries
+        .iter()
+        .find(|entry| entry.reason.contains("overlong line"))
+        .expect("必须存在超长行独占的分片");
+    assert_eq!(overlong.relation.as_ref().unwrap().part_index, Some(2));
+    assert!(overlong.expected.as_ref().unwrap().size > 1024 * 1024);
+}
+
+#[test]
+fn t06_no_newline_file_is_hard_cut_with_warning() {
+    let data = sample("T06", "T06.txt");
+    let target = 1024 * 1024u64;
+    let plan = f01_plan(&data, target, "/corpus/T06.txt");
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|warning| warning.kind == "no-newline-hard-cut"),
+        "无换行必须告警"
+    );
+    let expected_parts =
+        data.len() as u64 / target + u64::from(!(data.len() as u64).is_multiple_of(target));
+    assert_eq!(plan.entries.len() as u64, expected_parts);
+    assert!(plan
+        .entries
+        .iter()
+        .all(|entry| entry.reason.contains("hard byte cut")));
+}
+
+#[test]
+fn t05_empty_file_is_reported_without_parts() {
+    let data = sample("T05", "T05.csv");
+    assert!(data.is_empty());
+    let plan = f01_plan(&data, 1024 * 1024, "/corpus/T05.csv");
+    assert!(plan.entries.is_empty(), "空文件不得产生分片");
+    assert_eq!(plan.warnings.len(), 1);
+    assert_eq!(plan.warnings[0].kind, "empty-file");
 }
 
 #[test]

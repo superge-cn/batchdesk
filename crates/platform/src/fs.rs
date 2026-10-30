@@ -1,7 +1,7 @@
 //! std::fs implementation of the kernel `FsAdapter` port for the CLI slice.
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -214,6 +214,82 @@ impl FsAdapter for CliFsAdapter {
                 PathOutcomeKind::Applied
             },
             final_path: strip_extended_path(&target.to_string_lossy()),
+        })
+    }
+
+    fn copy_range_atomic(
+        &self,
+        source: &str,
+        start: u64,
+        end: u64,
+        target: &str,
+        policy: ConflictPolicy,
+    ) -> Result<PathOutcome, KernelError> {
+        if start >= end {
+            return Err(KernelError::new(
+                "E1002",
+                "split range must be non-empty",
+                None,
+                false,
+            ));
+        }
+        let from = fs_path(Path::new(source));
+        let allocated = fs::metadata(&from)
+            .map_err(|error| io_error(&error, Path::new(source)))?
+            .len();
+        if end > allocated {
+            return Err(KernelError::new(
+                "E2010",
+                "source file shrank since planning; re-plan before applying",
+                Some(format!(
+                    "{} has {allocated} bytes, part needs up to {end}",
+                    source
+                )),
+                true,
+            ));
+        }
+        let Some(destination) =
+            self.resolve_target(Path::new(source), Path::new(target), policy)?
+        else {
+            return Ok(PathOutcome {
+                outcome: PathOutcomeKind::Skipped,
+                final_path: target.to_string(),
+            });
+        };
+        let replaced = path_exists(&destination);
+        let destination = fs_path(&destination);
+        let parent = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| {
+                KernelError::new("E1003", "target has no parent directory", None, false)
+            })?;
+        fs::create_dir_all(parent).map_err(|error| io_error(&error, parent))?;
+        let temp = parent.join(format!(
+            ".batchdesk-split-{}-{}",
+            std::process::id(),
+            self.next_id()
+        ));
+        let copied = copy_range_stream(&from, start, end, &temp);
+        if let Err(error) = copied {
+            let _ = fs::remove_file(&temp);
+            return Err(io_error(&error, &destination));
+        }
+        #[cfg(windows)]
+        if destination.exists() {
+            fs::remove_file(&destination).map_err(|error| io_error(&error, &destination))?;
+        }
+        if let Err(error) = fs::rename(&temp, &destination) {
+            let _ = fs::remove_file(&temp);
+            return Err(io_error(&error, &destination));
+        }
+        Ok(PathOutcome {
+            outcome: if replaced {
+                PathOutcomeKind::Replaced
+            } else {
+                PathOutcomeKind::Applied
+            },
+            final_path: strip_extended_path(&destination.to_string_lossy()),
         })
     }
 
@@ -432,6 +508,29 @@ impl FsAdapter for CliFsAdapter {
         }
         Ok(Some(hex_encode(hasher.finalize().as_bytes())))
     }
+}
+
+/// 按固定块把源文件 `[start, end)` 复制到 `temp`（流式，内存恒定）。
+fn copy_range_stream(source: &Path, start: u64, end: u64, temp: &Path) -> io::Result<()> {
+    const COPY_CHUNK: usize = 64 * 1024;
+    let mut input = fs::File::open(source)?;
+    input.seek(SeekFrom::Start(start))?;
+    let mut remaining = end - start;
+    let mut output = fs::File::create(temp)?;
+    let mut buffer = vec![0u8; COPY_CHUNK];
+    while remaining > 0 {
+        let want = (buffer.len() as u64).min(remaining) as usize;
+        let read = input.read(&mut buffer[..want])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "source shrank while copying split range",
+            ));
+        }
+        output.write_all(&buffer[..read])?;
+        remaining -= read as u64;
+    }
+    output.flush()
 }
 
 pub(crate) fn fs_path(path: impl AsRef<Path>) -> PathBuf {
@@ -798,6 +897,32 @@ mod tests {
         assert_eq!(
             strip_extended_path(r"\\?\UNC\server\share\a.txt"),
             r"\\server\share\a.txt"
+        );
+    }
+
+    #[test]
+    fn copy_range_atomic_writes_only_the_requested_slice() {
+        let dir = TempDir::new();
+        let source = dir.0.join("source.txt");
+        let target = dir.0.join("part.txt");
+        fs::write(&source, b"aaa\nbbb\nccc\n").unwrap();
+        let adapter = CliFsAdapter::new(Some(dir.0.join("quarantine")));
+
+        let outcome = adapter
+            .copy_range_atomic(
+                &source.to_string_lossy(),
+                0,
+                8,
+                &target.to_string_lossy(),
+                ConflictPolicy::Skip,
+            )
+            .unwrap();
+        assert_eq!(outcome.outcome, PathOutcomeKind::Applied);
+        assert_eq!(fs::read(&target).unwrap(), b"aaa\nbbb\n");
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"aaa\nbbb\nccc\n",
+            "range copy keeps the source"
         );
     }
 

@@ -414,3 +414,81 @@ fn c01_plan_apply_and_undo_round_trip() {
     // 覆盖写的备份是复制而非移动：撤销后仍留在隔离目录，由保留期清理（设计 01 §8）。
     assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 1);
 }
+
+#[test]
+fn f01_plan_apply_and_undo_write_line_aligned_parts() {
+    let dir = TempDir::new();
+    let source = dir.0.join("big.txt");
+    let parts = dir.0.join("parts");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&source, b"aaa\nbbb\nccc\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f01",
+        "--file",
+        path_text(&source),
+        "--target-bytes",
+        "6",
+        "--output-dir",
+        path_text(&parts),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f01 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f01");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(document["entries"][0]["action"], "split");
+    assert_eq!(document["entries"][0]["range"]["start"], 0);
+    assert_eq!(document["entries"][0]["range"]["end"], 8);
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f01 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(fs::read(parts.join("big.1.txt")).unwrap(), b"aaa\nbbb\n");
+    assert_eq!(fs::read(parts.join("big.2.txt")).unwrap(), b"ccc\n");
+    assert_eq!(fs::read(&source).unwrap(), b"aaa\nbbb\nccc\n");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f01 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 2);
+    assert!(!parts.join("big.1.txt").exists(), "undo quarantines part 1");
+    assert!(!parts.join("big.2.txt").exists(), "undo quarantines part 2");
+}
