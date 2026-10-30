@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.15（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.16（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -115,7 +115,7 @@ pub trait RngSource: Send + Sync { fn fill(&self, buf: &mut [u8]); }
 > `KernelError` 是 kernel 内部错误类型：字段与 `IpcError` 对齐（`code`/`message`/`detail`/`retryable`），由壳层在 IPC 边界映射为 `IpcError`；禁止直接序列化到线上。
 
 > **FsAdapter 扩展能力**：分块读、磁盘余量探测、UNC 连通/写权限探测、占用/只读探测、占位文件识别、
-> `restore_from_quarantine` 等扩展签名见 [04-文件系统适配层契约](04-文件系统适配层契约.md) §4——属同一 trait 的 v1 冻结面，不在本文重复定义。
+> `restore_from_quarantine`、`read_ranges` 等扩展签名见 [04-文件系统适配层契约](04-文件系统适配层契约.md) §4——属同一 trait 的 v1 冻结面，不在本文重复定义。
 
 ### 3.1 纯变换器层签名样例（§4.3 / §5.2）
 
@@ -126,6 +126,7 @@ pub fn plan_f05(input: PlanF05Input) -> PlanDocument;                  // §5.3 
 pub fn plan_f06(input: PlanF06Input) -> PlanDocument;                  // §5.4 CSV 合并（列对齐/来源列）
 pub fn plan_f07(input: PlanF07Input) -> PlanDocument;                  // §5.15 CSV 抽取指定列
 pub fn plan_f08(input: PlanF08Input) -> PlanDocument;                  // §5.15 CSV 抽取指定数量行
+pub fn plan_f09(input: PlanF09Input) -> PlanDocument;                  // §5.15 CSV 抽取指定位置行（X–Y）
 pub fn plan_f01(input: PlanF01Input) -> PlanDocument;                  // §5.1 按字节分片
 pub fn plan_f02(input: PlanF02Input) -> PlanDocument;                  // §5.15 按行数分片
 pub fn plan_f03(input: PlanF03Input) -> PlanDocument;                  // §5.15 按份数分片
@@ -316,7 +317,7 @@ interface PlanEntry {
   action: "rename" | "move" | "copy" | "archive" | "extract" | "create-dir"
         | "transcode" | "edit-content" | "delete" | "split" | "merge"
         | "csv-extract" | "csv-rows";
-                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01/F02/F03）、merge=TXT 合并（F04，单条汇总 N 个输入）/CSV 合并（F06，携带 `csvMerge` 载荷）、csv-extract=CSV 抽取指定列（F07，1:1，携带 `csvExtract` 载荷）、csv-rows=CSV 抽取指定数量行（F08，1:1，携带 `csvRows` 载荷）；追加式枚举，只增不改
+                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01/F02/F03）、merge=TXT 合并（F04，单条汇总 N 个输入）/CSV 合并（F06，携带 `csvMerge` 载荷）、csv-extract=CSV 抽取指定列（F07，1:1，携带 `csvExtract` 载荷）、csv-rows=CSV 行抽取（F08 数量/F09 位置区间，1:1，携带 `csvRows` 载荷）；追加式枚举，只增不改
   relation?: PlanRelation;   // 1:N / N:1 分组（拆分/合并/压缩解压），见下方语义（F04 由 §5 的 `merge` 载荷表达、F06 由 `csvMerge` 载荷表达；F07/F08 为 1:1，均不设 relation）
   reason: string;            // 预览面板展示（§6.4）
   conflict?: ConflictInfo;   // §5.13 三类冲突，预览期全部暴露；默认处置=跳过（不变量 7）
@@ -374,12 +375,19 @@ interface PlanEntry {
                              // 无表头只允许序号选择；输出编码与非法序列策略同 F06，BOM 只写一次（ADR-0019）
   csvRows?: { encoding?: SourceEncoding; size: number; delimiter: string;
               hasHeader: boolean; columns: string[]; columnCount: number;
-              dataRows: number; window: "first" | "last"; count: number;
+              dataRows: number; window: "first" | "last" | "range"; count: number;
+              startRow?: number; endRow?: number; selectedRows?: number;
+              headerRange?: { start: number; end: number };
+              dataRange?: { start: number; end: number };
+              totalKnown?: boolean;
               targetEncoding: string; invalid: string; dirtyRows: number };
-                             // 追加式可选字段：F08 CSV 抽取数量行载荷，仅 csv-rows 使用（1:1）；
-                             // window=first/last，count 按数据行计数（不含表头，允许 0，超过 dataRows 时输出全部）；
-                             // 有表头时输出始终保留表头，无表头时不写表头；行内容原样输出，列数漂移只计数；
-                             // 后 N 执行期用有界环形缓冲选择；输出编码与 BOM 规则同 F06（ADR-0020）
+                             // 追加式可选字段：F08/F09 CSV 行抽取载荷，仅 csv-rows 使用（1:1）；
+                             // window=first/last 时 count 为请求行数；window=range 时 startRow/endRow 为
+                             // 1-based 数据记录区间（不含表头），count 为实际选中行数，headerRange/dataRange
+                             // 为表头/选中记录的源字节区间，totalKnown=false 表示计划在 endRow 处提前终止；
+                             // F09 apply 只读取 headerRange/dataRange 的字节（不整读源文件），行尾保持源字节
+                             // 形态，BOM 由目标编码决定；UTF-16/多行表头/E3001/E3004 等规则见 ADR-0021；
+                             // first/last 的执行与输出规则同 F08（ADR-0020）
 }
 interface PlanRelation {
   groupId: string;           // 同一逻辑操作组（ULID）：1:N 的全部输出分片、N:1 的全部输入共享同组
@@ -519,3 +527,4 @@ interface JournalEntry {
 | v1.13 | 2026-10-30 | §3.1 追加 `plan_f07`；§5 追加 `csv-extract` 动作与可选 `csvExtract{encoding,size,delimiter,hasHeader,columns,columnCount,selections,targetEncoding,invalid,dirtyRows}` 载荷（F07 1:1，每个输入一条 entry）；§5.1 修订 F07 分组语义与 `relation` 省略；`expected` 口径补 csvExtract 条目。决策见 [ADR-0019](../adr/0019-F07-CSV抽取指定列.md)。 |
 | v1.14 | 2026-10-30 | §3.1 追加 `plan_f08`；§5 追加 `csv-rows` 动作与可选 `csvRows{encoding,size,delimiter,hasHeader,columns,columnCount,dataRows,window,count,targetEncoding,invalid,dirtyRows}` 载荷（F08 1:1，每个输入一条 entry）；§5.1 修订 F08 分组语义与 `relation` 省略；`expected` 口径补 csvRows 条目。决策见 [ADR-0020](../adr/0020-F08-CSV抽取数量行与前后窗口.md)。 |
 | v1.15 | 2026-10-30 | §5 F06 `csvMerge` 说明补 T07/T08 告警：无表头 `no-header-positional`、表头 BOM/trim 规范化 `header-normalized`、重复规范化列名 `duplicate-column-names`（均 Caution、不阻断）。决策见 [ADR-0018](../adr/0018-F06-CSV合并列对齐与来源列.md) §2.5。 |
+| v1.16 | 2026-10-30 | §3.1 追加 `plan_f09`；§5 `csvRows` 追加 `window="range"`、`startRow/endRow/headerRange/dataRange/totalKnown`（F09 1:1，每个输入一条 entry）；FsAdapter 追加 `read_ranges`（只读选中字节区间）。决策见 [ADR-0021](../adr/0021-F09-CSV位置行区间与流式读取.md)。 |

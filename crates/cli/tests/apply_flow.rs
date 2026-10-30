@@ -1410,6 +1410,168 @@ fn f08_zero_rows_writes_only_the_header() {
 }
 
 #[test]
+fn f09_plan_apply_and_undo_extracts_row_range_preserving_crlf() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("range.csv");
+    let data = b"id,note\r\n1,Alice\r\n2,Bob\r\n3,Cara\r\n4,Dan\r\n5,Eve\r\n";
+    fs::write(&source, data).unwrap();
+
+    let plan = batchdesk(&[
+        "f09",
+        "--file",
+        path_text(&source),
+        "--start",
+        "2",
+        "--end",
+        "4",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f09 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f09");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 1);
+    let payload = &document["entries"][0]["csvRows"];
+    assert_eq!(payload["window"], "range");
+    assert_eq!(payload["startRow"], 2);
+    assert_eq!(payload["endRow"], 4);
+    assert_eq!(payload["count"], 3);
+    assert!(payload["headerRange"].is_object());
+    assert!(payload["dataRange"].is_object());
+    assert_eq!(payload["totalKnown"], false, "plan stops at endRow");
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f09 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        b"id,note\r\n2,Bob\r\n3,Cara\r\n4,Dan\r\n",
+        "the selected range keeps the source CRLF line endings"
+    );
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!output.exists());
+}
+
+#[test]
+fn f09_range_beyond_rows_warns_and_clamps_the_output() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("range.csv");
+    fs::write(&source, b"id,name\n1,Alice\n2,Bob\n3,Cara\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f09",
+        "--file",
+        path_text(&source),
+        "--start",
+        "2",
+        "--end",
+        "9",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "range-exceeds-rows"));
+    assert_eq!(document["entries"][0]["csvRows"]["count"], 2);
+    assert_eq!(document["entries"][0]["csvRows"]["dataRows"], 3);
+    assert_eq!(document["entries"][0]["csvRows"]["totalKnown"], true);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    assert_eq!(fs::read(&output).unwrap(), b"id,name\n2,Bob\n3,Cara\n");
+}
+
+#[test]
+fn f09_rejects_an_invalid_range() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("range.csv");
+    fs::write(&source, b"id,name\n1,Alice\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f09",
+        "--file",
+        path_text(&source),
+        "--start",
+        "4",
+        "--end",
+        "3",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+    ]);
+    assert!(!plan.status.success());
+    assert!(String::from_utf8_lossy(&plan.stderr).contains("E1002"));
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

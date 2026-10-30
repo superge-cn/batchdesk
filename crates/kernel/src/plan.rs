@@ -105,7 +105,7 @@ pub enum PlanAction {
     Merge,
     /// F07 CSV 抽取指定列产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvExtract,
-    /// F08 CSV 抽取指定数量行产物（1:1，每个输入一条 entry；方案 §5.15）。
+    /// F08/F09 CSV 行抽取产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvRows,
 }
 
@@ -327,7 +327,7 @@ pub struct PlanCsvExtract {
     pub dirty_rows: u64,
 }
 
-/// F08 CSV 抽取数量行的载荷（仅 `csv-rows` 动作使用）。
+/// F08/F09 CSV 行抽取的载荷（仅 `csv-rows` 动作使用）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanCsvRows {
@@ -343,12 +343,27 @@ pub struct PlanCsvRows {
     pub columns: Vec<String>,
     /// 源列宽（有表头时取表头字段数；无表头时取数据行最大字段数）。
     pub column_count: u64,
-    /// 计划期数据行数（不含表头）。
+    /// 计划期观察到的数据行数（不含表头）；F09 `totalKnown=false` 时至少为 `endRow`。
     pub data_rows: u64,
-    /// `"first"` | `"last"`。
+    /// `"first"` | `"last"` | `"range"`（F09 位置区间）。
     pub window: String,
-    /// 请求的行数（允许 0；超过 `data_rows` 时输出全部数据行）。
+    /// F08 请求行数；F09 实际选中行数（允许 0）。
     pub count: u64,
+    /// F09 1-based 数据行起点（含）；数量模式省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_row: Option<u64>,
+    /// F09 1-based 数据行终点（含）；数量模式省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_row: Option<u64>,
+    /// F09 表头字节区间（含 BOM）；无表头时省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_range: Option<PlanRange>,
+    /// F09 选中数据记录的字节区间；无选中行时省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_range: Option<PlanRange>,
+    /// F09 计划期是否已扫描到 EOF；false 表示在 `endRow` 处提前终止。
+    #[serde(default)]
+    pub total_known: bool,
     /// 目标编码（`TargetEncoding::as_str` 的稳定字符串，含 BOM 策略）。
     pub target_encoding: String,
     /// 非法序列策略（`InvalidSequencePolicy::as_str`）。

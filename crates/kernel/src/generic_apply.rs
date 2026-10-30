@@ -1143,11 +1143,50 @@ fn validate_csv_rows(payload: &PlanCsvRows) -> Result<(), KernelError> {
             "csvRows delimiter is not supported",
         ));
     }
-    if RowWindow::parse(&payload.window).is_none() {
+    let Some(window) = RowWindow::parse(&payload.window) else {
         return Err(KernelError::invalid_params(format!(
-            "csvRows window must be first or last: {}",
+            "csvRows window must be first, last, or range: {}",
             payload.window
         )));
+    };
+    if window == RowWindow::Range {
+        let (Some(start), Some(end)) = (payload.start_row, payload.end_row) else {
+            return Err(KernelError::invalid_params(
+                "csvRows range mode requires startRow and endRow",
+            ));
+        };
+        if start == 0 || end < start {
+            return Err(KernelError::invalid_params(
+                "csvRows range must be 1-based with endRow >= startRow",
+            ));
+        }
+        if payload.has_header && payload.header_range.is_none() && payload.size > 0 {
+            return Err(KernelError::invalid_params(
+                "csvRows range with headers requires a header byte range",
+            ));
+        }
+        if !payload.has_header && payload.header_range.is_some() {
+            return Err(KernelError::invalid_params(
+                "csvRows range without headers must not carry a header byte range",
+            ));
+        }
+        if payload.data_range.is_none() && payload.count > 0 {
+            return Err(KernelError::invalid_params(
+                "csvRows range with selected rows requires a data byte range",
+            ));
+        }
+        if payload.data_range.is_some() && payload.count == 0 {
+            return Err(KernelError::invalid_params(
+                "csvRows range data byte range requires selected rows",
+            ));
+        }
+        if let (Some(header), Some(data)) = (payload.header_range, payload.data_range) {
+            if header.start >= header.end || data.start >= data.end || header.end > data.start {
+                return Err(KernelError::invalid_params(
+                    "csvRows range byte spans are invalid",
+                ));
+            }
+        }
     }
     if payload.has_header {
         if payload.columns.is_empty() {
@@ -1281,8 +1320,8 @@ fn perform_csv_extract(
     })
 }
 
-/// F08：解码后按前 N / 后 N 选择数据行，表头与行内容原样输出。
-fn perform_csv_rows(
+/// F09：只读取表头与选中的字节区间，解码/转码后原子写出。
+fn perform_csv_range(
     context: &GenericApplyContext<'_>,
     source: &str,
     target: &str,
@@ -1304,8 +1343,149 @@ fn perform_csv_rows(
     })?;
     let delimiter = Delimiter::parse(&payload.delimiter)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows delimiter"))?;
+
+    let (Some(start), Some(end)) = (payload.start_row, payload.end_row) else {
+        return Err(KernelError::invalid_params(
+            "csvRows range mode requires startRow and endRow",
+        ));
+    };
+    if start == 0 || end < start {
+        return Err(KernelError::invalid_params(
+            "csvRows range must be 1-based with endRow >= startRow",
+        ));
+    }
+    if payload.has_header && payload.header_range.is_none() && payload.size > 0 {
+        return Err(KernelError::new(
+            "E2010",
+            "source header range is missing; re-plan before applying",
+            None,
+            true,
+        ));
+    }
+    if !payload.has_header && payload.header_range.is_some() {
+        return Err(KernelError::invalid_params(
+            "csvRows range without headers must not carry a header byte range",
+        ));
+    }
+    if payload.data_range.is_none() && payload.count > 0 {
+        return Err(KernelError::new(
+            "E2010",
+            "source data range is missing; re-plan before applying",
+            None,
+            true,
+        ));
+    }
+    if payload.data_range.is_some() && payload.count == 0 {
+        return Err(KernelError::invalid_params(
+            "csvRows range data byte range requires selected rows",
+        ));
+    }
+    if let (Some(header), Some(data)) = (payload.header_range, payload.data_range) {
+        if header.start >= header.end || data.start >= data.end || header.end > data.start {
+            return Err(KernelError::new(
+                "E2010",
+                "source byte ranges changed since planning; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+    }
+
+    let backup = if overwrite {
+        Some(context.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+
+    let mut raw = Vec::new();
+    if let Some(header) = payload.header_range {
+        let header_raw = context
+            .fs
+            .read_ranges(source, &[(header.start, header.end)])?;
+        let decoded = transcode(
+            &header_raw,
+            encoding,
+            TargetEncoding::Utf8 { bom: false },
+            invalid,
+        )?;
+        let records = parse_records(&decoded.bytes, delimiter.as_byte());
+        let fields = records.first().ok_or_else(|| {
+            KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            )
+        })?;
+        if normalized_columns(fields) != payload.columns {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+        raw.extend_from_slice(&header_raw);
+    }
+    if let Some(data) = payload.data_range {
+        raw.extend_from_slice(&context.fs.read_ranges(source, &[(data.start, data.end)])?);
+    }
+
+    let transcoded = transcode(&raw, encoding, target_encoding, invalid)?;
+    context.fs.write_atomic(target, &transcoded.bytes)?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: context
+                .fs
+                .quarantine_target_path(&file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
+}
+
+/// F08：解码后按前 N / 后 N 选择数据行，表头与行内容原样输出。
+fn perform_csv_rows(
+    context: &GenericApplyContext<'_>,
+    source: &str,
+    target: &str,
+    overwrite: bool,
+    payload: &PlanCsvRows,
+) -> Result<Performed, KernelError> {
+    let encoding = payload.encoding.ok_or_else(|| {
+        KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        )
+    })?;
     let window = RowWindow::parse(&payload.window)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows window"))?;
+    if window == RowWindow::Range {
+        return perform_csv_range(context, source, target, overwrite, payload);
+    }
+    let target_encoding = TargetEncoding::parse(&payload.target_encoding)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvRows target encoding"))?;
+    let invalid = InvalidSequencePolicy::parse(&payload.invalid).ok_or_else(|| {
+        KernelError::invalid_params("unsupported csvRows invalid-sequence policy")
+    })?;
+    let delimiter = Delimiter::parse(&payload.delimiter)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvRows delimiter"))?;
 
     let backup = if overwrite {
         Some(context.fs.backup_to_quarantine(target)?)
@@ -1630,12 +1810,12 @@ mod tests {
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
     use crate::plan::{
         PlanCsvExtract, PlanCsvExtractColumn, PlanCsvMerge, PlanCsvMergeFile, PlanCsvRows,
-        PlanEntry, PlanExpected, PlanMerge, PlanMergeSource, PlanStats,
+        PlanEntry, PlanExpected, PlanMerge, PlanMergeSource, PlanRange, PlanStats,
     };
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
     use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
     use std::collections::{BTreeMap, HashMap};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Mutex;
 
     const PLAN_ID: &str = "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8";
@@ -1644,6 +1824,7 @@ mod tests {
     struct TestFs {
         files: Mutex<HashMap<String, Vec<u8>>>,
         next: Mutex<u64>,
+        read_bytes_calls: AtomicU64,
     }
 
     impl TestFs {
@@ -1672,10 +1853,15 @@ mod tests {
         fn read_file(&self, path: &str) -> Vec<u8> {
             self.files.lock().unwrap().get(path).cloned().unwrap()
         }
+
+        fn read_bytes_calls(&self) -> u64 {
+            self.read_bytes_calls.load(Ordering::Relaxed)
+        }
     }
 
     impl FsAdapter for TestFs {
         fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError> {
+            self.read_bytes_calls.fetch_add(1, Ordering::Relaxed);
             self.files
                 .lock()
                 .unwrap()
@@ -1803,6 +1989,26 @@ mod tests {
                 outcome: PathOutcomeKind::Applied,
                 final_path: target.to_string(),
             })
+        }
+
+        fn read_ranges(&self, source: &str, ranges: &[(u64, u64)]) -> Result<Vec<u8>, KernelError> {
+            let files = self.files.lock().unwrap();
+            let data = files
+                .get(source)
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            let mut joined = Vec::new();
+            for (start, end) in ranges {
+                if start >= end || *end > data.len() as u64 {
+                    return Err(KernelError::new(
+                        "E2010",
+                        "range is out of bounds",
+                        None,
+                        false,
+                    ));
+                }
+                joined.extend_from_slice(&data[*start as usize..*end as usize]);
+            }
+            Ok(joined)
         }
 
         fn copy_ranges_atomic(
@@ -2768,6 +2974,150 @@ mod tests {
         assert!(!fs.exists("/out/first.csv"));
     }
 
+    #[test]
+    fn csv_range_reads_only_header_and_selected_range_and_undo_removes_the_output() {
+        let fs = TestFs::default();
+        let data = b"id,name\n1,Alice\n2,Bob\n3,Cara\n";
+        fs.write_file("/data/a.csv", data);
+        let plan = plan(vec![csv_range_entry(
+            "e1",
+            "/data/a.csv",
+            "/out/range.csv",
+            data.len() as u64,
+            true,
+            &["id", "name"],
+            2,
+            3,
+            2,
+            3,
+            Some((0, 8)),
+            Some((16, data.len() as u64)),
+            2,
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(
+            fs.read_bytes_calls(),
+            0,
+            "range apply must not read the whole file"
+        );
+        assert_eq!(fs.read_file("/out/range.csv"), b"id,name\n2,Bob\n3,Cara\n");
+
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert!(!fs.exists("/out/range.csv"));
+        assert!(fs.exists("/data/a.csv"));
+    }
+
+    #[test]
+    fn csv_range_rejects_a_same_size_header_change() {
+        let fs = TestFs::default();
+        let data = b"id,name\n1,Alice\n2,Bob\n3,Cara\n";
+        fs.write_file("/data/a.csv", data);
+        let plan = plan(vec![csv_range_entry(
+            "e1",
+            "/data/a.csv",
+            "/out/range.csv",
+            data.len() as u64,
+            true,
+            &["id", "name"],
+            2,
+            3,
+            1,
+            1,
+            Some((0, 8)),
+            Some((8, 16)),
+            1,
+        )]);
+        fs.write_file("/data/a.csv", b"id,nAme\n1,Alice\n2,Bob\n3,Cara\n");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2010"
+        );
+        assert!(!fs.exists("/out/range.csv"));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn csv_range_entry(
+        entry_id: &str,
+        source: &str,
+        target: &str,
+        size: u64,
+        has_header: bool,
+        columns: &[&str],
+        column_count: u64,
+        data_rows: u64,
+        start_row: u64,
+        end_row: u64,
+        header_range: Option<(u64, u64)>,
+        data_range: Option<(u64, u64)>,
+        count: u64,
+    ) -> PlanEntry {
+        PlanEntry {
+            entry_id: entry_id.to_string(),
+            source: source.to_string(),
+            target: Some(target.to_string()),
+            action: PlanAction::CsvRows,
+            relation: None,
+            reason: "csv range".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: Some(PlanExpected {
+                size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: None,
+            csv_extract: None,
+            csv_rows: Some(PlanCsvRows {
+                encoding: Some(SourceEncoding::Utf8),
+                size,
+                delimiter: ",".to_string(),
+                has_header,
+                columns: columns.iter().map(|value| value.to_string()).collect(),
+                column_count,
+                data_rows,
+                window: "range".to_string(),
+                count,
+                start_row: Some(start_row),
+                end_row: Some(end_row),
+                header_range: header_range.map(|(start, end)| PlanRange { start, end }),
+                data_range: data_range.map(|(start, end)| PlanRange { start, end }),
+                total_known: true,
+                target_encoding: "utf-8".to_string(),
+                invalid: "replace-and-count".to_string(),
+                dirty_rows: 0,
+            }),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn csv_rows_entry(
         entry_id: &str,
@@ -2811,6 +3161,11 @@ mod tests {
                 data_rows,
                 window: window.to_string(),
                 count,
+                start_row: None,
+                end_row: None,
+                header_range: None,
+                data_range: None,
+                total_known: false,
                 target_encoding: "utf-8".to_string(),
                 invalid: "replace-and-count".to_string(),
                 dirty_rows: 0,

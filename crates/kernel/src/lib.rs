@@ -11,6 +11,7 @@ pub mod conflict;
 pub mod csv;
 pub mod csv_extract;
 pub mod csv_merge;
+pub mod csv_range;
 pub mod csv_rows;
 pub mod duplicate;
 pub mod encoding;

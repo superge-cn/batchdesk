@@ -293,6 +293,67 @@ impl FsAdapter for CliFsAdapter {
         })
     }
 
+    fn read_ranges(&self, source: &str, ranges: &[(u64, u64)]) -> Result<Vec<u8>, KernelError> {
+        if ranges.is_empty() {
+            return Err(KernelError::new(
+                "E1002",
+                "range reads require at least one byte range",
+                None,
+                false,
+            ));
+        }
+        let from = fs_path(Path::new(source));
+        let allocated = fs::metadata(&from)
+            .map_err(|error| io_error(&error, Path::new(source)))?
+            .len();
+        let mut file =
+            fs::File::open(&from).map_err(|error| io_error(&error, Path::new(source)))?;
+        const READ_CHUNK: usize = 64 * 1024;
+        let mut buffer = vec![0u8; READ_CHUNK];
+        let mut out = Vec::new();
+        for (start, end) in ranges {
+            if start >= end {
+                return Err(KernelError::new(
+                    "E1002",
+                    "range read must be non-empty",
+                    None,
+                    false,
+                ));
+            }
+            if *end > allocated {
+                return Err(KernelError::new(
+                    "E2010",
+                    "source file shrank since planning; re-plan before applying",
+                    Some(format!(
+                        "{} has {allocated} bytes, range needs up to {end}",
+                        source
+                    )),
+                    true,
+                ));
+            }
+            file.seek(SeekFrom::Start(*start))
+                .map_err(|error| io_error(&error, Path::new(source)))?;
+            let mut remaining = end - start;
+            while remaining > 0 {
+                let want = (buffer.len() as u64).min(remaining) as usize;
+                let read = file
+                    .read(&mut buffer[..want])
+                    .map_err(|error| io_error(&error, Path::new(source)))?;
+                if read == 0 {
+                    return Err(KernelError::new(
+                        "E2010",
+                        "source file shrank while reading the planned range",
+                        None,
+                        true,
+                    ));
+                }
+                out.extend_from_slice(&buffer[..read]);
+                remaining -= read as u64;
+            }
+        }
+        Ok(out)
+    }
+
     fn copy_ranges_atomic(
         &self,
         source: &str,
@@ -1032,6 +1093,36 @@ mod tests {
             fs::read(&source).unwrap(),
             b"aaa\nbbb\nccc\n",
             "range copy keeps the source"
+        );
+    }
+
+    #[test]
+    fn read_ranges_returns_selected_bytes_and_rejects_invalid_spans() {
+        let dir = TempDir::new();
+        let source = dir.0.join("source.csv");
+        fs::write(&source, b"header\nrow1\nrow2\n").unwrap();
+        let adapter = CliFsAdapter::new(Some(dir.0.join("quarantine")));
+        let source_text = source.to_string_lossy();
+
+        assert_eq!(
+            adapter
+                .read_ranges(source_text.as_ref(), &[(0, 7), (7, 12)])
+                .unwrap(),
+            b"header\nrow1\n"
+        );
+        assert_eq!(
+            adapter
+                .read_ranges(source_text.as_ref(), &[(0, 999)])
+                .unwrap_err()
+                .code,
+            "E2010"
+        );
+        assert_eq!(
+            adapter
+                .read_ranges(source_text.as_ref(), &[(3, 3)])
+                .unwrap_err()
+                .code,
+            "E1002"
         );
     }
 

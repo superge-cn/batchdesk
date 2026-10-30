@@ -13,6 +13,7 @@ use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutc
 use kernel::csv::{plan_f05, CsvSplitBasis, Delimiter, PlanF05File, PlanF05Input};
 use kernel::csv_extract::{plan_f07, ColumnPick, PlanF07File, PlanF07Input};
 use kernel::csv_merge::{plan_f06, PlanF06File, PlanF06Input};
+use kernel::csv_range::{plan_f09, PlanF09File, PlanF09Input};
 use kernel::csv_rows::{plan_f08, PlanF08File, PlanF08Input, RowWindow};
 use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
@@ -33,6 +34,7 @@ use kernel::split::{
 };
 use platform::csv::{csv_split_layout, CsvScanOptions};
 use platform::csv_merge::{csv_merge_inspect, CsvMergeScanOptions};
+use platform::csv_range::{csv_range_layout, CsvRangeScanOptions};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -89,6 +91,13 @@ const USAGE: &str = "usage:
                 (--first N | --last N)
                 (--output <file> | --output-dir <dir>)
                 --sample-bytes <bytes> [--sample-blocks N]
+                [--delimiter ,|;|tab||] [--no-header] [--source <encoding>]
+                [--invalid replace-and-count|abort]
+                [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f09 --file <path>... --target <encoding> --start X --end Y
+                (--output <file> | --output-dir <dir>)
+                --sample-bytes <bytes>
                 [--delimiter ,|;|tab||] [--no-header] [--source <encoding>]
                 [--invalid replace-and-count|abort]
                 [--platform-prior chinese-windows|other]
@@ -212,6 +221,22 @@ f08 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
+f09 options:
+  --file PATH             repeatable source CSV file
+  --start X               first data row (1-based, inclusive; excludes header)
+  --end Y                 last data row (1-based, inclusive; Y >= X)
+  --output PATH           single output file (exactly one input)
+  --output-dir DIR        one output per input, keeping the source file name
+  --target ENC            target encoding: utf-8 | utf-8-bom | gb18030 | utf-16le[-bom] | utf-16be[-bom]
+  --sample-bytes BYTES    head window for delimiter sniffing/encoding (explicit; §5.2)
+  --delimiter D           , | ; | tab | pipe; omitted = sniff from the sample window
+  --no-header             all inputs have no header row; rows count from the first record
+  --source ENC            optional global source override; otherwise each file is detected
+  --invalid POLICY        invalid-sequence policy (default: replace-and-count, §5.2)
+  --platform-prior PRIOR  chinese-windows | other (default: other; informational only)
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --json                  machine-readable plan output
+
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place (backup in quarantine, undo restores from the Journal);
@@ -222,6 +247,8 @@ apply/undo/cleanup:
   fill missing values and append extra columns, optionally adding a source column;
   f07 entries export selected columns in the given order, preserving row order;
   f08 entries take the first or last N data rows, keeping the header;
+  f09 entries take data rows X-Y (1-based, header excluded), reading only the
+  header and selected byte range at apply time;
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -277,6 +304,9 @@ fn main() {
     }
     if args[1] == "f08" {
         std::process::exit(run_f08(&args));
+    }
+    if args[1] == "f09" {
+        std::process::exit(run_f09(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -2409,6 +2439,305 @@ fn run_f08(args: &[String]) -> i32 {
         invalid,
         window,
         count,
+        protected_dirs,
+        case_sense,
+        files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f09(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut start = None;
+    let mut end = None;
+    let mut output = None;
+    let mut output_dir = None;
+    let mut target = None;
+    let mut source = None;
+    let mut delimiter = None;
+    let mut invalid = InvalidSequencePolicy::ReplaceAndCount;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_window = None;
+    let mut has_header = true;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--start" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --start requires a row number");
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => start = Some(parsed),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --start must be a positive 1-based row number: {value}"
+                        ))
+                    }
+                }
+            }
+            "--end" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --end requires a row number");
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => end = Some(parsed),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --end must be a positive 1-based row number: {value}"
+                        ))
+                    }
+                }
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target requires an encoding");
+                };
+                let Some(parsed) = TargetEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown target encoding: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires a value");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--invalid" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --invalid requires a policy");
+                };
+                let Some(parsed) = InvalidSequencePolicy::parse(value) else {
+                    return input_error(format!("E1002: unknown invalid-sequence policy: {value}"));
+                };
+                invalid = parsed;
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires a window size");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => sample_window = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--no-header" => has_header = false,
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f09 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: f09 requires at least one --file <path>");
+    }
+    let (Some(start_row), Some(end_row)) = (start, end) else {
+        return input_error("E1001: f09 requires --start <X> and --end <Y>");
+    };
+    if end_row < start_row {
+        return input_error("E1002: f09 requires --end >= --start");
+    }
+    let Some(target) = target else {
+        return input_error("E1001: f09 requires --target <encoding>");
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: f09 requires --sample-bytes <n> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    if output.is_some() && output_dir.is_some() {
+        return input_error("E1001: use either --output or --output-dir, not both");
+    }
+    let targets: Vec<PathBuf> = match (output, output_dir) {
+        (Some(output), None) => {
+            if files.len() != 1 {
+                return input_error("E1002: --output requires exactly one --file");
+            }
+            vec![make_absolute(&output)]
+        }
+        (None, Some(dir)) => {
+            let dir = make_absolute(&dir);
+            files
+                .iter()
+                .map(|path| {
+                    let name = path
+                        .file_name()
+                        .map(|value| value.to_os_string())
+                        .unwrap_or_else(|| "output.csv".into());
+                    dir.join(name)
+                })
+                .collect()
+        }
+        _ => return input_error("E1001: f09 requires --output <file> or --output-dir <dir>"),
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    for (path, target) in files.iter().zip(targets.iter()) {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: f09 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let layout = match csv_range_layout(
+            &absolute,
+            CsvRangeScanOptions {
+                delimiter,
+                has_header,
+                start_row,
+                end_row,
+                sample_window_bytes: sample_window,
+                platform_prior: prior,
+                source_encoding: source,
+            },
+        ) {
+            Ok(layout) => layout,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot inspect CSV for row range ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanF09File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: layout.file_size,
+            source_encoding: layout.source_encoding,
+            delimiter: layout.delimiter,
+            delimiter_detected: layout.delimiter_detected,
+            has_header,
+            columns: layout.header_columns,
+            column_count: layout.column_count,
+            data_rows: layout.data_rows,
+            total_known: layout.total_known,
+            selected_rows: layout.selected_rows,
+            header_range: layout.header.map(|span| (span.start, span.end)),
+            data_range: layout.selected.map(|span| (span.start, span.end)),
+            dirty_rows: layout.dirty_rows,
+            multi_line_header: layout.multi_line_header,
+            unclosed_quote: layout.unclosed_quote,
+            target: target.to_string_lossy().into_owned(),
+            target_occupied: target.exists(),
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f09"));
+    let planned = plan_f09(PlanF09Input {
+        plan_id,
+        target_encoding: target,
+        invalid,
+        start_row,
+        end_row,
         protected_dirs,
         case_sense,
         files: plan_files,

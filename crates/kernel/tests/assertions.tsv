@@ -10,7 +10,7 @@ K06	partial	不进入文本管道：needs_manual=true，plan_c01 产出 blocked 
 K07	partial	疑似混合编码不被修复：needs_manual=true，plan_c01 产出 blocked E3001	缺"疑似混合编码"专项提示文案
 K08	partial	detect 判定 UTF-16LE+BOM；转码 UTF-8 替换计数 0、6 行	分片后每片写 BOM 属 F05 输出策略，未实现
 T01	asserted	未闭合引号：扫描器 tail 保留为末条记录且 unclosed_quote=true；plan_f05 产出 unclosed-quote 警告；物理行数多于解析记录数（吞行按末条记录处理）	—
-T02	asserted	引号内换行不切记录：扫描记录=9（表头+8 数据）、至少一条 multiline；parse_records 9 行且字段含换行；plan_f05 每记录一片 8 片、区间覆盖表头后全文件	—
+T02	asserted	引号内换行不切记录：扫描记录=9（表头+8 数据）、至少一条 multiline；parse_records 9 行且字段含换行；plan_f05 每记录一片 8 片、区间覆盖表头后全文件；F09 platform 选中含引号换行记录仍为一条（csv_range）	—
 T03	asserted	plan_f01 产出 overlong-line-single-part 警告；超长行独占一片（part 2，size > target）	—
 T04	asserted	列数漂移：表头 3 列、数据行宽 2/3/4/1/3 原样保留；dirty_rows=3；plan_f05 产出 column-drift 警告（不补列/不截断）	—
 T05	asserted	plan_f01 对空文件返回 0 条目＋empty-file 警告	—

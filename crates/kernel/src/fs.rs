@@ -139,6 +139,19 @@ pub trait FsAdapter: Send + Sync {
         ))
     }
 
+    /// 按顺序读取源文件的多个字节区间到内存（F09 位置行抽取专用）。
+    ///
+    /// 只读取给定区间，不整文件读入；区间必须非空且落在源文件范围内。
+    /// 适配层不支持时返回 E5001，调用方按契约拒绝该动作，不静默降级。
+    fn read_ranges(&self, _source: &str, _ranges: &[(u64, u64)]) -> Result<Vec<u8>, KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "range reads are not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+
     /// 从源文件的字节区间 `[start, end)` 流式写入目标（临时文件＋原子改名）。
     ///
     /// F01 分片专用：适配层按固定块流式复制，不得整文件读入内存

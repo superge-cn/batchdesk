@@ -23,11 +23,12 @@ use crate::plan::{
 
 pub const F08_KIND: &str = "f08";
 
-/// 行窗口方向：前 N 或后 N。
+/// 行窗口方向：前 N、后 N 或 F09 的 X–Y 位置区间。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowWindow {
     First,
     Last,
+    Range,
 }
 
 impl RowWindow {
@@ -35,6 +36,7 @@ impl RowWindow {
         match self {
             Self::First => "first",
             Self::Last => "last",
+            Self::Range => "range",
         }
     }
 
@@ -42,6 +44,7 @@ impl RowWindow {
         match value {
             "first" => Some(Self::First),
             "last" => Some(Self::Last),
+            "range" => Some(Self::Range),
             _ => None,
         }
     }
@@ -181,6 +184,11 @@ pub fn plan_f08(input: PlanF08Input) -> Result<PlanDocument, KernelError> {
                 data_rows: file.data_rows,
                 window: input.window.as_str().to_string(),
                 count: input.count,
+                start_row: None,
+                end_row: None,
+                header_range: None,
+                data_range: None,
+                total_known: false,
                 target_encoding: input.target_encoding.as_str().to_string(),
                 invalid: input.invalid.as_str().to_string(),
                 dirty_rows: file.dirty_rows,
@@ -269,6 +277,7 @@ pub fn select_row_window(rows: &[Vec<String>], window: RowWindow, count: u64) ->
             }
             ring.into()
         }
+        RowWindow::Range => Vec::new(),
     }
 }
 
