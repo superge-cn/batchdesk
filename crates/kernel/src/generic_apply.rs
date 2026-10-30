@@ -3,11 +3,18 @@
 //! 只执行计划，不做规则生成：新增功能只需产出 `PlanDocument`（参数 → 条目），
 //! 冲突二次裁决、Journal、进度、取消回滚、授权复核与指纹复核都在这里统一完成。
 //!
-//! 本轮覆盖 `rename`／`move`／`delete`；`copy` 与压缩/转码类需专用执行器或
-//! Journal 的删除型逆向（契约评审后再接），遇到即 E1002 明确拒绝，不静默降级。
+//! 覆盖 `rename`／`move`／`delete`／`copy`／`edit-content`；压缩/转码等需要
+//! 领域变换的动作用 `content_editor` 注入变换函数（F04/C01–C03 复用本执行器），
+//! 其余专用动作遇到即 E1002 明确拒绝，不静默降级。
+//!
+//! 撤销语义（设计 01 §8、方案 §7.8）：rename/move/delete 的逆由 `FsOp::inverse`
+//! 推导；copy 新建目标的逆是"产物进隔离目录"（reverse=`Quarantine`）；copy 覆盖
+//! 与 edit-content 先经 `FsAdapter::backup_to_quarantine` 备份原内容，逆是
+//! `WriteAtomic{dataRef}` 备份还原。回滚统一走 `apply::execute_reverse`。
 
 use crate::apply::{
-    ApplyEntryReport, ApplyOptions, ApplyOutcome, ApplyReport, ApplyState, ApplyStatus, OnConflict,
+    execute_reverse, ApplyEntryReport, ApplyOptions, ApplyOutcome, ApplyReport, ApplyState,
+    ApplyStatus, OnConflict,
 };
 use crate::conflict::sequence_target;
 use crate::error::KernelError;
@@ -17,6 +24,9 @@ use crate::license::{Capability, LicenseService};
 use crate::path::{protected_by, try_normalize, ProtectedDir};
 use crate::plan::{PlanAction, PlanDocument, PlanResolution};
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
+
+/// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节。
+pub type ContentEditor<'a> = &'a dyn Fn(&[u8]) -> Result<Vec<u8>, KernelError>;
 
 pub struct GenericApplyContext<'a> {
     pub fs: &'a dyn FsAdapter,
@@ -28,6 +38,8 @@ pub struct GenericApplyContext<'a> {
     pub case_sense: CaseSense,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
+    /// `edit-content` 条目的内容变换函数（如转码/换行/替换）；其他动作为 None。
+    pub content_editor: Option<ContentEditor<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,12 +63,11 @@ pub fn apply_generic_plan(
     }
     for entry in &plan.entries {
         match entry.action {
-            PlanAction::Rename | PlanAction::Move | PlanAction::Delete => {}
-            PlanAction::Copy => {
-                return Err(KernelError::invalid_params(
-                    "copy needs a delete-type journal reverse; not supported by this executor yet",
-                ))
-            }
+            PlanAction::Rename
+            | PlanAction::Move
+            | PlanAction::Delete
+            | PlanAction::Copy
+            | PlanAction::EditContent => {}
             other => {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries need a dedicated executor",
@@ -70,13 +81,29 @@ pub fn apply_generic_plan(
                     "delete entries must not have a target",
                 ))
             }
-            PlanAction::Rename | PlanAction::Move if entry.target.is_none() => {
+            PlanAction::EditContent if entry.target.is_some() => {
                 return Err(KernelError::invalid_params(
-                    "rename/move entries require a target",
+                    "edit-content entries edit in place and must not have a target",
                 ))
+            }
+            PlanAction::Rename | PlanAction::Move | PlanAction::Copy if entry.target.is_none() => {
+                return Err(KernelError::invalid_params(format!(
+                    "{} entries require a target",
+                    entry.action.as_str()
+                )))
             }
             _ => {}
         }
+    }
+    if plan
+        .entries
+        .iter()
+        .any(|entry| entry.action == PlanAction::EditContent)
+        && context.content_editor.is_none()
+    {
+        return Err(KernelError::invalid_params(
+            "edit-content entries require a content editor on the apply context",
+        ));
     }
     let overwrite_requested = options.on_conflict == OnConflict::Overwrite
         || plan
@@ -178,7 +205,10 @@ pub fn apply_generic_plan(
             failed += 1;
             reports.push(failed_entry(
                 entry.entry_id.clone(),
-                KernelError::invalid_params("rename/move expects a file source"),
+                KernelError::invalid_params(format!(
+                    "{} expects a file source",
+                    entry.action.as_str()
+                )),
             ));
             continue;
         }
@@ -213,7 +243,10 @@ pub fn apply_generic_plan(
                 continue;
             }
         };
-        if matches!(entry.action, PlanAction::Rename | PlanAction::Move) {
+        if matches!(
+            entry.action,
+            PlanAction::Rename | PlanAction::Move | PlanAction::Copy
+        ) {
             if let Some(error) = protected_target_hit(context, &target) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
                 continue;
@@ -226,8 +259,12 @@ pub fn apply_generic_plan(
             continue;
         }
 
-        let outcome = match perform(context, entry, &target, overwrite) {
-            Ok(Ok(outcome)) => outcome,
+        let target_param = match &entry.action {
+            PlanAction::EditContent => None,
+            _ => Some(target.as_str()),
+        };
+        let performed = match perform(context, entry, target_param, overwrite) {
+            Ok(Ok(performed)) => performed,
             Ok(Err(error)) => {
                 context.license.release(&plan.kind, 1);
                 failed += 1;
@@ -240,7 +277,7 @@ pub fn apply_generic_plan(
             }
         };
 
-        if outcome.outcome == PathOutcomeKind::Skipped {
+        if performed.skipped {
             context.license.release(&plan.kind, 1);
             reports.push(skipped_entry(
                 entry.entry_id.clone(),
@@ -254,24 +291,15 @@ pub fn apply_generic_plan(
             continue;
         }
 
-        let forward = forward_op(entry, &outcome.final_path);
-        let reverse = match forward.inverse() {
-            Some(reverse) => reverse,
-            None => {
-                context.license.release(&plan.kind, 1);
-                return Err(KernelError::internal(
-                    "generic apply journal reverse is not expressible",
-                    format!("{forward:?}"),
-                ));
-            }
-        };
+        let forward = performed.forward;
+        let reverse = performed.reverse;
         match context.journal.append_with_kind(
             &plan.plan_id,
             &entry.entry_id,
             &context.now_rfc3339,
             &plan.kind,
             forward,
-            reverse,
+            reverse.clone(),
         ) {
             Ok(journal_entry) => {
                 applied.push((index, journal_entry.seq, journal_entry.reverse));
@@ -279,7 +307,7 @@ pub fn apply_generic_plan(
             Err(error) => {
                 context.license.release(&plan.kind, 1);
                 // 落盘成功但 Journal 失败：尽力回退本次动作后再报错。
-                if rollback_single(context, &outcome.final_path, entry) {
+                if execute_reverse(context.fs, &reverse).is_ok() {
                     failed += 1;
                     reports.push(failed_entry(entry.entry_id.clone(), error));
                     continue;
@@ -292,7 +320,7 @@ pub fn apply_generic_plan(
         }
         reports.push(ApplyEntryReport {
             entry_id: entry.entry_id.clone(),
-            status: if overwrite || outcome.outcome == PathOutcomeKind::Replaced {
+            status: if overwrite || performed.replaced {
                 ApplyStatus::Overwritten
             } else {
                 ApplyStatus::Ok
@@ -317,38 +345,12 @@ pub fn apply_generic_plan(
                 applied.len() as u64,
                 None,
             );
-            match &reverse {
-                FsOp::Rename { from, to } => {
-                    match context.fs.rename(from, to, ConflictPolicy::Skip) {
-                        Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => {
-                            let _ = context.journal.mark_reverted(&plan.plan_id, &[*seq]);
-                        }
-                        Ok(_) => {
-                            mark_entry_error(
-                                &mut reports,
-                                *index,
-                                KernelError::new(
-                                    "E2007",
-                                    "cancel rollback target already exists",
-                                    None,
-                                    false,
-                                ),
-                            );
-                        }
-                        Err(error) => {
-                            mark_entry_error(&mut reports, *index, error);
-                        }
-                    }
+            match execute_reverse(context.fs, reverse) {
+                Ok(()) => {
+                    let _ = context.journal.mark_reverted(&plan.plan_id, &[*seq]);
                 }
-                _ => {
-                    mark_entry_error(
-                        &mut reports,
-                        *index,
-                        KernelError::internal(
-                            "cancel rollback reverse is not supported",
-                            format!("{reverse:?}"),
-                        ),
-                    );
+                Err(error) => {
+                    mark_entry_error(&mut reports, *index, error);
                 }
             }
         }
@@ -423,56 +425,158 @@ fn resolve_target(
     }
 }
 
+/// 单条执行结果：是否被策略跳过、是否替换了既有目标、落点与 Journal 操作对。
+struct Performed {
+    skipped: bool,
+    replaced: bool,
+    #[allow(dead_code)]
+    final_path: String,
+    forward: FsOp,
+    reverse: FsOp,
+}
+
+/// 执行单条动作并推导 Journal 的 forward/reverse（设计 01 §8）：
+/// copy 覆盖与 edit-content 先备份原内容（`dataRef`），copy 新建的逆是
+/// "产物进隔离目录"（reverse=`Quarantine`，路径由适配层预留）。
 fn perform(
     context: &GenericApplyContext<'_>,
     entry: &crate::plan::PlanEntry,
-    target: &str,
+    target: Option<&str>,
     overwrite: bool,
-) -> Result<Result<crate::fs::PathOutcome, KernelError>, KernelError> {
+) -> Result<Result<Performed, KernelError>, KernelError> {
     let policy = if overwrite {
         ConflictPolicy::Overwrite
     } else {
         ConflictPolicy::Skip
     };
-    match entry.action {
-        PlanAction::Rename => Ok(context.fs.rename(&entry.source, target, policy)),
-        PlanAction::Move => Ok(context.fs.move_path(&entry.source, target, policy)),
-        PlanAction::Delete => {
-            Ok(context
-                .fs
-                .remove_to_quarantine(&entry.source)
-                .map(|path| crate::fs::PathOutcome {
-                    outcome: PathOutcomeKind::Applied,
-                    final_path: path,
-                }))
+    let run = || -> Result<Performed, KernelError> {
+        match entry.action {
+            PlanAction::Rename => {
+                let target = target.expect("validated: rename requires a target");
+                let outcome = context.fs.rename(&entry.source, target, policy)?;
+                to_performed(outcome, |final_path| FsOp::Rename {
+                    from: entry.source.clone(),
+                    to: final_path,
+                })
+            }
+            PlanAction::Move => {
+                let target = target.expect("validated: move requires a target");
+                let outcome = context.fs.move_path(&entry.source, target, policy)?;
+                to_performed(outcome, |final_path| FsOp::Rename {
+                    from: entry.source.clone(),
+                    to: final_path,
+                })
+            }
+            PlanAction::Copy => {
+                let target = target.expect("validated: copy requires a target");
+                // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
+                let backup = if overwrite {
+                    Some(context.fs.backup_to_quarantine(target)?)
+                } else {
+                    None
+                };
+                let outcome = context.fs.copy(&entry.source, target, policy)?;
+                let final_path = outcome.final_path.clone();
+                let reverse = match backup {
+                    Some(backup) => FsOp::WriteAtomic {
+                        path: final_path.clone(),
+                        data_ref: Some(backup),
+                    },
+                    None => FsOp::Quarantine {
+                        from: final_path.clone(),
+                        to: context
+                            .fs
+                            .quarantine_target_path(&file_name_of(&final_path))?,
+                    },
+                };
+                Ok(Performed {
+                    skipped: outcome.outcome == PathOutcomeKind::Skipped,
+                    replaced: outcome.outcome == PathOutcomeKind::Replaced,
+                    final_path,
+                    forward: FsOp::Copy {
+                        from: entry.source.clone(),
+                        to: outcome.final_path,
+                    },
+                    reverse,
+                })
+            }
+            PlanAction::EditContent => {
+                // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。
+                let backup = context.fs.backup_to_quarantine(&entry.source)?;
+                let data = context.fs.read_bytes(&entry.source)?;
+                let editor = context
+                    .content_editor
+                    .expect("validated: edit-content requires an editor");
+                let edited = editor(&data)?;
+                context.fs.write_atomic(&entry.source, &edited)?;
+                let forward = FsOp::WriteAtomic {
+                    path: entry.source.clone(),
+                    data_ref: Some(backup),
+                };
+                let reverse = forward.inverse().ok_or_else(|| {
+                    KernelError::internal(
+                        "edit-content reverse is not expressible",
+                        format!("{forward:?}"),
+                    )
+                })?;
+                Ok(Performed {
+                    skipped: false,
+                    replaced: false,
+                    final_path: entry.source.clone(),
+                    forward,
+                    reverse,
+                })
+            }
+            PlanAction::Delete => {
+                let quarantined = context.fs.remove_to_quarantine(&entry.source)?;
+                Ok(Performed {
+                    skipped: false,
+                    replaced: false,
+                    final_path: quarantined.clone(),
+                    forward: FsOp::Quarantine {
+                        from: entry.source.clone(),
+                        to: quarantined.clone(),
+                    },
+                    reverse: FsOp::Rename {
+                        from: quarantined,
+                        to: entry.source.clone(),
+                    },
+                })
+            }
+            other => Err(KernelError::invalid_params(format!(
+                "{} entries need a dedicated executor",
+                other.as_str()
+            ))),
         }
-        _ => Err(KernelError::invalid_params("unsupported action")),
-    }
+    };
+    Ok(run())
 }
 
-fn forward_op(entry: &crate::plan::PlanEntry, final_path: &str) -> FsOp {
-    match entry.action {
-        PlanAction::Delete => FsOp::Quarantine {
-            from: entry.source.clone(),
-            to: final_path.to_string(),
-        },
-        _ => FsOp::Rename {
-            from: entry.source.clone(),
-            to: final_path.to_string(),
-        },
-    }
+fn to_performed(
+    outcome: crate::fs::PathOutcome,
+    forward: impl Fn(String) -> FsOp,
+) -> Result<Performed, KernelError> {
+    let forward_op = forward(outcome.final_path.clone());
+    let reverse = forward_op.inverse().ok_or_else(|| {
+        KernelError::internal(
+            "generic apply journal reverse is not expressible",
+            format!("{forward_op:?}"),
+        )
+    })?;
+    Ok(Performed {
+        skipped: outcome.outcome == PathOutcomeKind::Skipped,
+        replaced: outcome.outcome == PathOutcomeKind::Replaced,
+        final_path: outcome.final_path,
+        forward: forward_op,
+        reverse,
+    })
 }
 
-fn rollback_single(
-    context: &GenericApplyContext<'_>,
-    final_path: &str,
-    entry: &crate::plan::PlanEntry,
-) -> bool {
-    context
-        .fs
-        .rename(final_path, &entry.source, ConflictPolicy::Skip)
-        .map(|outcome| outcome.outcome != PathOutcomeKind::Skipped)
-        .unwrap_or(false)
+fn file_name_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string())
 }
 
 fn fingerprint_mismatch(
@@ -635,6 +739,17 @@ mod tests {
         fn exists(&self, path: &str) -> bool {
             self.files.lock().unwrap().contains_key(path)
         }
+
+        fn write_file(&self, path: &str, data: &[u8]) {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_string(), data.to_vec());
+        }
+
+        fn read_file(&self, path: &str) -> Vec<u8> {
+            self.files.lock().unwrap().get(path).cloned().unwrap()
+        }
     }
 
     impl FsAdapter for TestFs {
@@ -690,15 +805,27 @@ mod tests {
             &self,
             from: &str,
             to: &str,
-            _policy: ConflictPolicy,
+            policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
-            let files = self.files.lock().unwrap();
+            let mut files = self.files.lock().unwrap();
             let data = files
                 .get(from)
                 .cloned()
                 .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
-            drop(files);
-            self.files.lock().unwrap().insert(to.to_string(), data);
+            if files.contains_key(to) {
+                if policy == ConflictPolicy::Overwrite {
+                    files.insert(to.to_string(), data);
+                    return Ok(PathOutcome {
+                        outcome: PathOutcomeKind::Replaced,
+                        final_path: to.to_string(),
+                    });
+                }
+                return Ok(PathOutcome {
+                    outcome: PathOutcomeKind::Skipped,
+                    final_path: to.to_string(),
+                });
+            }
+            files.insert(to.to_string(), data);
             Ok(PathOutcome {
                 outcome: PathOutcomeKind::Applied,
                 final_path: to.to_string(),
@@ -712,6 +839,25 @@ mod tests {
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
             self.rename(from, to, policy)
+        }
+
+        fn backup_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
+            let mut files = self.files.lock().unwrap();
+            let data = files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            let mut next = self.next.lock().unwrap();
+            *next += 1;
+            let backup = format!("/quarantine/{next}.bak");
+            files.insert(backup.clone(), data);
+            Ok(backup)
+        }
+
+        fn quarantine_target_path(&self, file_name: &str) -> Result<String, KernelError> {
+            let mut next = self.next.lock().unwrap();
+            *next += 1;
+            Ok(format!("/quarantine/{file_name}.{next}"))
         }
 
         fn remove_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
@@ -902,6 +1048,7 @@ mod tests {
             case_sense: CaseSense::Sensitive,
             progress: None,
             cancel: None,
+            content_editor: None,
         }
     }
 
@@ -1033,11 +1180,11 @@ mod tests {
     }
 
     #[test]
-    fn copy_is_rejected_before_touching_files() {
+    fn copy_applies_with_a_quarantine_reverse_and_undo_removes_the_output() {
         let fs = TestFs::with_files(&["/data/a.txt"]);
         let license = crate::license::AlwaysAllowLicense;
         let mut journal = TestJournal::default();
-        let error = apply_generic_plan(
+        let outcome = apply_generic_plan(
             &plan(vec![action_entry(
                 "e1",
                 "/data/a.txt",
@@ -1047,10 +1194,152 @@ mod tests {
             &ApplyOptions::default(),
             &mut context(&fs, &mut journal, &license),
         )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert!(fs.exists("/data/a.txt"), "copy keeps the source");
+        assert!(fs.exists("/data/copy.txt"));
+        // Journal：forward=Copy，reverse=产物进隔离目录（设计 01 §8 新建产物语义）。
+        assert!(matches!(journal.entries[0].forward, FsOp::Copy { .. }));
+        assert!(matches!(
+            &journal.entries[0].reverse,
+            FsOp::Quarantine { from, .. } if from == "/data/copy.txt"
+        ));
+
+        // undo 按字面执行 reverse：产物移入隔离目录，源文件不动。
+        let license = crate::license::AlwaysAllowLicense;
+        let undo = crate::apply::undo_plan_with_ports(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert!(!fs.exists("/data/copy.txt"), "undo quarantines the output");
+        assert!(fs.exists("/data/a.txt"));
+    }
+
+    #[test]
+    fn copy_overwrite_backs_up_the_target_and_undo_restores_its_content() {
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt"]);
+        fs.write_file("/data/b.txt", b"old-target");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let options = ApplyOptions {
+            on_conflict: OnConflict::Overwrite,
+            overwrite_confirmed: true,
+        };
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                Some("/data/b.txt"),
+                PlanAction::Copy,
+            )]),
+            &options,
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Overwritten);
+        assert_eq!(
+            fs.read_file("/data/b.txt"),
+            b"content",
+            "target now holds the copied content"
+        );
+        // Journal：reverse = dataRef 备份还原（设计 01 §8）。
+        let (path, backup) = match &journal.entries[0].reverse {
+            FsOp::WriteAtomic {
+                path,
+                data_ref: Some(backup),
+            } => (path.clone(), backup.clone()),
+            _ => panic!("overwrite copy must reverse via a dataRef write_atomic"),
+        };
+        assert_eq!(path, "/data/b.txt");
+
+        let license = crate::license::AlwaysAllowLicense;
+        let undo = crate::apply::undo_plan_with_ports(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert_eq!(
+            fs.read_file(&path),
+            b"old-target",
+            "undo restores the pre-overwrite content from the backup"
+        );
+        assert!(fs.exists(&backup), "the backup file itself stays recorded");
+    }
+
+    #[test]
+    fn edit_content_rewrites_in_place_and_undo_restores_the_bytes() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.write_file("/data/a.txt", b"abc");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.content_editor = Some(&|data: &[u8]| {
+            Ok(data
+                .iter()
+                .map(|byte| byte.to_ascii_uppercase())
+                .collect::<Vec<u8>>())
+        });
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                None,
+                PlanAction::EditContent,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(fs.read_file("/data/a.txt"), b"ABC");
+        assert!(matches!(
+            &journal.entries[0].forward,
+            FsOp::WriteAtomic {
+                data_ref: Some(_),
+                ..
+            }
+        ));
+
+        let license = crate::license::AlwaysAllowLicense;
+        let undo = crate::apply::undo_plan_with_ports(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert_eq!(fs.read_file("/data/a.txt"), b"abc");
+    }
+
+    #[test]
+    fn edit_content_requires_an_editor_on_the_context() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let error = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                None,
+                PlanAction::EditContent,
+            )]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
         .unwrap_err();
         assert_eq!(error.code, "E1002");
-        assert!(fs.exists("/data/a.txt"));
-        assert!(!fs.exists("/data/copy.txt"));
+        assert_eq!(fs.read_file("/data/a.txt"), b"content");
     }
 
     #[test]

@@ -20,8 +20,11 @@ pub enum FsOp {
     },
     WriteAtomic {
         path: String,
+        /// 备份文件路径（隔离目录内，经 FsAdapter 取得；设计 01 §8）。
+        /// 覆盖已有文件时指向原内容备份；新建产物无备份，`dataRef` 省略。
         #[serde(rename = "dataRef")]
-        data_ref: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data_ref: Option<String>,
     },
     Quarantine {
         from: String,
@@ -31,8 +34,14 @@ pub enum FsOp {
 
 impl FsOp {
     /// Canonical reverse for operations whose inverse is expressible with the
-    /// frozen FsOp set. Copy/WriteAtomic reverses need a quarantine delete and
-    /// are intentionally not guessed here.
+    /// frozen FsOp set.
+    ///
+    /// - `Rename` 的逆是逆改名；`Quarantine` 的逆是改名还原；
+    /// - `WriteAtomic` 携带备份（`dataRef`）时，逆是"用备份内容原子写回原路径"
+    ///   （方案 §7.8、设计 01 §8 的备份语义）；新建产物（无备份）的逆是
+    ///   "产物进隔离目录"，由执行器按 §8 规则在 apply 期显式给出 reverse，
+    ///   不在此凭空推导（隔离目录路径只有适配层知道）；
+    /// - `Copy` 的逆依赖目标是否新建/覆盖，同样由执行器显式给出。
     pub fn inverse(&self) -> Option<Self> {
         match self {
             Self::Rename { from, to } => Some(Self::Rename {
@@ -43,7 +52,14 @@ impl FsOp {
                 from: to.clone(),
                 to: from.clone(),
             }),
-            Self::Copy { .. } | Self::WriteAtomic { .. } => None,
+            Self::WriteAtomic {
+                path,
+                data_ref: Some(backup),
+            } => Some(Self::WriteAtomic {
+                path: path.clone(),
+                data_ref: Some(backup.clone()),
+            }),
+            Self::Copy { .. } | Self::WriteAtomic { data_ref: None, .. } => None,
         }
     }
 }
@@ -125,6 +141,42 @@ mod tests {
             }
             .inverse(),
             None
+        );
+    }
+
+    #[test]
+    fn write_atomic_inverse_restores_from_backup_when_present() {
+        // 覆盖写：reverse = 用备份内容原子写回原路径（设计 01 §8 dataRef 语义）。
+        let forward = FsOp::WriteAtomic {
+            path: "/data/a.txt".to_string(),
+            data_ref: Some("/quarantine/a.backup".to_string()),
+        };
+        assert_eq!(forward.inverse(), Some(forward.clone()));
+        // 新建产物（无备份）：逆不可凭空推导，执行器按 §8 显式给 Quarantine。
+        let created = FsOp::WriteAtomic {
+            path: "/out/part-1.csv".to_string(),
+            data_ref: None,
+        };
+        assert_eq!(created.inverse(), None);
+    }
+
+    #[test]
+    fn write_atomic_data_ref_is_omitted_when_absent() {
+        // 契约（设计 01 §8）：无备份需求时 dataRef 省略。
+        let json = serde_json::to_string(&FsOp::WriteAtomic {
+            path: "/out/x".to_string(),
+            data_ref: None,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"op":"write_atomic","path":"/out/x"}"#);
+        let with_ref = serde_json::to_string(&FsOp::WriteAtomic {
+            path: "/out/x".to_string(),
+            data_ref: Some("/q/x.bak".to_string()),
+        })
+        .unwrap();
+        assert_eq!(
+            with_ref,
+            r#"{"op":"write_atomic","path":"/out/x","dataRef":"/q/x.bak"}"#
         );
     }
 

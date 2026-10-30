@@ -87,6 +87,36 @@ impl CliFsAdapter {
             Err(error) => Err(io_error(&error, &from)),
         }
     }
+
+    /// 隔离目录内的唯一新路径（`stem.nanos.id` 命名，与 remove_to_quarantine 同式）。
+    fn unique_quarantine_path(
+        &self,
+        quarantine_dir: &Path,
+        base_name: &str,
+    ) -> Result<PathBuf, KernelError> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let stem = Path::new(base_name)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file");
+        let extension = Path::new(base_name)
+            .extension()
+            .and_then(|value| value.to_str());
+        loop {
+            let id = self.next_id();
+            let name = match extension {
+                Some(extension) => format!("{stem}.{nanos}.{id}.{extension}"),
+                None => format!("{stem}.{nanos}.{id}"),
+            };
+            let candidate = quarantine_dir.join(name);
+            if !path_exists(&candidate) {
+                return Ok(candidate);
+            }
+        }
+    }
 }
 
 impl FsAdapter for CliFsAdapter {
@@ -240,6 +270,55 @@ impl FsAdapter for CliFsAdapter {
             }
         };
         self.move_file(source, &target)?;
+        Ok(target.to_string_lossy().into_owned())
+    }
+
+    fn backup_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
+        let quarantine_dir = self.quarantine_dir.as_ref().ok_or_else(|| {
+            KernelError::new(
+                "E5001",
+                "quarantine directory is not configured",
+                None,
+                false,
+            )
+        })?;
+        fs::create_dir_all(fs_path(quarantine_dir))
+            .map_err(|error| io_error(&error, quarantine_dir))?;
+        let source = Path::new(path);
+        if source.file_name().is_none() {
+            return Err(KernelError::new(
+                "E1003",
+                "source path has no file name",
+                None,
+                false,
+            ));
+        }
+        let base_name = source
+            .file_name()
+            .map(|value| format!("{}.bak", value.to_string_lossy()))
+            .unwrap_or_else(|| "file.bak".to_string());
+        let target = self.unique_quarantine_path(quarantine_dir, &base_name)?;
+        // 备份是复制而非移动（设计 01 §8）：原文件留在原地，撤销时用备份还原。
+        fs::copy(fs_path(source), fs_path(&target)).map_err(|error| io_error(&error, source))?;
+        Ok(target.to_string_lossy().into_owned())
+    }
+
+    fn quarantine_target_path(&self, file_name: &str) -> Result<String, KernelError> {
+        let quarantine_dir = self.quarantine_dir.as_ref().ok_or_else(|| {
+            KernelError::new(
+                "E5001",
+                "quarantine directory is not configured",
+                None,
+                false,
+            )
+        })?;
+        fs::create_dir_all(fs_path(quarantine_dir))
+            .map_err(|error| io_error(&error, quarantine_dir))?;
+        let safe_name = Path::new(file_name)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .ok_or_else(|| KernelError::new("E1003", "file name is required", None, false))?;
+        let target = self.unique_quarantine_path(quarantine_dir, &safe_name)?;
         Ok(target.to_string_lossy().into_owned())
     }
 
@@ -613,6 +692,34 @@ mod tests {
         assert_eq!(outcome.outcome, PathOutcomeKind::Applied);
         assert!(source.exists());
         assert_eq!(fs::read(&source).unwrap(), b"content");
+    }
+
+    #[test]
+    fn backup_copies_into_quarantine_and_keeps_the_original() {
+        // 设计 01 §8：备份是复制而非移动；撤销用 dataRef 指向的备份还原。
+        let dir = TempDir::new();
+        let source = dir.0.join("source.txt");
+        let quarantine = dir.0.join("quarantine");
+        fs::write(&source, b"original").unwrap();
+        let adapter = CliFsAdapter::new(Some(quarantine));
+
+        let backup = adapter
+            .backup_to_quarantine(source.to_str().unwrap())
+            .unwrap();
+        assert!(Path::new(&backup).exists());
+        assert!(source.exists(), "backup must not move the original");
+        assert_eq!(fs::read(&backup).unwrap(), b"original");
+
+        let reserved = adapter.quarantine_target_path("out.csv").unwrap();
+        assert!(
+            !Path::new(&reserved).exists(),
+            "reserved path must not exist yet"
+        );
+        assert!(
+            reserved.ends_with(".csv") && reserved.rsplit('/').next().unwrap().starts_with("out.")
+        );
+        let reserved_again = adapter.quarantine_target_path("out.csv").unwrap();
+        assert_ne!(reserved, reserved_again, "reserved paths are unique");
     }
 
     #[test]

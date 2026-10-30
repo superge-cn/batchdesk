@@ -103,6 +103,34 @@ pub trait FsAdapter: Send + Sync {
         policy: ConflictPolicy,
     ) -> Result<PathOutcome, KernelError>;
     fn remove_to_quarantine(&self, path: &str) -> Result<String, KernelError>;
+    /// 把原文件内容备份进隔离目录（复制、不移动），返回备份路径。
+    ///
+    /// 设计 01 §8：覆盖类动作（overwrite 的 copy/内容写回）在落盘前先备份
+    /// 原内容，Journal 的 `dataRef` 指向备份路径，撤销据此还原。
+    /// 适配层不支持时返回 E5001（调用方按契约拒绝该动作，不静默降级）。
+    fn backup_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
+        let _ = path;
+        Err(KernelError::new(
+            "E5001",
+            "quarantine backup is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+    /// 在隔离目录内为目标文件名预留一个不存在的新路径（不创建文件）。
+    ///
+    /// 设计 01 §8：新建产物（无原始内容可备份）的撤销语义是"产物进隔离目录"，
+    /// Journal 的 reverse 为 `Quarantine{from: 产物, to: 此处返回的路径}`；
+    /// 路径由适配层在 apply 期生成并如实记入 Journal（执行期不得现场发明）。
+    fn quarantine_target_path(&self, file_name: &str) -> Result<String, KernelError> {
+        let _ = file_name;
+        Err(KernelError::new(
+            "E5001",
+            "quarantine path reservation is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
     fn list_dir(&self, path: &str, filter: &ScanFilter) -> Result<Vec<DirEntryInfo>, KernelError>;
     fn stat(&self, path: &str) -> Result<StatInfo, KernelError>;
     fn canonicalize(&self, path: &str) -> Result<String, KernelError>;

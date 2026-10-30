@@ -598,21 +598,7 @@ pub fn undo_plan_with_ports(
         {
             break;
         }
-        let result = match &entry.reverse {
-            FsOp::Rename { from, to } => match fs.rename(from, to, ConflictPolicy::Skip) {
-                Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => Ok(()),
-                Ok(_) => Err(KernelError::new(
-                    "E2007",
-                    "restore target already exists",
-                    None,
-                    false,
-                )),
-                Err(error) => Err(error),
-            },
-            _ => Err(KernelError::invalid_params(
-                "undo supports only quarantine rename reverses in this slice",
-            )),
-        };
+        let result = execute_reverse(fs, &entry.reverse);
         match result {
             Ok(()) => {
                 license.release(entry.plan_kind.as_deref().unwrap_or(C09), 1);
@@ -645,6 +631,50 @@ pub fn undo_plan_with_ports(
         failed,
         entries: reports,
     })
+}
+
+/// 按 Journal 的 `reverse` 字面执行一条逆向操作（设计 01 §8：回滚 = 逆序执行
+/// reverse）。供撤销任务与执行中取消回滚共用；执行器不得"现场发明"reverse，
+/// 只执行 Journal 里已记录的操作。
+pub(crate) fn execute_reverse(fs: &dyn FsAdapter, reverse: &FsOp) -> Result<(), KernelError> {
+    match reverse {
+        // 隔离还原：quarantine 的逆是改名回原位。
+        FsOp::Rename { from, to } => match fs.rename(from, to, ConflictPolicy::Skip) {
+            Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => Ok(()),
+            Ok(_) => Err(KernelError::new(
+                "E2007",
+                "restore target already exists",
+                None,
+                false,
+            )),
+            Err(error) => Err(error),
+        },
+        // 新建产物的撤销（设计 01 §8）：产物移入隔离目录，不在原地删除。
+        FsOp::Quarantine { from, to } => match fs.rename(from, to, ConflictPolicy::Skip) {
+            Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => Ok(()),
+            Ok(_) => Err(KernelError::new(
+                "E2007",
+                "quarantine target already exists",
+                None,
+                false,
+            )),
+            Err(error) => Err(error),
+        },
+        // 覆盖写的撤销：用备份内容原子写回原路径（dataRef 语义）。
+        FsOp::WriteAtomic {
+            path,
+            data_ref: Some(backup),
+        } => {
+            let data = fs.read_bytes(backup)?;
+            fs.write_atomic(path, &data)
+        }
+        FsOp::WriteAtomic { data_ref: None, .. } => Err(KernelError::invalid_params(
+            "write_atomic reverse requires a backup dataRef",
+        )),
+        FsOp::Copy { .. } => Err(KernelError::invalid_params(
+            "copy is not a reversible journal op; reverses are rename/quarantine/write_atomic",
+        )),
+    }
 }
 
 fn report_undo_progress(ports: &UndoPorts<'_>, phase: ProgressPhase, done: u64, total: u64) {
