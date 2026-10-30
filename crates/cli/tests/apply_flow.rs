@@ -1161,6 +1161,188 @@ fn f07_plan_apply_and_undo_extracts_columns_in_order() {
 }
 
 #[test]
+fn f08_plan_apply_and_undo_takes_the_first_rows() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("first.csv");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&source, b"id,name\n1,Alice\n2,Bob\n3,Cara\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f08",
+        "--file",
+        path_text(&source),
+        "--first",
+        "2",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f08 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f08");
+    assert_eq!(document["entries"][0]["action"], "csv-rows");
+    assert_eq!(document["entries"][0]["csvRows"]["window"], "first");
+    assert_eq!(document["entries"][0]["csvRows"]["count"], 2);
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f08 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        b"id,name\n1,Alice\n2,Bob\n",
+        "first N keeps the header and the first data rows"
+    );
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 1);
+    assert!(!output.exists());
+    assert!(source.exists());
+}
+
+#[test]
+fn f08_last_window_keeps_the_tail() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("last.csv");
+    fs::write(&source, b"id,name\n1,Alice\n2,Bob\n3,Cara\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f08",
+        "--file",
+        path_text(&source),
+        "--last",
+        "2",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let payload = &document["entries"][0]["csvRows"];
+    assert_eq!(payload["window"], "last");
+    assert_eq!(payload["count"], 2);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let quarantine = dir.0.join("quarantine");
+    let journal = dir.0.join("journal.jsonl");
+    let plan_path = dir.0.join("plan.json");
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f08 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        b"id,name\n2,Bob\n3,Cara\n",
+        "last N keeps the tail data rows"
+    );
+}
+
+#[test]
+fn f08_zero_rows_writes_only_the_header() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("empty.csv");
+    fs::write(&source, b"id,name\n1,Alice\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f08",
+        "--file",
+        path_text(&source),
+        "--first",
+        "0",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["csvRows"]["count"], 0);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    assert_eq!(fs::read(&output).unwrap(), b"id,name\n");
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

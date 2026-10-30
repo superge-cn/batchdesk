@@ -605,6 +605,7 @@ fn build_split_document(
                 merge: None,
                 csv_merge: None,
                 csv_extract: None,
+                csv_rows: None,
             });
         }
     }

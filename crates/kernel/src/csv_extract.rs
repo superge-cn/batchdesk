@@ -100,7 +100,10 @@ pub fn plan_f07(input: PlanF07Input) -> Result<PlanDocument, KernelError> {
             "inputs mix files with and without a header row",
         ));
     }
-    ensure_unique_targets(&input.files, input.case_sense)?;
+    ensure_unique_targets(
+        input.files.iter().map(|file| file.target.as_str()),
+        input.case_sense,
+    )?;
 
     let mut warnings = Vec::new();
     let mut dirty_files = Vec::new();
@@ -197,6 +200,7 @@ pub fn plan_f07(input: PlanF07Input) -> Result<PlanDocument, KernelError> {
                 invalid: input.invalid.as_str().to_string(),
                 dirty_rows: file.dirty_rows,
             }),
+            csv_rows: None,
         });
     }
 
@@ -345,18 +349,20 @@ fn resolve_selections(
     Ok((selections, duplicate_warning))
 }
 
-fn ensure_unique_targets(files: &[PlanF07File], sense: CaseSense) -> Result<(), KernelError> {
+pub(crate) fn ensure_unique_targets<'a>(
+    targets: impl IntoIterator<Item = &'a str>,
+    sense: CaseSense,
+) -> Result<(), KernelError> {
     let mut seen = BTreeSet::new();
-    for file in files {
-        let normalized = try_normalize(&file.target)?;
+    for target in targets {
+        let normalized = try_normalize(target)?;
         let key = match sense {
             CaseSense::Sensitive => normalized,
             CaseSense::CaseInsensitive => normalized.to_lowercase(),
         };
         if !seen.insert(key) {
             return Err(KernelError::invalid_params(format!(
-                "multiple inputs map to the same target: {}",
-                file.target
+                "multiple inputs map to the same target: {target}"
             )));
         }
     }

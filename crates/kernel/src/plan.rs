@@ -105,6 +105,8 @@ pub enum PlanAction {
     Merge,
     /// F07 CSV 抽取指定列产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvExtract,
+    /// F08 CSV 抽取指定数量行产物（1:1，每个输入一条 entry；方案 §5.15）。
+    CsvRows,
 }
 
 impl PlanAction {
@@ -122,6 +124,7 @@ impl PlanAction {
             Self::Split => "split",
             Self::Merge => "merge",
             Self::CsvExtract => "csv-extract",
+            Self::CsvRows => "csv-rows",
         }
     }
 }
@@ -324,6 +327,36 @@ pub struct PlanCsvExtract {
     pub dirty_rows: u64,
 }
 
+/// F08 CSV 抽取数量行的载荷（仅 `csv-rows` 动作使用）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvRows {
+    /// 检测或用户确认的源编码；`None` 表示需人工确认（计划条目按 E3001 阻断）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    /// 输入分隔符（输出沿用同一分隔符）。
+    pub delimiter: String,
+    pub has_header: bool,
+    /// 规范化表头字段（保留重复项）；无表头时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    /// 源列宽（有表头时取表头字段数；无表头时取数据行最大字段数）。
+    pub column_count: u64,
+    /// 计划期数据行数（不含表头）。
+    pub data_rows: u64,
+    /// `"first"` | `"last"`。
+    pub window: String,
+    /// 请求的行数（允许 0；超过 `data_rows` 时输出全部数据行）。
+    pub count: u64,
+    /// 目标编码（`TargetEncoding::as_str` 的稳定字符串，含 BOM 策略）。
+    pub target_encoding: String,
+    /// 非法序列策略（`InvalidSequencePolicy::as_str`）。
+    pub invalid: String,
+    /// 数据行字段数与列宽不一致的记录数（只上报，不静默修正）。
+    pub dirty_rows: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
@@ -358,6 +391,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：CSV 抽取列的选择与源结构（仅 F07 的 `csv-extract` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_extract: Option<PlanCsvExtract>,
+    /// 追加式可选字段：CSV 抽取数量行的窗口与源结构（仅 F08 的 `csv-rows` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_rows: Option<PlanCsvRows>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,6 +565,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 csv: None,
                 csv_merge: None,
                 csv_extract: None,
+                csv_rows: None,
             });
         }
     }
@@ -743,6 +780,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             csv: None,
             csv_merge: None,
             csv_extract: None,
+            csv_rows: None,
         });
     }
 
