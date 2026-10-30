@@ -35,12 +35,12 @@
 ### 3.1 已验证可用
 
 - 基线/契约/测试文档体系：产品方案 v1.19、T v1.12、U v1.3、设计 01–14、ADR、PDR、TC v0.3。
-- kernel：C09 纯分组、`PlanDocument`/`plan_c09`、`FsAdapter`/`LicenseService`/`Journal`/`apply_plan`/`undo_plan`、`ProgressSink`/`CancelToken`（逐条进度、取消回滚）、路径 normalize/is_under 与 S02 blocked、plan→apply 内容指纹复核（`expected`+E2010，设计 01 v1.3）。
+- kernel：C09 纯分组、`PlanDocument`/`plan_c09`、`FsAdapter`/`LicenseService`/`Journal`/`apply_plan`/`undo_plan`、`ProgressSink`/`CancelToken`（逐条进度、取消回滚）、路径 normalize/is_under 与 S02 blocked、plan→apply 内容指纹复核（`expected`+E2010，设计 01 v1.3）；通用执行器 `generic_apply` 覆盖 rename/move/delete/`copy`/`edit-content`（copy 新建逆向＝产物进隔离目录、覆盖/内容改写逆向＝`dataRef` 备份还原，设计 01 v1.7），撤销统一走共享 `execute_reverse`。
 - `crates/platform`：扫描/BLAKE3、原生 FsAdapter、FileJournal、保留期 cleanup，CLI 与桌面壳共用。
 - CLI：C09 scan → plan → apply → undo/cleanup、S02、`--protected-dir`、`--retention-days`。
 - 桌面：`src-tauri` Tauri v2 任务队列（`tasks.rs`）与 `task://progress`/`task://state`/`task://done`；`applyPlan`/`undoPlan` 返回 `{taskId}`；取消/暂停/恢复/重试（`retryTask`，仅失败条目、新 taskId 引用原 planId）/崩溃恢复（`recoverTask`）/预检（`preflightPlan`）与 list/get 已注册；`task://progress` 按方案 §9.1 节流区间下限合帧；LicenseService 由装配点注入（`TaskQueue::with_license`，方案 13.8）；C17a 最小操作日志落库（rusqlite bundled，ADR-0013：任务收尾单事务批量写、`logFullPaths` 脱敏、E1007/损坏降级不阻断批处理）；应用数据目录下 quarantine/journal/oplog。
 - Web：React 19/Vite 7 C09 页面，U v1.3 token + 液态玻璃外壳；计划预览、确认执行、事件驱动进度/暂停/取消、撤销、保留期演练/永久清理；任务事件按 taskId 归档，避免 IPC 返回前完成导致丢报告；浏览器 mock IPC 流已验证。
-- 验证：`cargo test --workspace` **151 项**通过（kernel 102 + platform 40 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 13 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 六 job 全绿（run 40872864062，2026-10-29；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success；head 1420a3d 复验 run 40907291374 七 job 全 success）**。
+- 验证：`cargo test --workspace` **157 项**通过（kernel 107 + platform 41 + CLI 6 + CLI 集成 3）；`cargo test --manifest-path src-tauri/Cargo.toml` 13 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 六 job 全绿（run 40872864062，2026-10-29；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success；head 1420a3d 复验 run 40907291374 七 job 全 success）**。
 - 门禁：fmt/clippy、docs、语料范围/哈希、迁移 schema。
 
 ### 3.2 部分完成/有明确缺口
@@ -48,7 +48,7 @@
 | 域 | 已完成 | 未完成/缺口 |
 |---|---|---|
 | C09 产品化 | 纯分组、计划、apply/undo、S02、保留期、CLI/UI 切片、任务队列/事件、取消回滚、WebView E2E、plan→apply 内容再校验（E2010）、Windows 文件身份（ADR-0012）、Windows 长路径收口（设计 04 v1.3） | C09 的 T 全量 UI 验收（UNC 长路径行为矩阵待 Windows 实机） |
-| 平台核心 | Native FsAdapter、Journal、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停、`retryTask` 手动重试、进度事件合帧、LicenseService 装配点注入、C17a 最小操作日志（rusqlite bundled，ADR-0013）、ConfigDocument + UiState + Recipe 存储与命令、通用执行器（rename/move/delete）+ 冲突枚举、S01 预检判定与采集、S02 目标路径执行期复核、S03 任务快照持久化与恢复 | 诊断日志轨（滚动文件/轮转参数待 ADR）、商业授权实现（注入口 seam 已建）、设置 UI、`loadRecipe`、Hashing 端口、`copy` 执行器 |
+| 平台核心 | Native FsAdapter、Journal（含 dataRef 备份语义与三类 reverse 执行）、AlwaysAllow、路径/保留期、TaskQueue/TaskState/进度/取消/暂停、`retryTask` 手动重试、进度事件合帧、LicenseService 装配点注入、C17a 最小操作日志（rusqlite bundled，ADR-0013）、ConfigDocument + UiState + Recipe 存储与命令、通用执行器（rename/move/delete/`copy`/`edit-content`）+ 冲突枚举、S01 预检判定与采集、S02 目标路径执行期复核、S03 任务快照持久化与恢复 | 诊断日志轨（滚动文件/轮转参数待 ADR）、商业授权实现（注入口 seam 已建）、设置 UI、`loadRecipe`、Hashing 端口、archive/extract 执行器（C10 时接） |
 | IPC/UI | C09 任务队列命令、`{taskId}+事件`、cleanup/storage 合约化、事件驱动 UI | CSP/capabilities、i18n、虚拟滚动、shadcn 完整组件、Vitest/Playwright、任务列表 UI |
 | 桌面工程 | Tauri 编译/启动、CI desktop check | Windows WebView 构建验证、`src-tauri` 独立 Cargo.lock 的 cargo-deny/SBOM、安装包/签名 |
 | 验证 | C-6、C-6 计划预览、apply/undo/保留期集成 | 24 条自动化语料的逐条断言 harness、C-7 阻塞、C-1/C-2/C-4/C-5/C-8 正式基准 |
@@ -68,7 +68,7 @@
 | 有几个产品功能完成 T 验收？ | **0** |
 | 有几个功能有可运行纵向切片？ | **1**（C09） |
 | 平台核心是否足够支撑第二个功能？ | **是**：S01/S02/S03、Config/UiState、通用文件操作主链、retryTask/合帧、授权注入 seam、C17a 最小日志已建；仍缺诊断日志轨、商业授权实现与 Hashing 端口（均为可后置平台件） |
-| 现在最该做什么？ | **进入 Wave 2**（阶段 0 文本/文件主功能，F01–F04 起）：Wave 1 的平台件已齐——`retryTask`、事件合帧、LicenseService 注入口、C17a 最小操作日志（ADR-0013）、Windows 长路径收口均完成（切片）；剩余平台件（诊断日志、Hashing 端口、`copy` 执行器）按依赖插入；W0-6 仅剩 C09 的 T 全量 UI 验收（人工项） |
+| 现在最该做什么？ | **进入 Wave 2**（阶段 0 文本/文件主功能，F01–F04 起，依赖文本流式读写与编码检测）：Wave 1 平台件与通用执行器撤销链（copy/edit-content）已齐；剩余平台件（诊断日志、Hashing 端口）按依赖插入；W0-6 仅剩 C09 的 T 全量 UI 验收（人工项） |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -107,7 +107,7 @@
 1. **ConfigDocument + UiState + Recipe 存储**（设计 03）：设置、最近目录、列宽/排序、模板运行偏好；不混入门禁/任务/日志。
    - **当前状态（2026-10-29）**：存储层完成（kernel 类型/默认值/来源视图/模板 v1→v3 迁移 + `platform::config_store` 原子写/损坏兜底/只读降级 + 12 条壳层命令）；设置 UI、`loadRecipe`、迁移链（v1 为空）与 UiState 恢复规则待补。
 2. **通用文件操作主链**：C05/C06/C07/C18 的冲突枚举、预览、plan/apply、Journal 撤销；供后续 F/C 功能复用。
-   - **当前状态（2026-10-29）**：kernel `conflict`（三类冲突枚举、保留名/非法字符/结尾点空格/空名警告、`sequence` 命名、大小写折叠）与 `generic_apply`（rename/move/delete 执行、冲突二次裁决、Journal 可逆记录、取消回滚、E2010 指纹复核、E2009/E2006/E4001/E4004、outcome→`overwritten` 单列）已落地并含 17 项单测；`copy`、压缩/转码类与长路径分级未接（见台账缺口）；尚未接入具体功能与 UI。
+   - **当前状态（2026-10-30，切片完成）**：kernel `conflict`（三类冲突枚举、保留名/非法字符/结尾点空格/空名警告、`sequence` 命名、大小写折叠）与 `generic_apply`（rename/move/delete/`copy`/`edit-content` 执行、冲突二次裁决、Journal 可逆记录、取消回滚、E2010 指纹复核、E2009/E2006/E4001/E4004、outcome→`overwritten` 单列）已落地并含单测；**Journal 逆向补全**（设计 01 v1.7）：copy 新建目标逆＝产物进隔离目录（reverse=Quarantine），copy 覆盖与 edit-content 先 `backup_to_quarantine` 备份、逆＝`WriteAtomic{dataRef}` 还原；撤销任务与取消回滚共用 `execute_reverse`。长路径分级已随 W0-6 收口。**剩余**：archive/extract 执行器（C10 时接）、具体功能与 UI 接入。
 3. **S01/S02/S03**：预检、保护目录执行层复核、断点续跑/任务持久化。
    - **当前状态（2026-10-29）**：S01 内核纯函数预检（磁盘余量判定式、只读/占用/占位、路径长度分级、UNC 降级、保护命中）与 platform 事实采集（statvfs/GetDiskFreeSpaceExW、写探测、2 秒 UNC 超时、LongPathsEnabled）已落地；壳层 `preflightPlan` 与 `applyPlan` 前置阻断（E2004 零副作用）。S02 执行期补 `rename/move` **目标路径**保护复核；配置来源名单在 plan→apply 间变化时旧预览失效（E1002）。S03 非终态任务快照持久化（`tasks.json` 原子写、损坏备份）、启动标记 `interrupted` 不自动续跑、`recoverTask` 的 resume/rollback/discard；Journal 增 `planKind`，undo 按计划类别退还配额。**剩余**：TC S01/S02 的 10–12 条 UI 用例尚未逐条执行、S03 实机崩溃演练、retryTask/事件合帧、UNC 探测线程超时残留的系统调用（已知取舍）。
 4. **日志/诊断/授权注入**：C17a 最小日志、Journal 保留期、LicenseService 单机实现与商业接口边界。
@@ -193,6 +193,7 @@
 | 2026-10-30 | Wave 1-4a：`retryTask` + 进度合帧 + LicenseService 注入口 | 切片 | `src-tauri/src/tasks.rs` 新增 `retry`（仅对终态 partial-failed/failed 的 apply 任务；缺省重试全部失败条目、`entryIds` 子集校验 E1002、Journal 已 applied 幂等排除、编排级失败重跑全部条目、undo 任务拒绝；单测 3 项）与 `PROGRESS_COALESCE_WINDOW` 合帧（取方案 §9.1「进度刷新节流 100–200 ms」区间下限；同阶段合帧、阶段迁移即推并补发最新条目计数、`task://state`/`task://done` 不合帧；单测 1 项）；`with_license` 成为唯一构造器即方案 13.8 注入口，lib.rs 装配点显式注入 AlwaysAllow；lib.rs 注册 `retryTask` 命令；web 新增"重试失败项"入口（partial-failed/failed 终态）与 mock 失败→重试演示、undo 总数改按壳层 Journal 统计修正；设计 01 升 v1.5、设计 12 升 v0.6；`cargo test --workspace` 146 项、壳层 12 项、fmt/clippy -D warnings（root + src-tauri）、`pnpm build`、check_docs/check_schema、`cargo deny`（root + src-tauri）全绿（本地，待推送后 CI 复验） | C17a 操作/诊断日志（设计 10 §7 schema 待决）、商业授权实现、E2E 重试场景（需可复现失败注入）、TC S01/S02 UI 用例、S03 实机崩溃演练 | 开发代理 |
 | 2026-10-30 | W0-6 Windows 长路径收口 | 切片 | `platform::fs` 的 `fs_path`/`strip_extended_path` 提为 crate 收口点并新增 `canonicalize_display`（Windows canonicalize 恒带 `\\?\`，剥回显示形式）；`extended_path` Windows 分支加前缀前经 kernel `try_normalize` 归一分隔符与 `.`/`..` 段（`\\?\` 不吃 Win32 归一化；相对路径与 `C:` 盘符相对形式不加前缀）；`scan.rs` 枚举/哈希/文件身份、`preflight.rs` probe_root/probe_write/path_check/probe_unc、`protected.rs` prepare、CLI 与 src-tauri 的 PlanFile canonical 全部改走收口点；新增 Windows 单测 `extended_path_normalizes_before_prefixing_and_keeps_relative_paths` 与长路径回归 `scans_long_paths_beyond_the_win32_limit`（>260 字符真实深树，Windows CI 执行）；`cargo test --workspace` 146 项、clippy -D warnings、`cargo check --target x86_64-pc-windows-msvc`（临时 blake3 pure 绕过汇编后还原）零 error、check_docs 全绿（本地，待推送后 Windows CI 复验）；设计 04 升 v1.3 | T C09 全量 UI 验收（人工）、UNC/长路径 canonicalize 行为矩阵（Windows 实机，R01/R06）、retention cleanup 的直接 fs 调用（应用数据目录内，超长场景待定） | 开发代理 |
 | 2026-10-30 | Wave 1-4b：C17a 最小操作日志（ADR-0013） | 切片 | **依赖**：`rusqlite 0.41`（bundled，MIT OR Apache-2.0）入 `crates/platform`，`cargo deny` 四项 root + src-tauri 全绿（advisories 因本地 github.com 不可达以 2026-10-29 缓存库 `--offline` 复核，CI 推送后拉新库复验）。**存储**：`platform::oplog` 单表 `operation_log` + `PRAGMA user_version` 只增不改迁移、`plan_id`/`task_id`/`ts` 索引、损坏留 `.corrupt.<ts>` 副本重建（E5009）、高版本 E1007；单测 5 项。**接线**：`TaskQueue::with_license` 增 `log_full_paths` 读取口（03 §4.1 默认 false）；任务收尾单事务批量写——apply 记批次 start/finish＋逐条 entry（路径取自 Journal forward），undo 记 `phase=rollback`/`status=reverted`，编排级失败记批次＋错误码；审计轨写失败/未启用降级 stderr 不阻断批处理（壳层测试 1 项实证）；`cleanupRetention` apply 时清理操作日志并回填 `removedLogRecords`（设计 01 v1.6 增量字段）。**文档**：ADR-0013（用户确认三项决策）、设计 10 升 v0.2（§7 第 1 项待决关闭）、设计 01 升 v1.6。验证：`cargo test --workspace` **151 项**（platform 40 含 oplog 5）、壳层 13 项、fmt/clippy -D warnings（root + src-tauri）、check_docs/check_scope/check_schema 全绿（本地，待推送后 CI 复验；rusqlite bundled 的 Windows C 编译由 CI Windows job 实测） | 诊断日志轨（滚动文件/轮转待 ADR）、`logging.retentionDays` 的设置 UI、CLI 侧操作日志（OQ-30）、C06 反查 UI、支持包导出 | 开发代理 |
+| 2026-10-30 | Wave 1-2 收口：Journal 逆向补全 + copy/edit-content 执行器 | 切片 | **契约**：设计 01 升 v1.7（§8 追加 reverse 推导规则——copy 新建目标逆＝产物进隔离目录、copy 覆盖与 write_atomic 逆＝dataRef 备份还原、新建产物 `dataRef` 省略对齐契约字面）；设计 04 升 v1.4（FsAdapter 追加 `backup_to_quarantine`/`quarantine_target_path`，默认 E5001、CliFsAdapter 实现，长路径前缀收口同样生效）。**kernel**：`FsOp::data_ref` 改 `Option<String>`；`FsOp::inverse` 支持 WriteAtomic 备份还原；undo 执行器从"仅 quarantine rename"扩为三类 reverse 共享 `execute_reverse`（撤销任务与取消回滚同一实现）；`generic_apply` 接入 `copy`（新建/覆盖两路 reverse）与 `edit-content`（`ContentEditor` 注入变换，备份→改写→原子写回），copy 目标纳入 S02 保护复核。**测试**：journal 2 项（逆推/dataRef 省略）、generic_apply 4 项（copy 新建撤销→产物进隔离、copy 覆盖撤销→备份还原原内容、edit-content 撤销→字节还原、缺 editor E1002）、platform 1 项（备份复制保留原件＋预留路径唯一）；`cargo test --workspace` **157 项**（kernel 107 + platform 41 + CLI 6 + 集成 3）、壳层 13 项、fmt/clippy -D warnings 全绿、check_docs 通过（本地，待推送后 CI 复验） | archive/extract 执行器（C10 时接）、F01–F04 接入本执行器、TC 语料回归 harness | 开发代理 |
 
 ## 7. 关联
 
