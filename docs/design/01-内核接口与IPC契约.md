@@ -286,7 +286,7 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 
 | 命令 | 入参 | 出参 | 说明 |
 |---|---|---|---|
-| `cleanupRetention` | `{retentionDays?: number, apply?: boolean}` | `CleanupOutcome` | 保留期演练/清理；`apply` 缺省 false |
+| `cleanupRetention` | `{retentionDays?: number, apply?: boolean}` | `CleanupOutcome`（v1.6 增量可选字段 `removedLogRecords`：C17a 操作日志随保留期清理的记录数，桌面壳填写；`apply` 缺省 false） | 保留期演练/清理 |
 | `getStorageInfo` | — | `{quarantineDir: string, journalFile: string}` | 展示隔离目录与 Journal 路径 |
 
 > 任务队列命令 `cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已按 §4.1 的入出参实现；**S03 已实现任务快照持久化与 `recoverTask`**（`interrupted` 状态不自动续跑）。**`retryTask` 已实现（v1.5）**：仅对终态 `partial-failed`/`failed` 的 apply 任务生效，缺省重试全部失败条目、`entryIds` 可选子集（必须都是该任务报告中的失败条目，否则 E1002）；生成**新 taskId** 引用原 planId（§6），原任务保持终态；Journal 已 applied 条目幂等排除，编排级失败（报告零条目）时重跑全部条目；undo 任务不可重试（重试语义见方案 §7.6：沿用原参数与冲突策略，apply 期重新裁决冲突）。分页默认值属壳层实现参数，不改变 §2.3 的契约。
@@ -446,3 +446,4 @@ interface JournalEntry {
 | v1.3 | 2026-10-29 | 追加 `PlanEntry.expected` 内容指纹与 E2010；apply 在隔离前复核大小/哈希，变化条目 skipped。 |
 | v1.4 | 2026-10-29 | 追加 S01 `preflightPlan`/`PreflightReport`、S03 `interrupted` 状态与 `recoverTask`、任务快照持久化说明；Journal 追加可选 `planKind`（undo 按 kind 退还配额）；`retryTask` 仍未实现。 |
 | v1.5 | 2026-10-30 | `retryTask` 实现语义定稿（仅失败条目、新 taskId 引用原 planId、Journal 幂等排除、undo 不可重试）；§3.2 节流行标注壳层合帧已实现（窗口取方案 §9.1 区间下限）；LicenseService 注入口收敛为壳层装配点（方案 13.8）。 |
+| v1.6 | 2026-10-30 | §4.4.1 `CleanupOutcome` 追加可选字段 `removedLogRecords`（C17a 操作日志随保留期清理，ADR-0013；只增不改）。 |

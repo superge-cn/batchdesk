@@ -63,3 +63,4 @@
 | [0010](./0010-计划与日志序列化serde.md) | Plan/Apply/Journal 的 JSON 序列化选用 serde | 已采纳 |
 | [0011](./0011-桌面IPC与UI切片选型.md) | 桌面 IPC/UI 切片选用 Tauri v2 + React/Vite | 已采纳 |
 | [0012](./0012-Windows文件身份改用WinAPI.md) | Windows 文件身份改用 WinAPI（windows-sys） | 已采纳 |
+| [0013](./0013-C17a操作日志存储选型rusqlite.md) | C17a 操作日志存储选用 rusqlite（bundled）＋user_version 迁移 | 已采纳 |
