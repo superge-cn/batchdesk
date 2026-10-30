@@ -14,7 +14,7 @@
 | crates/platform | 共享壳层适配：扫描/哈希、原生 FsAdapter、FileJournal、保留期清理 | 设计 01/04、方案 4.7 |
 | src-tauri | 桌面壳：C09 任务队列/`task://*` 事件、S03 任务快照持久化与 `recoverTask`、S01 `preflightPlan`、IPC 命令、应用数据路径、计划暂存；授权注入待补 | 方案 4.4、设计 01 §4.3–§6、设计 12 |
 | web/ | 表现层：C09 参数/预览/执行/撤销/保留期 UI；事件驱动进度/暂停/取消；无业务与授权逻辑 | 方案 4.2、U v1.3、设计 12 |
-| fixtures/corpus | 28 条异常语料（24 条脚本已就绪；逐条断言 harness 待实现） | T 3.2 |
+| fixtures/corpus | 28 条异常语料（24 条自动化脚本已就绪；断言 harness 已起步：K01–K08 已断言，其余 pending 登记在 `crates/kernel/tests/assertions.tsv`） | T 3.2 |
 | fixtures/bench | 性能基准数据集 C-1…C-8 | T 附录 C |
 | fixtures/migrations | 配置 schema 历史样本（不属于 28 条语料） | 设计 03 §7 |
 | docs/design | 设计契约 01–13 | docs/design/README |
@@ -29,9 +29,9 @@
 ## 常用命令
 - 构建：cargo build --workspace
 - 语料生成前的准备（**必须先跑**，否则没有输入样本）：python fixtures/corpus/check_scope.py（范围门禁）→ 依次执行 fixtures/corpus/*/gen_*.py（幂等生成样本）
-- 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成；**语料回归断言尚未实现**）
+- 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成 + `crates/kernel/tests/corpus.rs` 语料断言；**仅 K01–K08 已接断言**）
   - ⚠️ `cargo test` 不生成语料；生成脚本只准备输入，不代表回归已执行。
-  - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。但 **24 条自动化语料的断言 harness 尚未落地**：CI 绿灯当前只代表"生成 + 范围核对 + 单元测试通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
+  - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。**断言 harness 已起步（K01–K08 共 8 项，3 条 asserted／5 条 partial），其余 16 条在 `crates/kernel/tests/assertions.tsv` 标 pending**：CI 绿灯仍只代表"生成 + 范围核对 + 单元测试 + 已接入的 8 项语料断言通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
 - 单 crate 测试：cargo test -p kernel / -p batchdesk-platform
 - Web/壳：pnpm install（根，Tauri CLI）→ (cd web && pnpm install) → pnpm build；pnpm tauri dev；cargo check --manifest-path src-tauri/Cargo.toml（独立 workspace，需 WebKitGTK/WebView2；不随根 cargo test 编译）
 - 桌面壳任务队列测试：cargo test --manifest-path src-tauri/Cargo.toml --offline
@@ -79,7 +79,7 @@
 
 ## 协作纪律（AI 开发四条铁律）
 1. **引用回核**：凡答复/文档/注释中写"依据 方案 x.y"（含 T/U 章节号），必须是当次会话打开基线原文核对过；核对不了的一律标注"未核对，待人工确认"，禁止凭记忆引用章节号、数值与码位——补全即幻觉。
-2. **缺陷修复五步闭环**（缺一步不算修复完成）：① 先红后绿——复现先固化为单测或新语料，禁止未复现直接改码；② 影响面清单——动手前列出会触碰的调用方/契约/文档，修改时逐处同步；③ 最小改动半径——禁止顺手重构；④ 全量回归——按「常用命令」先生成语料再 `cargo test --workspace`（语料断言 harness 落地前，语料部分只做生成/范围核对），fmt/clippy/deny 门禁全过；⑤ 沉淀——P0/P1 按「修改完成的定义」挂 manifest，教训按第 3 条分流。
+2. **缺陷修复五步闭环**（缺一步不算修复完成）：① 先红后绿——复现先固化为单测或新语料，禁止未复现直接改码；② 影响面清单——动手前列出会触碰的调用方/契约/文档，修改时逐处同步；③ 最小改动半径——禁止顺手重构；④ 全量回归——按「常用命令」先生成语料再 `cargo test --workspace`（断言尚未覆盖的语料条目只做生成/范围核对），fmt/clippy/deny 门禁全过；⑤ 沉淀——P0/P1 按「修改完成的定义」挂 manifest，教训按第 3 条分流。
 3. **经验沉淀分流**（按类型归位，不全塞一筐）：输入/异常场景类 bug → fixtures/corpus 新语料（CI 自动回归）；工程实现决策 → docs/adr/NNNN（判据见其 README）；工作方式/流程教训 → 先记会话记忆，人工评审确认后升格进本文件或基线文档；不满足任何一类的不沉淀。
 4. **完成即标注**（项目规则）：每完成一个任务、功能或切片，必须在**相关文档的相应位置**写明状态与证据，禁止只在会话里说“做完了”。至少同步：
    - `docs/DEVELOPMENT-PLAN.md`：对应 Wave/任务改为“完成/切片/部分/未开始/阻塞”，写证据与剩余缺口；

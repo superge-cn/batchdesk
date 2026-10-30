@@ -88,6 +88,7 @@ impl SourceEncoding {
 
     fn expected_bom(self) -> Option<&'static [u8]> {
         match self {
+            Self::Utf8 => Some(&[0xEF, 0xBB, 0xBF]),
             Self::Utf16Le => Some(&[0xFF, 0xFE]),
             Self::Utf16Be => Some(&[0xFE, 0xFF]),
             _ => None,
