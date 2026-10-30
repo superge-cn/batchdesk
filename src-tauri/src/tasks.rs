@@ -1240,7 +1240,9 @@ fn fs_op_paths(op: &FsOp) -> (String, String) {
         FsOp::Rename { from, to } | FsOp::Copy { from, to } | FsOp::Quarantine { from, to } => {
             (from.clone(), to.clone())
         }
-        FsOp::WriteAtomic { path, .. } => (path.clone(), path.clone()),
+        FsOp::WriteAtomic { path, .. }
+        | FsOp::CreateDir { path }
+        | FsOp::RemoveDir { path } => (path.clone(), path.clone()),
     }
 }
 

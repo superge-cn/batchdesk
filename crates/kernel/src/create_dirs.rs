@@ -228,11 +228,21 @@ fn looks_absolute(path: &str) -> bool {
 
 /// 把清单相对路径挂到目标根目录下（供计划与壳层探测复用）。
 pub fn target_for_list_path(root: &str, relative: &str) -> String {
+    let separator = if root.contains('\\') && !root.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let relative = if separator == '\\' {
+        relative.replace('/', "\\")
+    } else {
+        relative.to_string()
+    };
     let base = root.trim_end_matches(['/', '\\']);
     if base.is_empty() {
         format!("/{relative}")
     } else {
-        format!("{base}/{relative}")
+        format!("{base}{separator}{relative}")
     }
 }
 
@@ -339,6 +349,15 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.kind == "empty-list"));
+    }
+
+    #[test]
+    fn target_path_preserves_the_root_separator_style() {
+        assert_eq!(target_for_list_path("/data/out", "a/b"), "/data/out/a/b");
+        assert_eq!(
+            target_for_list_path(r"C:\data\out", "a/b"),
+            r"C:\data\out\a\b"
+        );
     }
 
     #[test]
