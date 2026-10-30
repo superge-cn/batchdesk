@@ -715,8 +715,14 @@ mod tests {
             !Path::new(&reserved).exists(),
             "reserved path must not exist yet"
         );
+        // 路径分隔符随平台不同（Windows 为 `\`），断言必须走 Path 而非硬编码 `/`。
+        let reserved_name = Path::new(&reserved)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("reserved path should have a file name");
         assert!(
-            reserved.ends_with(".csv") && reserved.rsplit('/').next().unwrap().starts_with("out.")
+            reserved_name.ends_with(".csv") && reserved_name.starts_with("out."),
+            "reserved name {reserved_name} should keep stem and extension"
         );
         let reserved_again = adapter.quarantine_target_path("out.csv").unwrap();
         assert_ne!(reserved, reserved_again, "reserved paths are unique");
