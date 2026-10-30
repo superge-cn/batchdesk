@@ -992,6 +992,73 @@ fn f06_strict_mode_blocks_a_schema_mismatch() {
 }
 
 #[test]
+fn f06_plan_surfaces_headerless_and_header_normalization_warnings() {
+    let dir = TempDir::new();
+    let headerless = dir.0.join("headerless.csv");
+    let padded = dir.0.join("padded.csv");
+    let out_headerless = dir.0.join("out-headerless.csv");
+    let out_padded = dir.0.join("out-padded.csv");
+    fs::write(&headerless, "1001,张伟,1200.00\n1002,李娜,3800.50\n").unwrap();
+    fs::write(
+        &padded,
+        "姓名,姓名, 部门 ,金额 \n张伟,张伟（别名）,行政部,1200.00\n",
+    )
+    .unwrap();
+
+    let headerless_plan = batchdesk(&[
+        "f06",
+        "--file",
+        path_text(&headerless),
+        "--output",
+        path_text(&out_headerless),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--no-header",
+    ]);
+    assert!(
+        headerless_plan.status.success(),
+        "f06 headerless plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&headerless_plan.stdout),
+        String::from_utf8_lossy(&headerless_plan.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&headerless_plan.stdout).contains("warning no-header-positional"),
+        "无表头计划必须在 CLI 输出提示"
+    );
+
+    let padded_plan = batchdesk(&[
+        "f06",
+        "--file",
+        path_text(&padded),
+        "--output",
+        path_text(&out_padded),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+    ]);
+    assert!(
+        padded_plan.status.success(),
+        "f06 padded-header plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&padded_plan.stdout),
+        String::from_utf8_lossy(&padded_plan.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&padded_plan.stdout);
+    assert!(
+        stdout.contains("warning header-normalized"),
+        "表头规范化必须在 CLI 输出提示"
+    );
+    assert!(
+        stdout.contains("warning duplicate-column-names"),
+        "重复列名必须在 CLI 输出提示"
+    );
+    assert!(!out_headerless.exists());
+    assert!(!out_padded.exists());
+}
+
+#[test]
 fn f04_detects_encodings_and_writes_one_bom() {
     let dir = TempDir::new();
     let first = dir.0.join("first.txt");

@@ -157,7 +157,8 @@ def main() -> int:
             f"- 尚未落地（待补）：**{len(todo)}**",
             "",
             "> 说明：CI 的语料步骤只处理「自动化」子集；人工项单独跟踪，见 ",
-            "> `fixtures/corpus/manual-results.md`。当前只做生成与范围核对，逐条断言尚未实现。",
+            "> `fixtures/corpus/manual-results.md`。本步骤负责生成与范围核对；逐条断言见 "
+            "`crates/kernel/tests/assertions.tsv` 与 `crates/kernel/tests/corpus.rs`。",
         ]
     )
 

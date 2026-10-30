@@ -126,7 +126,7 @@ python fixtures/corpus/verify_corpus.py --hashes
 ```
 
 > `web/` 与 `src-tauri/` 已建立 C09 垂直切片；`src-tauri` 是独立 Cargo workspace，不随根 `cargo test --workspace` 编译，需单独 `cargo check --manifest-path src-tauri/Cargo.toml`（依赖系统 WebView 库）。
-> C09 的 CLI `apply/undo/cleanup` 为同步命令：隔离目录与 Journal 路径必须显式给出；桌面壳已接入任务队列与 `task://*` 事件（`applyPlan`/`undoPlan` 返回 taskId，支持进度/暂停/取消），真实 WebView E2E 覆盖 apply→undo、cleanup 演练与取消回滚；S02 用 `--protected-dir`，保留期默认 7 天/可配 1–30（基线 §7.8）。`retryTask` 与任务持久化尚未实现。
+> C09 的 CLI `apply/undo/cleanup` 为同步命令：隔离目录与 Journal 路径必须显式给出；桌面壳已接入任务队列与 `task://*` 事件（`applyPlan`/`undoPlan` 返回 taskId，支持进度/暂停/取消），真实 WebView E2E 覆盖 apply→undo、cleanup 演练与取消回滚；S02 用 `--protected-dir`，保留期默认 7 天/可配 1–30（基线 §7.8）。`retryTask` 与 S03 任务快照持久化/恢复（`recoverTask`）已接入。
 
 ---
 

@@ -369,6 +369,58 @@ pub fn plan_f06(input: PlanF06Input) -> Result<PlanDocument, KernelError> {
         }
     }
 
+    if blocked.is_none() && !has_header {
+        warnings.push(PlanWarning {
+            kind: "no-header-positional".to_string(),
+            suggestion: Some(format!(
+                "inputs have no header row; columns are aligned by 1-based position (max width {positional_columns}); verify column order before applying"
+            )),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    if blocked.is_none() && has_header {
+        for (file, columns) in input.files.iter().zip(normalized.iter()) {
+            let changed: Vec<String> = file
+                .columns
+                .iter()
+                .zip(columns.iter())
+                .filter(|(raw, normalized)| raw.as_str() != normalized.as_str())
+                .map(|(_, normalized)| normalized.clone())
+                .collect();
+            if !changed.is_empty() {
+                warnings.push(PlanWarning {
+                    kind: "header-normalized".to_string(),
+                    suggestion: Some(format!(
+                        "{}: header fields were normalized (BOM/trim) before matching: {}",
+                        file.path,
+                        changed.join(", ")
+                    )),
+                    risk_level: RiskLevel::Caution,
+                });
+            }
+            let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+            for name in columns {
+                *counts.entry(name.as_str()).or_insert(0) += 1;
+            }
+            let duplicates: Vec<String> = counts
+                .iter()
+                .filter(|(_, count)| **count > 1)
+                .map(|(name, count)| format!("{name} x{count}"))
+                .collect();
+            if !duplicates.is_empty() {
+                warnings.push(PlanWarning {
+                    kind: "duplicate-column-names".to_string(),
+                    suggestion: Some(format!(
+                        "{}: duplicate header names are kept as separate columns by occurrence: {}",
+                        file.path,
+                        duplicates.join(", ")
+                    )),
+                    risk_level: RiskLevel::Caution,
+                });
+            }
+        }
+    }
+
     if blocked.is_none() && has_header {
         let first_keys: BTreeSet<(String, usize)> =
             column_keys(&normalized[0]).into_iter().collect();
@@ -759,6 +811,10 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.kind == "schema-extra-columns"));
+        assert!(!plan.warnings.iter().any(|warning| matches!(
+            warning.kind.as_str(),
+            "no-header-positional" | "header-normalized" | "duplicate-column-names"
+        )));
     }
 
     #[test]
@@ -812,6 +868,30 @@ mod tests {
         assert!(!payload.has_header);
         assert!(payload.union.is_empty());
         assert_eq!(payload.positional_columns, 3);
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "no-header-positional"));
+    }
+
+    #[test]
+    fn plan_warns_when_headers_need_normalization_or_are_duplicated() {
+        let plan = plan_f06(input(vec![file(
+            "/data/t08.csv",
+            &["姓名", "姓名", " 部门 ", "金额 "],
+            None,
+        )]))
+        .unwrap();
+        let kinds: Vec<&str> = plan
+            .warnings
+            .iter()
+            .map(|warning| warning.kind.as_str())
+            .collect();
+        assert!(kinds.contains(&"header-normalized"));
+        assert!(kinds.contains(&"duplicate-column-names"));
+        let payload = plan.entries[0].csv_merge.as_ref().unwrap();
+        assert_eq!(payload.union, vec!["姓名", "姓名", "部门", "金额"]);
+        assert_eq!(payload.positional_columns, 4);
     }
 
     #[test]

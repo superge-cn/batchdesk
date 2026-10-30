@@ -14,7 +14,7 @@
 | crates/platform | 共享壳层适配：扫描/哈希、原生 FsAdapter、FileJournal、保留期清理 | 设计 01/04、方案 4.7 |
 | src-tauri | 桌面壳：C09 任务队列/`task://*` 事件、S03 任务快照持久化与 `recoverTask`、S01 `preflightPlan`、IPC 命令、应用数据路径、计划暂存；授权注入待补 | 方案 4.4、设计 01 §4.3–§6、设计 12 |
 | web/ | 表现层：C09 参数/预览/执行/撤销/保留期 UI；事件驱动进度/暂停/取消；无业务与授权逻辑 | 方案 4.2、U v1.3、设计 12 |
-| fixtures/corpus | 28 条异常语料（24 条自动化脚本已就绪；断言 harness 已起步：K01–K08 已断言，其余 pending 登记在 `crates/kernel/tests/assertions.tsv`） | T 3.2 |
+| fixtures/corpus | 28 条异常语料（24 条自动化脚本已就绪；断言 harness 已覆盖 K01–K08＋T01–T08（含 partial），其余 pending 登记在 `crates/kernel/tests/assertions.tsv`） | T 3.2 |
 | fixtures/bench | 性能基准数据集 C-1…C-8 | T 附录 C |
 | fixtures/migrations | 配置 schema 历史样本（不属于 28 条语料） | 设计 03 §7 |
 | docs/design | 设计契约 01–13 | docs/design/README |
@@ -29,9 +29,9 @@
 ## 常用命令
 - 构建：cargo build --workspace
 - 语料生成前的准备（**必须先跑**，否则没有输入样本）：python fixtures/corpus/check_scope.py（范围门禁）→ 依次执行 fixtures/corpus/*/gen_*.py（幂等生成样本）
-- 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成 + `crates/kernel/tests/corpus.rs` 语料断言；**仅 K01–K08 已接断言**）
+- 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成 + `crates/kernel/tests/corpus.rs` 语料断言；**K01–K08＋T01–T08 已接断言（含 partial）**）
   - ⚠️ `cargo test` 不生成语料；生成脚本只准备输入，不代表回归已执行。
-  - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。**断言 harness 已起步（K01–K08 共 8 项，3 条 asserted／5 条 partial），其余 16 条在 `crates/kernel/tests/assertions.tsv` 标 pending**：CI 绿灯仍只代表"生成 + 范围核对 + 单元测试 + 已接入的 8 项语料断言通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
+  - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。**断言 harness 已起步（K01–K08＋T01–T08 共 16 项，11 条 asserted／5 条 partial），其余 8 条在 `crates/kernel/tests/assertions.tsv` 标 pending**：CI 绿灯仍只代表"生成 + 范围核对 + 单元测试 + 已接入的 16 项语料断言通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
 - 单 crate 测试：cargo test -p kernel / -p batchdesk-platform
 - Web/壳：pnpm install（根，Tauri CLI）→ (cd web && pnpm install) → pnpm build；pnpm tauri dev；cargo check --manifest-path src-tauri/Cargo.toml（独立 workspace，需 WebKitGTK/WebView2；不随根 cargo test 编译）
 - 桌面壳任务队列测试：cargo test --manifest-path src-tauri/Cargo.toml --offline

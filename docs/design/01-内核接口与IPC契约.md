@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.14（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.15（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -361,7 +361,8 @@ interface PlanEntry {
                              // files 按合并顺序，size 为 plan 期输入大小（apply 逐项复核，变化 skipped + E2010）；
                              // columns 为规范化（剥 BOM/trim）表头，重复名按出现顺序保留；无表头为空；
                              // 输出按 (name, occurrence) 对齐：缺失补空、额外列按首次出现顺序追加；
-                             // 无表头按列序号对齐；无表头+来源列、表头模式混合、strict 不一致均 blocked E3004（ADR-0018）
+                             // 无表头按列序号对齐并发 `no-header-positional` 告警；表头 BOM/trim 规范化与重复列名分别发
+                             // `header-normalized`/`duplicate-column-names` 告警；无表头+来源列、表头模式混合、strict 不一致均 blocked E3004（ADR-0018）
   csvExtract?: { encoding?: SourceEncoding; size: number; delimiter: string;
                  hasHeader: boolean; columns: string[]; columnCount: number;
                  selections: { index: number; name?: string }[];
@@ -517,3 +518,4 @@ interface JournalEntry {
 | v1.12 | 2026-10-30 | §3.1 追加 `plan_f06`；§5 追加可选 `csvMerge{files,union,positionalColumns,hasHeader,sourceColumn,targetEncoding,invalid,delimiter,strict}` 载荷（F06 复用 `merge` 动作，单条 entry）；§5.1 修订 F06 分组语义与 `relation` 省略；`expected` 口径补 csvMerge 条目。决策见 [ADR-0018](../adr/0018-F06-CSV合并列对齐与来源列.md)。 |
 | v1.13 | 2026-10-30 | §3.1 追加 `plan_f07`；§5 追加 `csv-extract` 动作与可选 `csvExtract{encoding,size,delimiter,hasHeader,columns,columnCount,selections,targetEncoding,invalid,dirtyRows}` 载荷（F07 1:1，每个输入一条 entry）；§5.1 修订 F07 分组语义与 `relation` 省略；`expected` 口径补 csvExtract 条目。决策见 [ADR-0019](../adr/0019-F07-CSV抽取指定列.md)。 |
 | v1.14 | 2026-10-30 | §3.1 追加 `plan_f08`；§5 追加 `csv-rows` 动作与可选 `csvRows{encoding,size,delimiter,hasHeader,columns,columnCount,dataRows,window,count,targetEncoding,invalid,dirtyRows}` 载荷（F08 1:1，每个输入一条 entry）；§5.1 修订 F08 分组语义与 `relation` 省略；`expected` 口径补 csvRows 条目。决策见 [ADR-0020](../adr/0020-F08-CSV抽取数量行与前后窗口.md)。 |
+| v1.15 | 2026-10-30 | §5 F06 `csvMerge` 说明补 T07/T08 告警：无表头 `no-header-positional`、表头 BOM/trim 规范化 `header-normalized`、重复规范化列名 `duplicate-column-names`（均 Caution、不阻断）。决策见 [ADR-0018](../adr/0018-F06-CSV合并列对齐与来源列.md) §2.5。 |

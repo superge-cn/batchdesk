@@ -10,12 +10,20 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use kernel::csv::{
+    plan_f05, CsvRecord, CsvRecordScanner, CsvSplitAccumulator, CsvSplitBasis, CsvSplitLayout,
+    Delimiter, PlanF05File, PlanF05Input,
+};
+use kernel::csv_merge::{
+    build_union, column_keys, normalized_columns, parse_records, plan_f06, union_names,
+    PlanF06File, PlanF06Input,
+};
 use kernel::encoding::{
     detect, transcode, Bom, Confidence, InvalidSequencePolicy, PlatformPrior, SourceEncoding,
     TargetEncoding,
 };
 use kernel::fs::CaseSense;
-use kernel::plan::{plan_c01, PlanC01File, PlanC01Input, PlanDocument};
+use kernel::plan::{plan_c01, PlanC01File, PlanC01Input, PlanDocument, PlanParamValue};
 use kernel::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator, SplitLayout};
 
 /// 台账：`assertions.tsv` 是"哪条语料断言到什么程度"的唯一登记处。
@@ -99,6 +107,112 @@ fn f01_plan(data: &[u8], target: u64, path: &str) -> PlanDocument {
     .expect("plan_f01 生成计划")
 }
 
+/// 按记录扫描样本并生成 F05 布局（每记录一个分片，便于核对边界）。
+fn csv_layout(
+    data: &[u8],
+    delimiter: Delimiter,
+    keep_header: bool,
+) -> (CsvSplitLayout, Vec<CsvRecord>, Option<CsvRecord>, bool) {
+    let mut scanner = CsvRecordScanner::new(delimiter.as_byte());
+    let mut records = Vec::new();
+    scanner.feed(data, |record| records.push(record));
+    let tail = scanner.finish();
+    let mut accumulator = CsvSplitAccumulator::new_rows(1, keep_header).expect("row split basis");
+    for record in &records {
+        accumulator.push_record(*record);
+    }
+    if let Some(record) = tail.tail {
+        accumulator.push_record(record);
+    }
+    let layout = accumulator.finish(
+        data.len() as u64,
+        delimiter,
+        true,
+        tail.unclosed_quote,
+        Some(SourceEncoding::Utf8),
+    );
+    (layout, records, tail.tail, tail.unclosed_quote)
+}
+
+fn f05_plan(
+    data: &[u8],
+    path: &str,
+    delimiter: Delimiter,
+    keep_header: bool,
+) -> (
+    PlanDocument,
+    CsvSplitLayout,
+    Vec<CsvRecord>,
+    Option<CsvRecord>,
+    bool,
+) {
+    let (layout, records, tail, unclosed_quote) = csv_layout(data, delimiter, keep_header);
+    let plan = plan_f05(PlanF05Input {
+        plan_id: PLAN_ID.to_string(),
+        basis: CsvSplitBasis::Rows(1),
+        keep_header,
+        delimiter: None,
+        output_dir: "/corpus/out".to_string(),
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        existing_targets: Vec::new(),
+        files: vec![PlanF05File {
+            path: path.to_string(),
+            canonical_path: None,
+            group_id: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9".to_string(),
+            layout: layout.clone(),
+        }],
+    })
+    .expect("plan_f05 生成计划");
+    (plan, layout, records, tail, unclosed_quote)
+}
+
+fn f06_plan(data: &[u8], path: &str, has_header: bool) -> PlanDocument {
+    let records = parse_records(data, b',');
+    let columns = if has_header {
+        records.first().cloned().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let column_count = if has_header {
+        records.first().map_or(0, Vec::len) as u64
+    } else {
+        records.iter().map(Vec::len).max().unwrap_or(0) as u64
+    };
+    let data_rows = if has_header {
+        records.len().saturating_sub(1)
+    } else {
+        records.len()
+    } as u64;
+    plan_f06(PlanF06Input {
+        plan_id: PLAN_ID.to_string(),
+        target: "/corpus/out/merged.csv".to_string(),
+        target_encoding: UTF8_NO_BOM,
+        invalid: InvalidSequencePolicy::Abort,
+        output_delimiter: None,
+        add_source_column: false,
+        source_column_name: "来源文件".to_string(),
+        strict: false,
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        target_occupied: false,
+        files: vec![PlanF06File {
+            path: path.to_string(),
+            canonical_path: None,
+            file_size: data.len() as u64,
+            source_encoding: Some(SourceEncoding::Utf8),
+            delimiter: Delimiter::Comma,
+            has_header,
+            columns,
+            column_count,
+            data_rows,
+            dirty_rows: 0,
+            source_label: None,
+        }],
+    })
+    .expect("plan_f06 生成计划")
+}
+
 fn assert_utf8_lines(text: &str, expected_lines: usize, columns: usize) {
     assert!(!text.contains('\u{FFFD}'), "转码后不得出现替换字符");
     let lines: Vec<&str> = text.lines().collect();
@@ -155,6 +269,168 @@ fn t05_empty_file_is_reported_without_parts() {
     assert!(plan.entries.is_empty(), "空文件不得产生分片");
     assert_eq!(plan.warnings.len(), 1);
     assert_eq!(plan.warnings[0].kind, "empty-file");
+}
+
+#[test]
+fn t01_unclosed_quote_is_kept_as_last_record_with_warning() {
+    let data = sample("T01", "T01.csv");
+    let (plan, layout, records, tail, unclosed_quote) =
+        f05_plan(&data, "/corpus/T01.csv", Delimiter::Comma, true);
+    assert!(unclosed_quote, "T01 必须检出引号未闭合");
+    assert!(layout.unclosed_quote);
+    assert!(tail.is_some(), "未闭合引号后的剩余内容必须作为末条记录保留");
+    assert_eq!(layout.records, records.len() as u64 + 1);
+    assert_eq!(layout.shards.last().unwrap().end, data.len() as u64);
+    let physical_lines = data.iter().filter(|byte| **byte == b'\n').count()
+        + usize::from(!matches!(data.last(), Some(&b'\n')));
+    assert!(
+        physical_lines > layout.records as usize,
+        "不闭合引号应吞并后续物理行，成为末条记录"
+    );
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "unclosed-quote"));
+}
+
+#[test]
+fn t02_quoted_newlines_do_not_split_records() {
+    let data = sample("T02", "T02.csv");
+    let (plan, layout, records, tail, unclosed_quote) =
+        f05_plan(&data, "/corpus/T02.csv", Delimiter::Comma, true);
+    assert!(!unclosed_quote);
+    let all_records: Vec<CsvRecord> = records.iter().copied().chain(tail).collect();
+    assert_eq!(all_records.len(), 9, "表头 + 8 条数据记录");
+    assert_eq!(layout.records, 9);
+    assert!(
+        all_records.iter().any(|record| record.multiline),
+        "至少一条记录跨物理行"
+    );
+    let parsed = parse_records(&data, b',');
+    assert_eq!(parsed.len(), 9);
+    assert!(parsed.iter().skip(1).any(|row| row
+        .iter()
+        .any(|field| field.contains('\n') || field.contains('\r'))));
+    let physical_lines = data.iter().filter(|byte| **byte == b'\n').count();
+    assert!(physical_lines > parsed.len(), "引号内换行不增加记录数");
+    let header = layout.header.expect("T02 有表头");
+    assert_eq!(plan.entries.len(), 8);
+    assert!(plan
+        .entries
+        .iter()
+        .all(|entry| entry.csv.as_ref().unwrap().rows == 1));
+    let covered: u64 = plan
+        .entries
+        .iter()
+        .map(|entry| {
+            let range = entry.range.unwrap();
+            range.end - range.start
+        })
+        .sum();
+    assert_eq!(covered, data.len() as u64 - header.len());
+}
+
+#[test]
+fn t04_column_drift_is_counted_without_correction() {
+    let data = sample("T04", "T04.csv");
+    let (plan, layout, _records, _tail, unclosed_quote) =
+        f05_plan(&data, "/corpus/T04.csv", Delimiter::Comma, true);
+    assert!(!unclosed_quote);
+    let parsed = parse_records(&data, b',');
+    assert_eq!(parsed.len(), 6);
+    assert_eq!(parsed[0].len(), 3);
+    let widths: Vec<usize> = parsed.iter().skip(1).map(Vec::len).collect();
+    assert_eq!(widths, vec![2, 3, 4, 1, 3]);
+    assert_eq!(layout.header_columns, 3);
+    assert_eq!(layout.dirty_rows, 3);
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "column-drift"));
+}
+
+#[test]
+fn t07_headerless_sample_aligns_by_column_position() {
+    let data = sample("T07", "T07.csv");
+    let parsed = parse_records(&data, b',');
+    assert_eq!(parsed.len(), 4);
+    assert!(parsed.iter().all(|row| row.len() == 3));
+    assert!(
+        parsed[0][0].parse::<u64>().is_ok(),
+        "T07 首列是数字编号，不是表头"
+    );
+    let plan = f06_plan(&data, "/corpus/T07.csv", false);
+    let entry = &plan.entries[0];
+    assert!(entry.blocked.is_none());
+    let payload = entry.csv_merge.as_ref().expect("F06 载荷");
+    assert!(!payload.has_header);
+    assert!(payload.union.is_empty());
+    assert_eq!(payload.positional_columns, 3);
+    assert_eq!(
+        plan.params.get("hasHeader"),
+        Some(&PlanParamValue::Bool(false))
+    );
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "no-header-positional"));
+}
+
+#[test]
+fn t08_duplicate_and_padded_headers_normalize_without_collapsing() {
+    let data = sample("T08", "T08.csv");
+    let parsed = parse_records(&data, b',');
+    assert_eq!(
+        parsed[0],
+        vec![
+            "姓名".to_string(),
+            "姓名".to_string(),
+            " 部门 ".to_string(),
+            "金额 ".to_string()
+        ]
+    );
+    let normalized = normalized_columns(&parsed[0]);
+    assert_eq!(
+        normalized,
+        vec![
+            "姓名".to_string(),
+            "姓名".to_string(),
+            "部门".to_string(),
+            "金额".to_string()
+        ]
+    );
+    assert_eq!(
+        column_keys(&normalized),
+        vec![
+            ("姓名".to_string(), 0),
+            ("姓名".to_string(), 1),
+            ("部门".to_string(), 0),
+            ("金额".to_string(), 0),
+        ]
+    );
+    let union = build_union(std::slice::from_ref(&normalized));
+    assert_eq!(union_names(&union), normalized);
+    let plan = f06_plan(&data, "/corpus/T08.csv", true);
+    let payload = plan.entries[0].csv_merge.as_ref().expect("F06 载荷");
+    assert_eq!(
+        payload.union,
+        vec![
+            "姓名".to_string(),
+            "姓名".to_string(),
+            "部门".to_string(),
+            "金额".to_string()
+        ]
+    );
+    assert_eq!(payload.positional_columns, 4);
+    assert!(payload.has_header);
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "header-normalized"));
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "duplicate-column-names"));
 }
 
 #[test]
