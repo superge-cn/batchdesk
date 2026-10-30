@@ -644,6 +644,7 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
                 }),
                 merge: None,
                 csv_merge: None,
+                csv_extract: None,
             });
         }
     }

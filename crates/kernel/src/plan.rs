@@ -103,6 +103,8 @@ pub enum PlanAction {
     Split,
     /// F04 TXT 合并产物（N:1，一条 entry 汇总全部输入；方案 §5.15）。
     Merge,
+    /// F07 CSV 抽取指定列产物（1:1，每个输入一条 entry；方案 §5.15）。
+    CsvExtract,
 }
 
 impl PlanAction {
@@ -119,6 +121,7 @@ impl PlanAction {
             Self::Delete => "delete",
             Self::Split => "split",
             Self::Merge => "merge",
+            Self::CsvExtract => "csv-extract",
         }
     }
 }
@@ -285,6 +288,42 @@ pub struct PlanCsvMerge {
     pub strict: bool,
 }
 
+/// F07 抽取列在输出中的位置（计划期按表头名/列序号解析后的 0-based 字段序号）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvExtractColumn {
+    pub index: u64,
+    /// 有表头时的规范化列名（用于输出表头）；无表头为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// F07 CSV 抽取的载荷（仅 `csv-extract` 动作使用）：源结构＋输出顺序。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvExtract {
+    /// 检测或用户确认的源编码；`None` 表示需人工确认（计划条目按 E3001 阻断）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    /// 输入分隔符（输出沿用同一分隔符）。
+    pub delimiter: String,
+    pub has_header: bool,
+    /// 规范化表头字段（保留重复项）；无表头时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    /// 源列宽（有表头时取表头字段数；无表头时取数据行最大字段数）。
+    pub column_count: u64,
+    /// 按用户选择顺序解析后的输出列。
+    pub selections: Vec<PlanCsvExtractColumn>,
+    /// 目标编码（`TargetEncoding::as_str` 的稳定字符串，含 BOM 策略）。
+    pub target_encoding: String,
+    /// 非法序列策略（`InvalidSequencePolicy::as_str`）。
+    pub invalid: String,
+    /// 数据行字段数与列宽不一致的记录数（只上报，不静默修正）。
+    pub dirty_rows: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
@@ -316,6 +355,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：CSV 合并的列并集与来源列（仅 F06 的 `merge` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_merge: Option<PlanCsvMerge>,
+    /// 追加式可选字段：CSV 抽取列的选择与源结构（仅 F07 的 `csv-extract` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_extract: Option<PlanCsvExtract>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,6 +528,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 merge: None,
                 csv: None,
                 csv_merge: None,
+                csv_extract: None,
             });
         }
     }
@@ -699,6 +742,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             merge: None,
             csv: None,
             csv_merge: None,
+            csv_extract: None,
         });
     }
 

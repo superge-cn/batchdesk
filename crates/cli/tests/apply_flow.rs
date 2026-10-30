@@ -1056,3 +1056,140 @@ fn f04_detects_encodings_and_writes_one_bom() {
         "BOM 只在合并产物开头出现一次"
     );
 }
+
+#[test]
+fn f07_plan_apply_and_undo_extracts_columns_in_order() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let out_dir = dir.0.join("out");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&first, b"id, name \n1,Alice\n").unwrap();
+    fs::write(&second, b"name,id\nBob,2\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f07",
+        "--file",
+        path_text(&first),
+        "--file",
+        path_text(&second),
+        "--column",
+        "name",
+        "--column",
+        "id",
+        "--output-dir",
+        path_text(&out_dir),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f07 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f07");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(document["entries"][0]["action"], "csv-extract");
+    assert_eq!(
+        document["entries"][0]["csvExtract"]["selections"],
+        json!([
+            {"index": 1, "name": "name"},
+            {"index": 0, "name": "id"}
+        ]),
+        "header whitespace is normalized before matching"
+    );
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f07 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(
+        fs::read(out_dir.join("a.csv")).unwrap(),
+        b"name,id\nAlice,1\n",
+        "selected columns keep the requested order and row order"
+    );
+    assert_eq!(
+        fs::read(out_dir.join("b.csv")).unwrap(),
+        b"name,id\nBob,2\n"
+    );
+    assert_eq!(fs::read(&first).unwrap(), b"id, name \n1,Alice\n");
+    assert_eq!(fs::read(&second).unwrap(), b"name,id\nBob,2\n");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f07 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 2);
+    assert!(!out_dir.join("a.csv").exists());
+    assert!(!out_dir.join("b.csv").exists());
+}
+
+#[test]
+fn f07_missing_column_blocks_with_e3004() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("subset.csv");
+    fs::write(&source, b"id,name\n1,Alice\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f07",
+        "--file",
+        path_text(&source),
+        "--column",
+        "age",
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f07 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["blocked"]["code"], "E3004");
+    assert!(!output.exists());
+}

@@ -527,6 +527,7 @@ pub fn plan_f06(input: PlanF06Input) -> Result<PlanDocument, KernelError> {
             delimiter: output_delimiter.as_str().to_string(),
             strict: input.strict,
         }),
+        csv_extract: None,
     };
     let entries = vec![entry];
 
@@ -593,7 +594,7 @@ fn display_column(name: &str, occurrence: usize) -> String {
     }
 }
 
-fn source_block(
+pub(crate) fn source_block(
     path: &str,
     canonical: Option<&str>,
     protected: &[ProtectedDir],
@@ -615,7 +616,11 @@ fn source_block(
     }
 }
 
-fn target_block(path: &str, protected: &[ProtectedDir], sense: CaseSense) -> Option<PlanBlocked> {
+pub(crate) fn target_block(
+    path: &str,
+    protected: &[ProtectedDir],
+    sense: CaseSense,
+) -> Option<PlanBlocked> {
     match try_normalize(path) {
         Ok(normalized) => {
             protected_by(&normalized, None, protected, sense).map(|hit| PlanBlocked {

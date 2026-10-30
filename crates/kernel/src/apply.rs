@@ -949,6 +949,7 @@ mod tests {
             merge: None,
             csv: None,
             csv_merge: None,
+            csv_extract: None,
         }
     }
 

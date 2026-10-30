@@ -25,7 +25,7 @@ use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind
 use crate::journal::{FsOp, JournalStore};
 use crate::license::{Capability, LicenseService};
 use crate::path::{protected_by, try_normalize, ProtectedDir};
-use crate::plan::{PlanAction, PlanCsvMerge, PlanDocument, PlanResolution};
+use crate::plan::{PlanAction, PlanCsvExtract, PlanCsvMerge, PlanDocument, PlanResolution};
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
 /// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节。
@@ -72,7 +72,8 @@ pub fn apply_generic_plan(
             | PlanAction::Copy
             | PlanAction::EditContent
             | PlanAction::Split
-            | PlanAction::Merge => {}
+            | PlanAction::Merge
+            | PlanAction::CsvExtract => {}
             other => {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries need a dedicated executor",
@@ -96,6 +97,7 @@ pub fn apply_generic_plan(
             | PlanAction::Copy
             | PlanAction::Split
             | PlanAction::Merge
+            | PlanAction::CsvExtract
                 if entry.target.is_none() =>
             {
                 return Err(KernelError::invalid_params(format!(
@@ -165,6 +167,12 @@ pub fn apply_generic_plan(
                 } else if let Some(csv_merge) = &entry.csv_merge {
                     validate_csv_merge(csv_merge)?;
                 }
+            }
+            PlanAction::CsvExtract => {
+                let payload = entry.csv_extract.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-extract entries require a csvExtract payload")
+                })?;
+                validate_csv_extract(payload)?;
             }
             _ => {}
         }
@@ -351,6 +359,7 @@ pub fn apply_generic_plan(
                 | PlanAction::Copy
                 | PlanAction::Split
                 | PlanAction::Merge
+                | PlanAction::CsvExtract
         ) {
             if let Some(error) = protected_target_hit(context, &target) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
@@ -731,6 +740,13 @@ fn perform(
                     reverse,
                 })
             }
+            PlanAction::CsvExtract => {
+                let target = target.expect("validated: csv-extract requires a target");
+                let payload = entry.csv_extract.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-extract entries require a csvExtract payload")
+                })?;
+                perform_csv_extract(context, &entry.source, target, overwrite, payload)
+            }
             PlanAction::EditContent => {
                 // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。
                 let backup = context.fs.backup_to_quarantine(&entry.source)?;
@@ -1005,7 +1021,198 @@ fn validate_csv_merge(payload: &PlanCsvMerge) -> Result<(), KernelError> {
     Ok(())
 }
 
-/// F06：逐文件解码后按列并集映射字段，缺失补空、额外列追加末尾、来源列写首列。
+fn validate_csv_extract(payload: &PlanCsvExtract) -> Result<(), KernelError> {
+    if payload.selections.is_empty() {
+        return Err(KernelError::invalid_params(
+            "csvExtract payload requires at least one selected column",
+        ));
+    }
+    if payload.encoding.is_none() {
+        return Err(KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        ));
+    }
+    if TargetEncoding::parse(&payload.target_encoding).is_none() {
+        return Err(KernelError::invalid_params(
+            "csvExtract targetEncoding is not a supported encoding",
+        ));
+    }
+    if InvalidSequencePolicy::parse(&payload.invalid).is_none() {
+        return Err(KernelError::invalid_params(
+            "csvExtract invalid policy is not supported",
+        ));
+    }
+    if Delimiter::parse(&payload.delimiter).is_none() {
+        return Err(KernelError::invalid_params(
+            "csvExtract delimiter is not supported",
+        ));
+    }
+    if payload.has_header {
+        if payload.columns.is_empty() {
+            return Err(KernelError::invalid_params(
+                "csvExtract with headers requires non-empty source columns",
+            ));
+        }
+        if payload.column_count as usize != payload.columns.len() {
+            return Err(KernelError::invalid_params(
+                "csvExtract columnCount must match the header width",
+            ));
+        }
+    } else if payload.column_count == 0 {
+        return Err(KernelError::invalid_params(
+            "csvExtract without headers requires a positive column width",
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for selection in &payload.selections {
+        if selection.index >= payload.column_count {
+            return Err(KernelError::invalid_params(format!(
+                "csvExtract column index {} is out of range",
+                selection.index + 1
+            )));
+        }
+        if !seen.insert(selection.index) {
+            return Err(KernelError::invalid_params(format!(
+                "csvExtract column {} is selected more than once",
+                selection.index + 1
+            )));
+        }
+        if payload.has_header {
+            let Some(name) = &selection.name else {
+                return Err(KernelError::invalid_params(
+                    "csvExtract header selections require a column name",
+                ));
+            };
+            if payload.columns.get(selection.index as usize) != Some(name) {
+                return Err(KernelError::invalid_params(
+                    "csvExtract selection does not match the source header",
+                ));
+            }
+        } else if selection.name.is_some() {
+            return Err(KernelError::invalid_params(
+                "csvExtract without headers must not carry column names",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// F07：逐个文件解码后按已解析的列序号抽取，输出保留选择顺序与原行序。
+fn perform_csv_extract(
+    context: &GenericApplyContext<'_>,
+    source: &str,
+    target: &str,
+    overwrite: bool,
+    payload: &PlanCsvExtract,
+) -> Result<Performed, KernelError> {
+    let encoding = payload.encoding.ok_or_else(|| {
+        KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        )
+    })?;
+    let target_encoding = TargetEncoding::parse(&payload.target_encoding)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvExtract target encoding"))?;
+    let invalid = InvalidSequencePolicy::parse(&payload.invalid).ok_or_else(|| {
+        KernelError::invalid_params("unsupported csvExtract invalid-sequence policy")
+    })?;
+    let delimiter = Delimiter::parse(&payload.delimiter)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvExtract delimiter"))?;
+
+    let backup = if overwrite {
+        Some(context.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+    let data = context.fs.read_bytes(source)?;
+    let decoded = transcode(
+        &data,
+        encoding,
+        TargetEncoding::Utf8 { bom: false },
+        invalid,
+    )?;
+    let records = parse_records(&decoded.bytes, delimiter.as_byte());
+    let (has_header, rows): (bool, &[Vec<String>]) = if payload.has_header {
+        let Some((header, rows)) = records.split_first() else {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        };
+        if normalized_columns(header) != payload.columns {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+        (true, rows)
+    } else {
+        (false, &records)
+    };
+
+    let mut output = String::new();
+    if has_header {
+        let names: Vec<String> = payload
+            .selections
+            .iter()
+            .map(|selection| selection.name.clone().unwrap_or_default())
+            .collect();
+        write_record(&names, delimiter.as_byte(), &mut output);
+    }
+    for row in rows {
+        let fields: Vec<String> = payload
+            .selections
+            .iter()
+            .map(|selection| {
+                row.get(selection.index as usize)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        write_record(&fields, delimiter.as_byte(), &mut output);
+    }
+
+    let transcoded = transcode(
+        output.as_bytes(),
+        SourceEncoding::Utf8,
+        target_encoding,
+        invalid,
+    )?;
+    context.fs.write_atomic(target, &transcoded.bytes)?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: context
+                .fs
+                .quarantine_target_path(&file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
+}
+
 fn perform_csv_merge(
     context: &GenericApplyContext<'_>,
     target: &str,
@@ -1251,8 +1458,8 @@ mod tests {
     use crate::fs::{DirEntryInfo, EntryAttrs, PathOutcome, ScanFilter, StatInfo};
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
     use crate::plan::{
-        PlanCsvMerge, PlanCsvMergeFile, PlanEntry, PlanExpected, PlanMerge, PlanMergeSource,
-        PlanStats,
+        PlanCsvExtract, PlanCsvExtractColumn, PlanCsvMerge, PlanCsvMergeFile, PlanEntry,
+        PlanExpected, PlanMerge, PlanMergeSource, PlanStats,
     };
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
     use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
@@ -1653,6 +1860,7 @@ mod tests {
             merge: None,
             csv: None,
             csv_merge: None,
+            csv_extract: None,
         }
     }
 
@@ -2135,6 +2343,155 @@ mod tests {
         }
     }
 
+    #[test]
+    fn csv_extract_selects_columns_in_order_and_undo_removes_the_output() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"id,name,age\n1,Alice,30\n2,Bob,25\n");
+        let plan = plan(vec![csv_extract_entry(
+            "e1",
+            "/data/a.csv",
+            "/out/subset.csv",
+            32,
+            true,
+            &["id", "name", "age"],
+            3,
+            vec![(2, Some("age")), (0, Some("id"))],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(fs.read_file("/out/subset.csv"), b"age,id\n30,1\n25,2\n");
+        assert_eq!(
+            fs.read_file("/data/a.csv"),
+            b"id,name,age\n1,Alice,30\n2,Bob,25\n"
+        );
+
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert!(!fs.exists("/out/subset.csv"));
+        assert!(fs.exists("/data/a.csv"));
+    }
+
+    #[test]
+    fn csv_extract_without_headers_uses_column_positions() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"1,Alice,30\n2,Bob,25\n");
+        let plan = plan(vec![csv_extract_entry(
+            "e1",
+            "/data/a.csv",
+            "/out/subset.csv",
+            20,
+            false,
+            &[],
+            3,
+            vec![(1, None)],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(fs.read_file("/out/subset.csv"), b"Alice\nBob\n");
+    }
+
+    #[test]
+    fn csv_extract_rejects_a_header_changed_since_plan() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"id,city\n1,NY\n");
+        let plan = plan(vec![csv_extract_entry(
+            "e1",
+            "/data/a.csv",
+            "/out/subset.csv",
+            13,
+            true,
+            &["id", "name"],
+            2,
+            vec![(1, Some("name"))],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2010"
+        );
+        assert!(!fs.exists("/out/subset.csv"));
+        assert!(journal.entries.is_empty());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn csv_extract_entry(
+        entry_id: &str,
+        source: &str,
+        target: &str,
+        size: u64,
+        has_header: bool,
+        columns: &[&str],
+        column_count: u64,
+        selections: Vec<(u64, Option<&str>)>,
+    ) -> PlanEntry {
+        PlanEntry {
+            entry_id: entry_id.to_string(),
+            source: source.to_string(),
+            target: Some(target.to_string()),
+            action: PlanAction::CsvExtract,
+            relation: None,
+            reason: "csv extract".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: Some(PlanExpected {
+                size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: None,
+            csv_extract: Some(PlanCsvExtract {
+                encoding: Some(SourceEncoding::Utf8),
+                size,
+                delimiter: ",".to_string(),
+                has_header,
+                columns: columns.iter().map(|value| value.to_string()).collect(),
+                column_count,
+                selections: selections
+                    .into_iter()
+                    .map(|(index, name)| PlanCsvExtractColumn {
+                        index,
+                        name: name.map(str::to_string),
+                    })
+                    .collect(),
+                target_encoding: "utf-8".to_string(),
+                invalid: "replace-and-count".to_string(),
+                dirty_rows: 0,
+            }),
+        }
+    }
+
     fn csv_merge_entry(
         entry_id: &str,
         target: &str,
@@ -2174,6 +2531,7 @@ mod tests {
                 delimiter: ",".to_string(),
                 strict: false,
             }),
+            csv_extract: None,
         }
     }
 
@@ -2214,6 +2572,7 @@ mod tests {
             }),
             csv: None,
             csv_merge: None,
+            csv_extract: None,
         }
     }
 
