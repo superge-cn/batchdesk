@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.18（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.19（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -137,6 +137,7 @@ pub fn plan_f08(input: PlanF08Input) -> PlanDocument;                  // §5.15
 pub fn plan_f09(input: PlanF09Input) -> PlanDocument;                  // §5.15 CSV 抽取指定位置行（X–Y）
 pub fn plan_f10(input: PlanF10Input) -> PlanDocument;                  // §5.15 生成目录清单（CSV）
 pub fn plan_f11(input: PlanF11Input) -> PlanDocument;                  // §5.15/§5.8 按清单批量建文件夹
+pub fn plan_f12(input: PlanF12Input) -> PlanDocument;                  // §5.13 批量重命名（两阶段）
 pub fn plan_f01(input: PlanF01Input) -> PlanDocument;                  // §5.1 按字节分片
 pub fn plan_f02(input: PlanF02Input) -> PlanDocument;                  // §5.15 按行数分片
 pub fn plan_f03(input: PlanF03Input) -> PlanDocument;                  // §5.15 按份数分片
@@ -502,7 +503,7 @@ interface JournalEntry {
 - **备份与 `dataRef`**：`overwrite` 与 `quarantine` 类动作的 `reverse` 需要原始内容——apply 期先把原文件/原内容落为备份文件（隔离目录内，经 FsAdapter），Journal 的 `dataRef` 指向备份路径；无备份需求的动作（如纯 rename 的 reverse 是逆 rename）`dataRef` 省略。
 - **备份生命周期**：备份在撤销窗口内保留，窗口长度引用方案 §7.8 的"剩余可撤销时间"呈现与 §9.6 日志保留策略，本文不设数值；Journal 关账（窗口过期或用户确认不再撤销）后，备份随任务日志清理批次一并删除，备份清理动作本身不记 Journal（不可撤销，删除走隔离目录机制，不变量 7）。
 - Journal 文件与 SQLite 任务日志（§4.4/§9.6）并存：Journal 管"怎么撤"，任务日志管"发生了什么"。
-- **reverse 推导规则（v1.7，覆盖 `copy` 与内容写回；v1.8 追加 `split`；v1.18 追加 `create-dir`）**：`create-dir` 的 forward=`CreateDir{path}`、reverse=`RemoveDir{path}`，撤销只删除空目录（非空失败并报告，不递归）；`rename`/`move`/`quarantine` 的逆由 `FsOp::inverse` 规范推导（逆改名/改名还原）；`copy` 新建目标的逆是**产物进隔离目录**（reverse=`Quarantine{from: 产物, to: 适配层预留路径}`，方案 §4.5 删除一律进隔离目录）；`copy` 覆盖与 `write_atomic` 先经 FsAdapter `backup_to_quarantine` 备份原内容（`dataRef`），逆是 `WriteAtomic{path, dataRef}` 备份还原；新建产物（无原始内容）的 forward `dataRef` 省略。`split` 新建分片与 `copy` 新建同规则：forward=`WriteAtomic{path, dataRef 省略}`、reverse=`Quarantine`；分片为覆盖时按 `copy` 覆盖流程备份还原。执行侧由共享的 `execute_reverse` 按字面执行三类 reverse（撤销任务与执行中取消回滚同一实现，执行期不发明新操作）。
+- **reverse 推导规则（v1.7，覆盖 `copy` 与内容写回；v1.8 追加 `split`；v1.18 追加 `create-dir`；v1.19 追加 rename 两阶段）**：`create-dir` 的 forward=`CreateDir{path}`、reverse=`RemoveDir{path}`，撤销只删除空目录（非空失败并报告，不递归）；F12 两阶段 rename 仍由多条 `Rename` 条目组成（临时名阶段＋目标名阶段），每条 reverse 为逆改名，撤销按 Journal 逆序执行即可恢复原路径；`rename`/`move`/`quarantine` 的逆由 `FsOp::inverse` 规范推导（逆改名/改名还原）；`copy` 新建目标的逆是**产物进隔离目录**（reverse=`Quarantine{from: 产物, to: 适配层预留路径}`，方案 §4.5 删除一律进隔离目录）；`copy` 覆盖与 `write_atomic` 先经 FsAdapter `backup_to_quarantine` 备份原内容（`dataRef`），逆是 `WriteAtomic{path, dataRef}` 备份还原；新建产物（无原始内容）的 forward `dataRef` 省略。`split` 新建分片与 `copy` 新建同规则：forward=`WriteAtomic{path, dataRef 省略}`、reverse=`Quarantine`；分片为覆盖时按 `copy` 覆盖流程备份还原。执行侧由共享的 `execute_reverse` 按字面执行三类 reverse（撤销任务与执行中取消回滚同一实现，执行期不发明新操作）。
 
 ## 9. 版本与兼容
 
@@ -542,3 +543,4 @@ interface JournalEntry {
 | v1.16 | 2026-10-30 | §3.1 追加 `plan_f09`；§5 `csvRows` 追加 `window="range"`、`startRow/endRow/headerRange/dataRange/totalKnown`（F09 1:1，每个输入一条 entry）；FsAdapter 追加 `read_ranges`（只读选中字节区间）。决策见 [ADR-0021](../adr/0021-F09-CSV位置行区间与流式读取.md)。 |
 | v1.17 | 2026-10-30 | §3.1 追加 `plan_f10`；§3 追加 `DirectoryLister` 端口；§5 追加 `listing` 动作（F10 1:1，source=根目录、target=CSV 清单，`expected` 省略）与 `write_atomic_with` 流式原子写能力。决策见 [ADR-0022](../adr/0022-F10-目录清单CSV与流式写出.md)。 |
 | v1.18 | 2026-10-30 | §3.1 追加 `plan_f11`；§5 明确 `create-dir` 的 F11 逐级条目语义；§8 追加 `CreateDir/RemoveDir` Journal 反向推导（空目录删除）。决策见 [ADR-0023](../adr/0023-F11-清单建档与目录撤销.md)。 |
+| v1.19 | 2026-10-31 | §3.1 追加 `plan_f12`；§8 明确 F12 循环/大小写改名的两阶段 rename 由多条 `Rename` 条目组成，撤销按 Journal 逆序恢复。决策见 [ADR-0024](../adr/0024-F12-批量重命名与两阶段计划.md)。 |

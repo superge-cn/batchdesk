@@ -1837,6 +1837,124 @@ fn f11_existing_target_is_skipped() {
 }
 
 #[test]
+fn f12_prefix_plan_apply_and_undo_renames_files_and_directories() {
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(root.join("folder")).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("b.txt"), b"b").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f12 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f12");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(document["params"]["twoPhase"], false);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f12 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(root.join("new_a.txt").exists());
+    assert!(root.join("new_b.txt").exists());
+    assert!(root.join("new_folder").is_dir());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(root.join("a.txt").exists());
+    assert!(root.join("b.txt").exists());
+    assert!(root.join("folder").is_dir());
+    assert!(!root.join("new_a.txt").exists());
+}
+
+#[test]
+fn f12_reports_existing_conflicts_and_invalid_targets() {
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("new_a.txt"), b"existing").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(document["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |entry| entry["conflict"]["kind"] == "existing-target" && entry["resolution"] == "skip"
+        ));
+
+    let invalid = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--find",
+        "a",
+        "--replace",
+        "CON",
+        "--json",
+    ]);
+    assert!(invalid.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&invalid.stdout).unwrap();
+    assert!(document["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["blocked"]["code"] == "E1002"));
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

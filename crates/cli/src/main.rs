@@ -33,6 +33,7 @@ use kernel::merge::{plan_f04, PlanF04File, PlanF04Input};
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
 };
+use kernel::rename::{plan_f12, PlanF12Input, PlanF12Item, PlanF12Rule, RenameScope};
 use kernel::split::{
     plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input,
 };
@@ -112,6 +113,9 @@ const USAGE: &str = "usage:
   batchdesk f11 --list <csv> --root <dir>
                 [--source <encoding>] [--plan-id ULID]
                 [--protected-dir <dir>]... [--json]
+  batchdesk f12 --dir <dir> (--prefix <text> | --suffix <text> | --find <text>)
+                [--replace <text>] [--scope full|stem|ext]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
   batchdesk undo --plan <planId> --journal <file> [--retention-days N] [--json]
@@ -248,6 +252,17 @@ f11 options:
   --protected-dir DIR     repeatable protected directory
   --json                  machine-readable plan output
 
+f12 options:
+  --dir DIR               directory whose immediate entries are renamed
+  --prefix TEXT           prepend text to the selected name scope
+  --suffix TEXT           append text to the selected name scope
+  --find TEXT             literal text to replace (requires --replace or replaces with empty)
+  --replace TEXT          replacement text for --find
+  --scope full|stem|ext   default: full; stem preserves the extension
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --protected-dir DIR     repeatable protected directory
+  --json                  machine-readable plan output
+
 f09 options:
   --file PATH             repeatable source CSV file
   --start X               first data row (1-based, inclusive; excludes header)
@@ -280,6 +295,8 @@ apply/undo/cleanup:
   (相对路径/名称/类型/大小/修改时间/层级); placeholders and symlinks are skipped;
   f11 entries create relative folders under --root from a CSV list; parents are
   created before children and undo removes created empty directories in reverse;
+  f12 entries rename immediate children of --dir using prefix/suffix/literal replace;
+  cycles and case-only renames use a temporary-name two-phase plan;
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -344,6 +361,9 @@ fn main() {
     }
     if args[1] == "f11" {
         std::process::exit(run_f11(&args));
+    }
+    if args[1] == "f12" {
+        std::process::exit(run_f12(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -3119,6 +3139,174 @@ fn run_f11(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f12(args: &[String]) -> i32 {
+    let mut dir = None;
+    let mut prefix = None;
+    let mut suffix = None;
+    let mut find = None;
+    let mut replace = None;
+    let mut scope = RenameScope::Full;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --dir requires a directory");
+                };
+                dir = Some(PathBuf::from(value));
+            }
+            "--prefix" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --prefix requires text");
+                };
+                prefix = Some(value.clone());
+            }
+            "--suffix" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --suffix requires text");
+                };
+                suffix = Some(value.clone());
+            }
+            "--find" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --find requires text");
+                };
+                find = Some(value.clone());
+            }
+            "--replace" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --replace requires text");
+                };
+                replace = Some(value.clone());
+            }
+            "--scope" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --scope requires full|stem|ext");
+                };
+                let Some(parsed) = RenameScope::parse(value) else {
+                    return input_error(format!("E1002: unknown scope: {value}"));
+                };
+                scope = parsed;
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f12 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    let Some(dir) = dir else {
+        return input_error("E1001: f12 requires --dir <dir>");
+    };
+    if prefix.is_none() && suffix.is_none() && find.is_none() {
+        return input_error("E1001: f12 requires at least one of --prefix/--suffix/--find");
+    }
+    if replace.is_some() && find.is_none() {
+        return input_error("E1001: --replace requires --find");
+    }
+    let dir = make_absolute(&dir);
+    let metadata = match std::fs::metadata(&dir) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot read rename directory ({}): {error}",
+                dir.display()
+            );
+            return 2;
+        }
+    };
+    if !metadata.is_dir() {
+        return input_error("E1002: --dir must be a directory");
+    }
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot list rename directory ({}): {error}",
+                dir.display()
+            );
+            return 2;
+        }
+    };
+    let mut items = Vec::new();
+    let mut existing_targets = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        existing_targets.push(path.to_string_lossy().into_owned());
+        items.push(PlanF12Item {
+            path: path.to_string_lossy().into_owned(),
+            name,
+        });
+    }
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f12"));
+    let planned = plan_f12(PlanF12Input {
+        plan_id,
+        items,
+        existing_targets,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        rule: PlanF12Rule {
+            prefix,
+            suffix,
+            find,
+            replace: replace.unwrap_or_default(),
+            scope,
+        },
     });
     match planned {
         Ok(plan) => {

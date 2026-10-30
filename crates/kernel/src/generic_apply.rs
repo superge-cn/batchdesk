@@ -314,6 +314,15 @@ pub fn apply_generic_plan(
                     ));
                     continue;
                 }
+            } else if entry.action == PlanAction::Rename {
+                if !matches!(stat.kind, EntryKind::File | EntryKind::Dir) {
+                    failed += 1;
+                    reports.push(failed_entry(
+                        entry.entry_id.clone(),
+                        KernelError::invalid_params("rename expects a file or directory source"),
+                    ));
+                    continue;
+                }
             } else if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
                 failed += 1;
                 reports.push(failed_entry(
