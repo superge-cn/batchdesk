@@ -851,6 +851,147 @@ fn f05_plan_apply_and_undo_repeats_the_csv_header() {
 }
 
 #[test]
+fn f06_plan_apply_and_undo_aligns_columns_and_adds_source_column() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let output = dir.0.join("all.csv");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&first, b"id,name\n1,Alice\n").unwrap();
+    fs::write(&second, b"name,extra\nBob,x\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f06",
+        "--file",
+        path_text(&first),
+        "--file",
+        path_text(&second),
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--source-column",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f06 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f06");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(document["entries"][0]["action"], "merge");
+    assert_eq!(
+        document["entries"][0]["csvMerge"]["union"],
+        json!(["id", "name", "extra"])
+    );
+    assert_eq!(
+        document["entries"][0]["csvMerge"]["sourceColumn"],
+        "来源文件"
+    );
+    assert_eq!(document["entries"][0]["csvMerge"]["hasHeader"], true);
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "schema-missing-columns"));
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f06 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(report["report"]["entries"][0]["status"], "ok");
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        "来源文件,id,name,extra\na.csv,1,Alice,\nb.csv,,Bob,x\n".as_bytes(),
+        "columns align by header name, missing values are empty, extras are appended"
+    );
+    assert!(first.exists());
+    assert!(second.exists());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f06 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 1);
+    assert!(
+        !output.exists(),
+        "undo moves the merged output into quarantine"
+    );
+}
+
+#[test]
+fn f06_strict_mode_blocks_a_schema_mismatch() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let output = dir.0.join("all.csv");
+    fs::write(&first, b"id,name\n1,Alice\n").unwrap();
+    fs::write(&second, b"name\nBob\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f06",
+        "--file",
+        path_text(&first),
+        "--file",
+        path_text(&second),
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--strict",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f06 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["blocked"]["code"], "E3004");
+    assert!(!output.exists());
+}
+
+#[test]
 fn f04_detects_encodings_and_writes_one_bom() {
     let dir = TempDir::new();
     let first = dir.0.join("first.txt");

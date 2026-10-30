@@ -5,6 +5,7 @@
 
 pub mod config_store;
 pub mod csv;
+pub mod csv_merge;
 pub mod fs;
 pub mod ids;
 pub mod journal;

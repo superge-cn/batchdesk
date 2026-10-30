@@ -603,6 +603,7 @@ fn build_split_document(
                 }),
                 csv: None,
                 merge: None,
+                csv_merge: None,
             });
         }
     }

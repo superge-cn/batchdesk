@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome};
 use kernel::csv::{plan_f05, CsvSplitBasis, Delimiter, PlanF05File, PlanF05Input};
+use kernel::csv_merge::{plan_f06, PlanF06File, PlanF06Input};
 use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
 };
@@ -29,6 +30,7 @@ use kernel::split::{
     plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input,
 };
 use platform::csv::{csv_split_layout, CsvScanOptions};
+use platform::csv_merge::{csv_merge_inspect, CsvMergeScanOptions};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -65,6 +67,14 @@ const USAGE: &str = "usage:
                 --sample-bytes <bytes> [--delimiter ,|;|tab||]
                 [--no-keep-header] [--plan-id ULID] [--protected-dir <dir>]...
                 [--json]
+  batchdesk f06 --file <path>... --output <file> --target <encoding>
+                --sample-bytes <bytes> [--sample-blocks N]
+                [--delimiter ,|;|tab||] [--source <encoding>]
+                [--no-header] [--source-column] [--source-column-name NAME]
+                [--source-column-relative --base-dir <dir>] [--strict]
+                [--invalid replace-and-count|abort]
+                [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
   batchdesk undo --plan <planId> --journal <file> [--retention-days N] [--json]
@@ -130,12 +140,34 @@ f05 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
+f06 options:
+  --file PATH             repeatable source CSV file (merged in the given order)
+  --output PATH           merged output file (must not be occupied unless confirmed)
+  --target ENC            target encoding: utf-8 | utf-8-bom | gb18030 | utf-16le[-bom] | utf-16be[-bom]
+  --sample-bytes BYTES    head window for delimiter sniffing/encoding (explicit; §5.2)
+  --sample-blocks N       evenly spaced sample blocks after the head (default: 0)
+  --delimiter D           , | ; | tab | pipe; omitted = sniff from the sample window
+  --source ENC            optional global source override; otherwise each file is detected
+  --no-header             all inputs have no header row (align by column index)
+  --source-column         add a leading source-file column (default: off)
+  --source-column-name N  source column header (default: 来源文件)
+  --source-column-relative
+                          write paths relative to --base-dir instead of file names
+  --base-dir DIR          base directory for --source-column-relative
+  --strict                block when column sets differ (default: fill empty/append)
+  --invalid POLICY        invalid-sequence policy (default: replace-and-count, §5.2)
+  --platform-prior PRIOR  chinese-windows | other (default: other; informational only)
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --json                  machine-readable plan output
+
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place (backup in quarantine, undo restores from the Journal);
   f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   f04 entries merge sources in order into one output with a single BOM;
   f05 entries write CSV parts on record boundaries, repeating the header by default;
+  f06 entries align CSV columns by header name (or column index without headers),
+  fill missing values and append extra columns, optionally adding a source column;
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -182,6 +214,9 @@ fn main() {
     }
     if args[1] == "f05" {
         std::process::exit(run_f05(&args));
+    }
+    if args[1] == "f06" {
+        std::process::exit(run_f06(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -1409,6 +1444,315 @@ fn run_f05(args: &[String]) -> i32 {
         files: plan_files,
     });
     match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f06(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut output = None;
+    let mut target = None;
+    let mut source = None;
+    let mut delimiter = None;
+    let mut invalid = InvalidSequencePolicy::ReplaceAndCount;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_window = None;
+    let mut sample_blocks = 0usize;
+    let mut has_header = true;
+    let mut add_source_column = false;
+    let mut source_column_name = "来源文件".to_string();
+    let mut source_column_relative = false;
+    let mut base_dir = None;
+    let mut strict = false;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target requires an encoding");
+                };
+                let Some(parsed) = TargetEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown target encoding: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires a value");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--invalid" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --invalid requires a policy");
+                };
+                let Some(parsed) = InvalidSequencePolicy::parse(value) else {
+                    return input_error(format!("E1002: unknown invalid-sequence policy: {value}"));
+                };
+                invalid = parsed;
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires a window size");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => sample_window = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--sample-blocks" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-blocks requires a count");
+                };
+                match value.parse::<usize>() {
+                    Ok(blocks) => sample_blocks = blocks,
+                    Err(_) => {
+                        return input_error(format!(
+                            "E1002: --sample-blocks must be a non-negative integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--no-header" => has_header = false,
+            "--source-column" => add_source_column = true,
+            "--source-column-name" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source-column-name requires a value");
+                };
+                source_column_name = value.clone();
+            }
+            "--source-column-relative" => {
+                add_source_column = true;
+                source_column_relative = true;
+            }
+            "--base-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --base-dir requires a path");
+                };
+                base_dir = Some(PathBuf::from(value));
+            }
+            "--strict" => strict = true,
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f06 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: f06 requires at least one --file <path>");
+    }
+    let Some(output) = output else {
+        return input_error("E1001: f06 requires --output <file>");
+    };
+    let Some(target) = target else {
+        return input_error("E1001: f06 requires --target <encoding>");
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: f06 requires --sample-bytes <n> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    if source_column_name.trim().is_empty() {
+        return input_error("E1001: --source-column-name must not be empty");
+    }
+    let base = if source_column_relative {
+        let Some(base_dir) = base_dir else {
+            return input_error("E1001: --source-column-relative requires --base-dir <dir>");
+        };
+        Some(make_absolute(&base_dir))
+    } else {
+        None
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    for path in &files {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: f06 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let inspection = match csv_merge_inspect(
+            &absolute,
+            CsvMergeScanOptions {
+                delimiter,
+                has_header,
+                sample_window_bytes: sample_window,
+                sample_blocks,
+                platform_prior: prior,
+                source_encoding: source,
+            },
+        ) {
+            Ok(inspection) => inspection,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot inspect CSV for merge ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        let source_label = if add_source_column {
+            if source_column_relative {
+                let base = base.as_ref().expect("checked above");
+                match absolute.strip_prefix(base) {
+                    Ok(relative) if !relative.as_os_str().is_empty() => {
+                        Some(relative.to_string_lossy().into_owned())
+                    }
+                    _ => {
+                        eprintln!(
+                            "E1002: source is outside --base-dir: {}",
+                            absolute.display()
+                        );
+                        return 2;
+                    }
+                }
+            } else {
+                Some(
+                    absolute
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("file")
+                        .to_string(),
+                )
+            }
+        } else {
+            None
+        };
+        plan_files.push(PlanF06File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: inspection.file_size,
+            source_encoding: source.or(inspection.source_encoding),
+            delimiter: inspection.delimiter,
+            has_header: inspection.has_header,
+            columns: inspection.columns,
+            column_count: inspection.column_count,
+            data_rows: inspection.data_rows,
+            dirty_rows: inspection.dirty_rows,
+            source_label,
+        });
+    }
+
+    let output = make_absolute(&output);
+    let output = output.to_string_lossy().into_owned();
+    let target_occupied = std::path::Path::new(&output).exists();
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f06"));
+    let input = PlanF06Input {
+        plan_id,
+        target: output,
+        target_encoding: target,
+        invalid,
+        output_delimiter: delimiter,
+        add_source_column,
+        source_column_name,
+        strict,
+        protected_dirs,
+        case_sense,
+        target_occupied,
+        files: plan_files,
+    };
+    match plan_f06(input) {
         Ok(plan) => {
             if json {
                 print_plan_json(&plan);

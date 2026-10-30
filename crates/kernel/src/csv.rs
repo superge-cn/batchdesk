@@ -643,6 +643,7 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
                     dirty_rows: shard.dirty_rows,
                 }),
                 merge: None,
+                csv_merge: None,
             });
         }
     }

@@ -239,6 +239,52 @@ pub struct PlanCsvSplit {
     pub dirty_rows: u64,
 }
 
+/// F06 CSV 合并的单个输入（表头已按规范化规则处理；`columns` 保留重复项与顺序）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvMergeFile {
+    pub path: String,
+    /// 检测或用户确认的源编码；`None` 表示需人工确认（计划条目按 E3001 阻断）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    /// 该文件的分隔符（稳定字符串），apply 按它解析该文件。
+    pub delimiter: String,
+    /// 规范化后的表头字段（保留重复项）；无表头时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    /// 来源列取值（文件名或相对路径）；未启用来源列时为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
+    /// 数据行列数与表头不一致的记录数（只上报，不静默修正）。
+    pub dirty_rows: u64,
+}
+
+/// F06 CSV 合并的载荷（仅 `merge` 动作使用）：列并集、来源列与目标编码。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvMerge {
+    pub files: Vec<PlanCsvMergeFile>,
+    /// 输出列并集（规范化列名，保留重复项）；无表头时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub union: Vec<String>,
+    /// 无表头时按列序号对齐的列宽（取各文件最大列数）。
+    pub positional_columns: u64,
+    /// 全部输入是否都有表头（混合模式在计划期阻断 E3004）。
+    pub has_header: bool,
+    /// 来源列名（写入输出首列）；未启用时为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_column: Option<String>,
+    /// 目标编码（`TargetEncoding::as_str` 的稳定字符串，含 BOM 策略）。
+    pub target_encoding: String,
+    /// 非法序列策略（`InvalidSequencePolicy::as_str`）。
+    pub invalid: String,
+    /// 输出分隔符的稳定字符串。
+    pub delimiter: String,
+    /// 严格模式：列不一致在计划期阻断 E3004。
+    pub strict: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
@@ -267,6 +313,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：CSV 表头区间与分隔符（仅 F05 的 `split` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<PlanCsvSplit>,
+    /// 追加式可选字段：CSV 合并的列并集与来源列（仅 F06 的 `merge` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_merge: Option<PlanCsvMerge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -436,6 +485,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 range: None,
                 merge: None,
                 csv: None,
+                csv_merge: None,
             });
         }
     }
@@ -648,6 +698,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             range: None,
             merge: None,
             csv: None,
+            csv_merge: None,
         });
     }
 

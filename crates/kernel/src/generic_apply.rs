@@ -17,13 +17,15 @@ use crate::apply::{
     ApplyStatus, OnConflict,
 };
 use crate::conflict::sequence_target;
-use crate::encoding::{transcode, InvalidSequencePolicy, TargetEncoding};
+use crate::csv::Delimiter;
+use crate::csv_merge::{column_keys, normalized_columns, parse_records, write_record};
+use crate::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
 use crate::error::KernelError;
 use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind};
 use crate::journal::{FsOp, JournalStore};
 use crate::license::{Capability, LicenseService};
 use crate::path::{protected_by, try_normalize, ProtectedDir};
-use crate::plan::{PlanAction, PlanDocument, PlanResolution};
+use crate::plan::{PlanAction, PlanCsvMerge, PlanDocument, PlanResolution};
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
 /// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节。
@@ -133,27 +135,35 @@ pub fn apply_generic_plan(
                     }
                 }
             }
-            PlanAction::Merge if entry.merge.is_none() => {
+            PlanAction::Merge if entry.merge.is_none() && entry.csv_merge.is_none() => {
                 return Err(KernelError::invalid_params(
-                    "merge entries require a merge payload",
+                    "merge entries require a merge or csvMerge payload",
+                ))
+            }
+            PlanAction::Merge if entry.merge.is_some() && entry.csv_merge.is_some() => {
+                return Err(KernelError::invalid_params(
+                    "merge entries must not carry both merge and csvMerge payloads",
                 ))
             }
             PlanAction::Merge => {
-                let merge = entry.merge.as_ref().expect("checked above");
-                if merge.sources.is_empty() {
-                    return Err(KernelError::invalid_params(
-                        "merge payload requires at least one source",
-                    ));
-                }
-                if TargetEncoding::parse(&merge.target_encoding).is_none() {
-                    return Err(KernelError::invalid_params(
-                        "merge targetEncoding is not a supported encoding",
-                    ));
-                }
-                if InvalidSequencePolicy::parse(&merge.invalid).is_none() {
-                    return Err(KernelError::invalid_params(
-                        "merge invalid policy is not supported",
-                    ));
+                if let Some(merge) = &entry.merge {
+                    if merge.sources.is_empty() {
+                        return Err(KernelError::invalid_params(
+                            "merge payload requires at least one source",
+                        ));
+                    }
+                    if TargetEncoding::parse(&merge.target_encoding).is_none() {
+                        return Err(KernelError::invalid_params(
+                            "merge targetEncoding is not a supported encoding",
+                        ));
+                    }
+                    if InvalidSequencePolicy::parse(&merge.invalid).is_none() {
+                        return Err(KernelError::invalid_params(
+                            "merge invalid policy is not supported",
+                        ));
+                    }
+                } else if let Some(csv_merge) = &entry.csv_merge {
+                    validate_csv_merge(csv_merge)?;
                 }
             }
             _ => {}
@@ -647,6 +657,9 @@ fn perform(
             }
             PlanAction::Merge => {
                 let target = target.expect("validated: merge requires a target");
+                if let Some(csv_merge) = &entry.csv_merge {
+                    return perform_csv_merge(context, target, overwrite, csv_merge);
+                }
                 let merge = entry.merge.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("merge entries require a payload")
                 })?;
@@ -853,28 +866,49 @@ fn protected_path_hit(
     })
 }
 
-/// F04：合并的全部输入都要在执行期复核（大小、普通文件、占位、保护目录）。
+/// F04/F06：合并的全部输入都要在执行期复核（大小、普通文件、占位、保护目录）。
 fn merge_source_mismatch(
     context: &GenericApplyContext<'_>,
     entry: &crate::plan::PlanEntry,
 ) -> Option<KernelError> {
-    let merge = entry.merge.as_ref()?;
-    for source in &merge.sources {
-        let normalized = match try_normalize(&source.path) {
+    let sources: Vec<(&str, u64, Option<SourceEncoding>)> = if let Some(merge) = &entry.merge {
+        merge
+            .sources
+            .iter()
+            .map(|source| (source.path.as_str(), source.size, source.encoding))
+            .collect()
+    } else if let Some(csv_merge) = &entry.csv_merge {
+        csv_merge
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.size, file.encoding))
+            .collect()
+    } else {
+        return None;
+    };
+    for (path, size, encoding) in sources {
+        let normalized = match try_normalize(path) {
             Ok(normalized) => normalized,
             Err(error) => return Some(error),
         };
-        if let Some(error) = protected_path_hit(context, &source.path, &normalized) {
+        if let Some(error) = protected_path_hit(context, path, &normalized) {
             return Some(error);
         }
-        let stat = match context.fs.stat(&source.path) {
+        if entry.csv_merge.is_some() && encoding.is_none() {
+            return Some(KernelError::new(
+                "E3001",
+                format!("source encoding requires manual confirmation: {path}"),
+                None,
+                false,
+            ));
+        }
+        let stat = match context.fs.stat(path) {
             Ok(stat) => stat,
             Err(error) => return Some(error),
         };
         if stat.kind != EntryKind::File {
             return Some(KernelError::invalid_params(format!(
-                "merge expects a file source: {}",
-                source.path
+                "merge expects a file source: {path}"
             )));
         }
         if stat.attrs.placeholder {
@@ -885,7 +919,7 @@ fn merge_source_mismatch(
                 true,
             ));
         }
-        if stat.size != source.size {
+        if stat.size != size {
             return Some(KernelError::new(
                 "E2010",
                 "source size changed since plan preview",
@@ -895,6 +929,245 @@ fn merge_source_mismatch(
         }
     }
     None
+}
+
+fn validate_csv_merge(payload: &PlanCsvMerge) -> Result<(), KernelError> {
+    if payload.files.is_empty() {
+        return Err(KernelError::invalid_params(
+            "csvMerge payload requires at least one source",
+        ));
+    }
+    if TargetEncoding::parse(&payload.target_encoding).is_none() {
+        return Err(KernelError::invalid_params(
+            "csvMerge targetEncoding is not a supported encoding",
+        ));
+    }
+    if InvalidSequencePolicy::parse(&payload.invalid).is_none() {
+        return Err(KernelError::invalid_params(
+            "csvMerge invalid policy is not supported",
+        ));
+    }
+    if Delimiter::parse(&payload.delimiter).is_none() {
+        return Err(KernelError::invalid_params(
+            "csvMerge delimiter is not supported",
+        ));
+    }
+    if payload.has_header {
+        if payload.union.is_empty() {
+            return Err(KernelError::invalid_params(
+                "csvMerge with headers requires a non-empty column union",
+            ));
+        }
+        if payload.positional_columns as usize != payload.union.len() {
+            return Err(KernelError::invalid_params(
+                "csvMerge positionalColumns must match the column union length",
+            ));
+        }
+    } else if payload.positional_columns == 0 {
+        return Err(KernelError::invalid_params(
+            "csvMerge without headers requires a positive positional column width",
+        ));
+    }
+    if payload
+        .source_column
+        .as_ref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err(KernelError::invalid_params(
+            "csvMerge sourceColumn must not be empty",
+        ));
+    }
+    for file in &payload.files {
+        if Delimiter::parse(&file.delimiter).is_none() {
+            return Err(KernelError::invalid_params(format!(
+                "csvMerge source delimiter is not supported: {}",
+                file.path
+            )));
+        }
+        if file.encoding.is_none() {
+            return Err(KernelError::new(
+                "E3001",
+                format!(
+                    "source encoding requires manual confirmation: {}",
+                    file.path
+                ),
+                None,
+                false,
+            ));
+        }
+        if payload.has_header && file.columns.is_empty() {
+            return Err(KernelError::invalid_params(format!(
+                "csvMerge source has no header columns: {}",
+                file.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// F06：逐文件解码后按列并集映射字段，缺失补空、额外列追加末尾、来源列写首列。
+fn perform_csv_merge(
+    context: &GenericApplyContext<'_>,
+    target: &str,
+    overwrite: bool,
+    payload: &PlanCsvMerge,
+) -> Result<Performed, KernelError> {
+    let target_encoding = TargetEncoding::parse(&payload.target_encoding)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvMerge target encoding"))?;
+    let invalid = InvalidSequencePolicy::parse(&payload.invalid).ok_or_else(|| {
+        KernelError::invalid_params("unsupported csvMerge invalid-sequence policy")
+    })?;
+    let output_delimiter = Delimiter::parse(&payload.delimiter)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvMerge delimiter"))?;
+    let backup = if overwrite {
+        Some(context.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+
+    let mut output = String::new();
+    if payload.has_header {
+        let mut header: Vec<String> = Vec::new();
+        if let Some(source_column) = &payload.source_column {
+            header.push(source_column.clone());
+        }
+        header.extend(payload.union.iter().cloned());
+        write_record(&header, output_delimiter.as_byte(), &mut output);
+    }
+    let union_keys = if payload.has_header {
+        Some(column_keys(&payload.union))
+    } else {
+        None
+    };
+
+    for file in &payload.files {
+        let encoding = file.encoding.ok_or_else(|| {
+            KernelError::new(
+                "E3001",
+                format!(
+                    "source encoding requires manual confirmation: {}",
+                    file.path
+                ),
+                None,
+                false,
+            )
+        })?;
+        let file_delimiter = Delimiter::parse(&file.delimiter).ok_or_else(|| {
+            KernelError::invalid_params(format!("unsupported source delimiter for {}", file.path))
+        })?;
+        let data = context.fs.read_bytes(&file.path)?;
+        if data.len() as u64 != file.size {
+            return Err(KernelError::new(
+                "E2010",
+                format!("source size changed since plan preview: {}", file.path),
+                None,
+                false,
+            ));
+        }
+        let decoded = transcode(
+            &data,
+            encoding,
+            TargetEncoding::Utf8 { bom: false },
+            invalid,
+        )?;
+        let records = parse_records(&decoded.bytes, file_delimiter.as_byte());
+        let (header, rows): (&[String], &[Vec<String>]) = if payload.has_header {
+            match records.split_first() {
+                Some((header, rows)) => (header, rows),
+                None => (&[], &[]),
+            }
+        } else {
+            (&[], &records)
+        };
+        if payload.has_header {
+            let normalized = normalized_columns(header);
+            if normalized != file.columns {
+                return Err(KernelError::new(
+                    "E2010",
+                    format!("source header changed since plan preview: {}", file.path),
+                    None,
+                    false,
+                ));
+            }
+        }
+        let field_indexes = union_keys.as_ref().map(|union| {
+            let header_keys = column_keys(&normalized_columns(header));
+            union
+                .iter()
+                .map(|key| header_keys.iter().position(|header_key| header_key == key))
+                .collect::<Vec<_>>()
+        });
+
+        for row in rows {
+            let mut fields: Vec<String> = Vec::new();
+            if payload.source_column.is_some() {
+                let label = file.source_label.as_deref().ok_or_else(|| {
+                    KernelError::invalid_params(format!(
+                        "csvMerge source label is missing: {}",
+                        file.path
+                    ))
+                })?;
+                fields.push(label.to_string());
+            }
+            match &field_indexes {
+                Some(indexes) => {
+                    for position in indexes {
+                        fields.push(
+                            position
+                                .and_then(|index| row.get(index))
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+                None => {
+                    for index in 0..payload.positional_columns as usize {
+                        fields.push(row.get(index).cloned().unwrap_or_default());
+                    }
+                }
+            }
+            let known = if payload.has_header {
+                header.len()
+            } else {
+                payload.positional_columns as usize
+            };
+            if row.len() > known {
+                fields.extend(row[known..].iter().cloned());
+            }
+            write_record(&fields, output_delimiter.as_byte(), &mut output);
+        }
+    }
+
+    let encoded = transcode(
+        output.as_bytes(),
+        SourceEncoding::Utf8,
+        target_encoding,
+        invalid,
+    )?;
+    context.fs.write_atomic(target, &encoded.bytes)?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: context
+                .fs
+                .quarantine_target_path(&file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
 }
 
 fn protected_target_hit(context: &GenericApplyContext<'_>, target: &str) -> Option<KernelError> {
@@ -977,7 +1250,10 @@ mod tests {
     use crate::encoding::{SourceEncoding, TargetEncoding};
     use crate::fs::{DirEntryInfo, EntryAttrs, PathOutcome, ScanFilter, StatInfo};
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
-    use crate::plan::{PlanEntry, PlanExpected, PlanMerge, PlanMergeSource, PlanStats};
+    use crate::plan::{
+        PlanCsvMerge, PlanCsvMergeFile, PlanEntry, PlanExpected, PlanMerge, PlanMergeSource,
+        PlanStats,
+    };
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
     use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
     use std::collections::{BTreeMap, HashMap};
@@ -1376,6 +1652,7 @@ mod tests {
             range: None,
             merge: None,
             csv: None,
+            csv_merge: None,
         }
     }
 
@@ -1713,6 +1990,193 @@ mod tests {
         assert!(!fs.exists("/out/all.txt"));
     }
 
+    #[test]
+    fn csv_merge_aligns_columns_and_prepends_source_column() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"id,name\n1,Alice\n");
+        fs.write_file("/data/b.csv", b"name,extra\nBob,x\n");
+        let plan = plan(vec![csv_merge_entry(
+            "e1",
+            "/out/all.csv",
+            vec![
+                csv_file("/data/a.csv", 16, &["id", "name"], Some("a.csv")),
+                csv_file("/data/b.csv", 17, &["name", "extra"], Some("b.csv")),
+            ],
+            vec!["id", "name", "extra"],
+            true,
+            3,
+            Some("来源文件"),
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(
+            fs.read_file("/out/all.csv"),
+            "来源文件,id,name,extra\na.csv,1,Alice,\nb.csv,,Bob,x\n".as_bytes()
+        );
+        assert!(matches!(
+            journal.entries[0].reverse,
+            FsOp::Quarantine { .. }
+        ));
+    }
+
+    #[test]
+    fn csv_merge_maps_by_header_name_not_position() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"id,name\n1,Alice\n");
+        fs.write_file("/data/b.csv", b"name,id\nBob,2\n");
+        let plan = plan(vec![csv_merge_entry(
+            "e1",
+            "/out/all.csv",
+            vec![
+                csv_file("/data/a.csv", 16, &["id", "name"], None),
+                csv_file("/data/b.csv", 14, &["name", "id"], None),
+            ],
+            vec!["id", "name"],
+            true,
+            2,
+            None,
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(
+            fs.read_file("/out/all.csv"),
+            "id,name\n1,Alice\n2,Bob\n".as_bytes()
+        );
+    }
+
+    #[test]
+    fn csv_merge_without_headers_aligns_by_position() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"1,2\n");
+        fs.write_file("/data/b.csv", b"a,b,c\n");
+        let plan = plan(vec![csv_merge_entry(
+            "e1",
+            "/out/all.csv",
+            vec![
+                PlanCsvMergeFile {
+                    columns: Vec::new(),
+                    ..csv_file("/data/a.csv", 4, &[], None)
+                },
+                PlanCsvMergeFile {
+                    columns: Vec::new(),
+                    ..csv_file("/data/b.csv", 6, &[], None)
+                },
+            ],
+            Vec::new(),
+            false,
+            3,
+            None,
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(fs.read_file("/out/all.csv"), b"1,2,\na,b,c\n");
+    }
+
+    #[test]
+    fn csv_merge_rejects_a_header_changed_since_plan() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"id,title\n1,x\n");
+        let plan = plan(vec![csv_merge_entry(
+            "e1",
+            "/out/all.csv",
+            vec![csv_file("/data/a.csv", 13, &["id", "name"], None)],
+            vec!["id", "name"],
+            true,
+            2,
+            None,
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2010"
+        );
+        assert!(!fs.exists("/out/all.csv"));
+        assert!(journal.entries.is_empty());
+    }
+
+    fn csv_file(path: &str, size: u64, columns: &[&str], label: Option<&str>) -> PlanCsvMergeFile {
+        PlanCsvMergeFile {
+            path: path.to_string(),
+            encoding: Some(SourceEncoding::Utf8),
+            size,
+            delimiter: ",".to_string(),
+            columns: columns.iter().map(|value| value.to_string()).collect(),
+            source_label: label.map(str::to_string),
+            dirty_rows: 0,
+        }
+    }
+
+    fn csv_merge_entry(
+        entry_id: &str,
+        target: &str,
+        files: Vec<PlanCsvMergeFile>,
+        union: Vec<&str>,
+        has_header: bool,
+        positional_columns: u64,
+        source_column: Option<&str>,
+    ) -> PlanEntry {
+        let first = &files[0];
+        PlanEntry {
+            entry_id: entry_id.to_string(),
+            source: first.path.clone(),
+            target: Some(target.to_string()),
+            action: PlanAction::Merge,
+            relation: None,
+            reason: "csv merge".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: Some(PlanExpected {
+                size: first.size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: Some(PlanCsvMerge {
+                files,
+                union: union.iter().map(|value| value.to_string()).collect(),
+                positional_columns,
+                has_header,
+                source_column: source_column.map(str::to_string),
+                target_encoding: "utf-8".to_string(),
+                invalid: "replace-and-count".to_string(),
+                delimiter: ",".to_string(),
+                strict: false,
+            }),
+        }
+    }
+
     fn merge_entry(
         entry_id: &str,
         target: &str,
@@ -1749,6 +2213,7 @@ mod tests {
                 invalid: "replace-and-count".to_string(),
             }),
             csv: None,
+            csv_merge: None,
         }
     }
 

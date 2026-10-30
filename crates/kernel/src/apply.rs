@@ -948,6 +948,7 @@ mod tests {
             range: None,
             merge: None,
             csv: None,
+            csv_merge: None,
         }
     }
 
