@@ -178,6 +178,9 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
         .iter()
         .map(|path| conflict_key(path, input.case_sense))
         .collect();
+    for key in &moving_sources {
+        existing_effective.remove(key);
+    }
     for key in &source_keys {
         if !moving_sources.contains(key) {
             existing_effective.insert(key.clone());
@@ -590,6 +593,22 @@ mod tests {
         assert_eq!(plan.entries.len(), 2);
         assert_eq!(plan.entries[0].target.as_deref(), Some("/data/new_a.txt"));
         assert_eq!(plan.params["twoPhase"], PlanParamValue::Bool(false));
+    }
+
+    #[test]
+    fn source_target_chain_is_not_an_existing_conflict() {
+        let plan = plan_f12(input(
+            vec![item("a.txt"), item("new_a.txt")],
+            prefix_rule("new_"),
+        ))
+        .unwrap();
+        assert_eq!(plan.entries.len(), 2);
+        assert!(plan
+            .entries
+            .iter()
+            .all(|entry| entry.conflict.is_none() && entry.blocked.is_none()));
+        assert_eq!(plan.entries[0].source, "/data/new_a.txt");
+        assert_eq!(plan.entries[1].source, "/data/a.txt");
     }
 
     #[test]

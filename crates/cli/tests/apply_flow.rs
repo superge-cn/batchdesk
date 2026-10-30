@@ -1913,16 +1913,18 @@ fn f12_reports_existing_conflicts_and_invalid_targets() {
     let root = dir.0.join("rename");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("a.txt"), b"a").unwrap();
-    fs::write(root.join("new_a.txt"), b"existing").unwrap();
+    fs::write(root.join("x.txt"), b"existing").unwrap();
 
     let plan = batchdesk(&[
         "f12",
         "--dir",
         path_text(&root),
-        "--prefix",
-        "new_",
+        "--find",
+        "a",
+        "--replace",
+        "x",
         "--scope",
-        "stem",
+        "full",
         "--json",
     ]);
     assert!(plan.status.success());
