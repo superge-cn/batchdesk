@@ -151,16 +151,19 @@
 - Web/WASM、云端服务端、商业授权 QuotaBased；
 - 安装包、签名、更新检查、CSP/加固断言、性能基准对比。
 
-## 5. 下一批任务（Wave 0 backlog）
+## 5. 下一批任务（Wave 2 起步）
+
+> Wave 0 的 W0-1…W0-5 已完成、W0-6 仅剩人工项；backlog 已滚动到 Wave 2，历史证据见 §6.1。
 
 | 任务 | 状态 | 产出 | 验收 | 依赖 |
 |---|---|---|---|---|
-| W0-1 任务队列/状态机 | **完成** | `TaskQueue` + TaskState + 事件 | C09 apply/undo 通过事件完成；取消可见 | 设计 01 §6、设计 12 |
-| W0-2 `applyPlan`/`undoPlan` 返回 taskId | **完成** | IPC 形状对齐 | UI 不再同步等待结果 | W0-1 |
-| W0-3 Tauri WebView E2E | **完成** | WebDriver 脚本 `scripts/e2e-tauri.mjs` | plan→apply→undo/cleanup 演练 + 取消回滚 | W0-1、Tauri 系统依赖 |
-| W0-4 合约化 cleanup/storage 命令 | **完成** | 设计 01 §4.4.1 壳层追加行 | 文档/命令/DTO 一致 | 设计 01 评审 |
-| W0-5 src-tauri 依赖审计 | **完成** | cargo-deny/SBOM 覆盖独立 lock | CI deny job 全绿（run 40872864062；含 `cargo deny --manifest-path src-tauri/Cargo.toml` 与 4 份 SBOM artifact） | OQ-13、CI |
-| W0-6 C09 收尾 | 部分 | 内容再校验（expected+E2010+CLI 集成锚点）、Windows 文件身份（WinAPI，ADR-0012）与 Windows 长路径收口（`\\?\`/`\\?\UNC\` 前缀统一走适配层，设计 04 v1.3；`scans_long_paths_beyond_the_win32_limit` >260 深树回归挂 Windows CI）已落地 | T C09 全量 UI 用例（人工）+ C-6/apply_flow；UNC 长路径行为矩阵待 Windows 实机 | W0-1、平台能力 |
+| W2-0a 编码检测/转码纯函数层 | **切片** | kernel `encoding`（ADR-0014） | kernel 10 项单测；K01–K08 语料接线待做 | 方案 §5.2 |
+| W2-0b 文本采样/流式读取（platform） | 未开始 | 采样读取、行数估算、逐行流式读（供 C01/F01–F04） | 不整文件读入内存；T03 超长行、T06 无换行可报；采样窗口取方案值或调用方显式入参，不自行定值 | W2-0a |
+| C01 编码转换纵向切片 | 未开始 | kernel plan 生成 + apply 复用 `edit-content`（备份→转码→原子写回）+ CLI/壳层接线 | TC C01 PRE/EXE/RBK；K01–K08 | W2-0b、Wave 1-2 执行器 |
+| F01 TXT 按大小分割 | 未开始 | plan/apply/Journal | TC F01（仅行边界断开、超长行独占并标注、T03/T06、C-2） | W2-0b |
+| F02–F04 TXT 分割/合并 | 未开始 | 同上 | TC F02/F03/F04 | F01 |
+| OQ-08 语料断言 harness | 未开始 | `crates/kernel/tests/corpus.rs` + `assertions.tsv` | 24 条自动化语料从“生成+范围核对”升级为“逐条断言” | OQ-08 已批准 |
+| 人工项收尾 | 部分 | C09 T 全量 UI、UNC/长路径矩阵、S03 崩溃演练 | `fixtures/corpus/manual-results.md` 台账 | Windows 实机 |
 
 ## 6. 完成判定与维护
 
