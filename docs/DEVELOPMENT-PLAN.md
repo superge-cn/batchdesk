@@ -55,7 +55,7 @@
 
 ### 3.3 未开始（按功能组）
 
-- **阶段 0 文本/编码**：F01–F13（分割/合并/抽列/编码/表头/换行/替换/正则改名等）、C02/C03/C04/C05/C06/C07/C08/C10/C11/C12/C13/C14/C15/C18（C01 的 kernel 编码层已建，采样读取/plan 生成/执行接线待做，见 §6.1 2026-10-30 Wave 2-0a 行）。
+- **阶段 0 文本/编码**：F01–F13（分割/合并/抽列/编码/表头/换行/替换/正则改名等）、C02/C03/C04/C05/C06/C07/C08/C10/C11/C12/C13/C14/C15/C18（C01 已接线到 plan/apply/CLI 切片；>10 MB 流式转码与替换计数上报待补，见 §6.1 2026-10-30 C01 行）。
 - **阶段 0 安全/环境**：C-7 授权状态集（阻塞；S01/S02/S03 的内核与壳层切片已完成，见 §3.2 平台核心行）。
 - **阶段 1**：C37 处理模板（存储/迁移/导入导出已完成，Phase A/B 的 plan/apply 与 UI 未做）、F15 AI 助手 Phase 1/2/3、设置与持久化 UI。
 - **P1/P2**：C21–C63 中未进入阶段 0 的功能、CLI C40 正式命令面、性能基准结果台账。
@@ -158,8 +158,8 @@
 | 任务 | 状态 | 产出 | 验收 | 依赖 |
 |---|---|---|---|---|
 | W2-0a 编码检测/转码纯函数层 | **切片** | kernel `encoding`（ADR-0014） | kernel 10 项单测；K01–K08 语料接线待做 | 方案 §5.2 |
-| W2-0b 文本采样/流式读取（platform） | 未开始 | 采样读取、行数估算、逐行流式读（供 C01/F01–F04） | 不整文件读入内存；T03 超长行、T06 无换行可报；采样窗口取方案值或调用方显式入参，不自行定值 | W2-0a |
-| C01 编码转换纵向切片 | 未开始 | kernel plan 生成 + apply 复用 `edit-content`（备份→转码→原子写回）+ CLI/壳层接线 | TC C01 PRE/EXE/RBK；K01–K08 | W2-0b、Wave 1-2 执行器 |
+| W2-0b 文本采样/流式读取（platform） | **切片** | platform `text`：`sample_bytes`、`estimate_lines`、`stream_segments` | 不整文件读入内存；T03 超长行、T06 无换行可报；采样窗口/块数均为调用方显式入参（§5.2 无数值）；platform 单测 41→55 | T03/T06 告警在 F01 plan 中呈现；>2 GB 预扫描接进度 |
+| C01 编码转换纵向切片 | **切片** | kernel `plan_c01`（检测→`edit-content`/skip/blocked E3001）+ CLI `c01` 与 `apply` 路由 `generic_apply`（备份→转码→原子写回，Journal 撤销） | kernel +7 项 plan 单测、encoding 参数往返 1 项；`apply_flow` GB18030→UTF-8 plan→apply→undo 字节往返；workspace 190 项 | 替换计数上报、>10 MB 流式转码、K01–K08 语料断言（OQ-08）、UI 候选预览/人工确认 |
 | F01 TXT 按大小分割 | 未开始 | plan/apply/Journal | TC F01（仅行边界断开、超长行独占并标注、T03/T06、C-2） | W2-0b |
 | F02–F04 TXT 分割/合并 | 未开始 | 同上 | TC F02/F03/F04 | F01 |
 | OQ-08 语料断言 harness | 未开始 | `crates/kernel/tests/corpus.rs` + `assertions.tsv` | 24 条自动化语料从“生成+范围核对”升级为“逐条断言” | OQ-08 已批准 |
@@ -199,7 +199,8 @@
 | 2026-10-30 | Wave 2-0a：编码检测与转码纯函数层（方案 §5.2，ADR-0014） | 切片 | kernel 新增 `encoding` 模块＋依赖 `chardetng 1.0`/`encoding_rs 0.8`（许可经 `cargo info` 实证 Apache-2.0 OR MIT / (Apache-2.0 OR MIT) AND BSD-3-Clause，`cargo deny` 四项双 lock 全绿）。**检测**：① BOM 优先（UTF-32 先于 UTF-16 防前缀误判）② std 严格 UTF-8（纯 ASCII/过短默认 UTF-8 并提示；含控制字符判据防二进制蒙混）③ chardetng 主路径（Iso2022Jp=Deny）④ 平台先验仅报告不覆盖结论；置信规则零数值阈值：判定编码解码采样零替换错误且无 \t\n\r 外控制字符→高置信，否则需人工确认（§5.2 绝不静默猜错）；`require_encoding` 未确认取编码→E3001。**转码**：`transcode(data, source, target, invalid)`——UTF-8/UTF-8 BOM/GB18030/UTF-16LE/BE 输出（BOM 由调用方按片控制，§5.1 UTF-16 每片必须 BOM；UTF-16 输出自编码——WHATwg encode 只定义到 UTF-8，实测 encoding_rs 对 UTF-16 目标返回 UTF-8）；Abort 策略严格解码失败→E3002，ReplaceAndCount 计数上报；GB18030 为 GBK/GB2312 超集统一处理。单测 10 项（BOM 顺序/ASCII/UTF-8/GB18030 采样/非法字节/转码往返/UTF-16 BOM/E3002）。`cargo test --workspace` **167 项**、fmt/clippy -D warnings、deny、check_docs 全绿（本地，待推送后 CI 复验） | C01 接线（platform 采样读取/plan 生成/apply 接入 generic_apply edit-content）、F01–F04 接线、legacy 输出端不可映射字符策略（暂 WHATwg 数字实体）、>2 GB 流式检测/转码、chardetng 采样规模的实机语料校准（R 系语料） | 开发代理 |
 | 2026-10-30 | 推送 11 提交并复验 CI | 完成 | 推送 `c61eef0..2a3fa91` 后 run 40982804995 仅 Windows 单测失败（`fs::tests::backup_copies_into_quarantine_and_keeps_the_original` 断言硬编码 `/`，Windows 返回 `\`）；修复为 `Path::file_name` + 词干/扩展名断言（`crates/platform/src/fs.rs`）后推送 45b09d5，**CI 七 job 全 success（run 40983125143）**；本机复跑 `cargo test -p batchdesk-platform` 41 项、fmt/clippy/check_docs 全绿 | — | 开发代理 |
 | 2026-10-30 | 台账漂移修正 | 完成 | `TRACEABILITY` 的 03/13/可运行行测试数 102/35/40 → 117/41（合计 167）；`DEVELOPMENT-PLAN` §5 由 Wave 0 backlog 滚动为 Wave 2 起步表；`check_docs.py` 通过 | 后续随每次状态变化继续滚动 | 开发代理 |
-| 2026-10-30 | Wave 1-2 收口：Journal 逆向补全 + copy/edit-content 执行器 | 切片 | **契约**：设计 01 升 v1.7（§8 追加 reverse 推导规则——copy 新建目标逆＝产物进隔离目录、copy 覆盖与 write_atomic 逆＝dataRef 备份还原、新建产物 `dataRef` 省略对齐契约字面）；设计 04 升 v1.4（FsAdapter 追加 `backup_to_quarantine`/`quarantine_target_path`，默认 E5001、CliFsAdapter 实现，长路径前缀收口同样生效）。**kernel**：`FsOp::data_ref` 改 `Option<String>`；`FsOp::inverse` 支持 WriteAtomic 备份还原；undo 执行器从"仅 quarantine rename"扩为三类 reverse 共享 `execute_reverse`（撤销任务与取消回滚同一实现）；`generic_apply` 接入 `copy`（新建/覆盖两路 reverse）与 `edit-content`（`ContentEditor` 注入变换，备份→改写→原子写回），copy 目标纳入 S02 保护复核。**测试**：journal 2 项（逆推/dataRef 省略）、generic_apply 4 项（copy 新建撤销→产物进隔离、copy 覆盖撤销→备份还原原内容、edit-content 撤销→字节还原、缺 editor E1002）、platform 1 项（备份复制保留原件＋预留路径唯一）；`cargo test --workspace` **157 项**（kernel 107 + platform 41 + CLI 6 + 集成 3）、壳层 13 项、fmt/clippy -D warnings 全绿、check_docs 通过（本地，待推送后 CI 复验） | archive/extract 执行器（C10 时接）、F01–F04 接入本执行器、TC 语料回归 harness | 开发代理 |
+| 2026-10-30 | Wave 2-0b：文本采样/流式读取 | 切片 | `crates/platform/src/text.rs`：`sample_bytes`（头部+等距窗口、重叠去重、`complete` 标记）、`estimate_lines`（按新行比例外推，完整采样末行补计）、`stream_segments`（固定 64 KiB 块切段回调：`line_index`/`line_start`/`ends_line`；T03 超长行计数 + T06 无换行信号）；采样窗口/块数/超长行阈值全部调用方显式传入，crate 无产品默认值。`cargo test -p batchdesk-platform` 41→55；fmt/clippy -D warnings 通过 | 采样块边界可能截断多字节字符→检测降级为人工确认（ADR-0014）；T03/T06 告警尚未接入 F01 plan；`estimate_lines` 以 `\n` 计行，CR-only 文件估算为 0 | 开发代理 |
+| 2026-10-30 | C01 编码转换纵向切片 | 切片 | **kernel** `plan_c01`：采样检测→`edit-content` 条目；需人工确认→blocked E3001（不静默猜错）；已在目标编码/BOM→`resolution: skip`；受保护/非法路径→blocked；`params` 快照 target/invalid/platformPrior/source（apply 侧按快照重建变换，无 source 时对整文件重检测）。**CLI**：新增 `c01` 计划命令（采样窗口/块数必填），`apply` 按 `kind` 路由 `apply_generic_plan`（c09 仍走专用执行器），`undo` 复用 Journal 备份还原。**测试**：kernel 125（plan +7、encoding 参数往返 +1）、platform 55、CLI 6、集成 4＝**190 项**；`apply_flow` 新增 GB18030→UTF-8 plan→apply→undo 字节往返；fmt/clippy -D warnings 通过 | 替换计数未上报（`ContentEditor` 仅回传字节，需契约扩展）、>10 MB 流式转码（generic_apply 仍整文件读）、K01–K08 语料断言（OQ-08）、UI 候选预览/人工确认交互 | 开发代理 |
 
 ## 7. 关联
 

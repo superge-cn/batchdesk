@@ -1,8 +1,10 @@
 //! batchdesk 命令行入口。
 //!
-//! 当前提供 C09 只读检测与计划预览切片：扫描 + 大小/快速/全量哈希 + 纯函数
-//! 分组；`--plan` 只生成 `PlanDocument`，不删除、不执行 apply。快速哈希窗口
-//! 必须由调用方显式给出，本程序不设产品默认值（见 PDR-001 与 OQ-28）。
+//! 当前提供 C09 只读检测与计划预览切片，以及 C01 编码转换的计划/执行切片：
+//! 扫描 + 大小/快速/全量哈希 + 纯函数分组；`--plan` 只生成 `PlanDocument`，
+//! 不删除、不执行 apply。快速哈希窗口必须由调用方显式给出，本程序不设产品
+//! 默认值（见 PDR-001 与 OQ-28）；C01 采样窗口/块数同样必须显式给出（方案
+//! §5.2 未给数值）。
 
 use std::env;
 use std::path::PathBuf;
@@ -11,10 +13,16 @@ use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutc
 use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
 };
+use kernel::encoding::{
+    detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+};
 use kernel::fs::FsAdapter;
+use kernel::generic_apply::{apply_generic_plan, ContentEditor, GenericApplyContext};
 use kernel::journal::JournalStore;
 use kernel::license::AlwaysAllowLicense;
-use kernel::plan::{plan_c09, KeepPolicy, PlanC09Input, PlanDocument, PlanFile};
+use kernel::plan::{
+    plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
+};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -23,11 +31,17 @@ use platform::retention::{
     cleanup, validate_retention_days, CleanupOutcome, DEFAULT_RETENTION_DAYS,
 };
 use platform::scan::{scan_path, ScanMode, ScanOptions, ScanOutcome};
+use platform::text::{sample_bytes, SampleSpec};
 
 const USAGE: &str = "usage:
   batchdesk c09 <path> [--mode full|fast] [--quick-window-bytes N]
                      [--plan --keep earliest|shortest-path|newest [--plan-id ULID]]
                      [--json]
+  batchdesk c01 --file <path>... --target <encoding>
+                --sample-window <bytes> --sample-blocks <n>
+                [--source <encoding>] [--invalid replace-and-count|abort]
+                [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
   batchdesk undo --plan <planId> --journal <file> [--retention-days N] [--json]
@@ -43,8 +57,21 @@ c09 options:
   --protected-dir DIR     repeatable S02 protected directory (default none)
   --json                  machine-readable output
 
+c01 options:
+  --file PATH             repeatable source file (regular files only)
+  --target ENC            utf-8 | utf-8-bom | gb18030 | utf-16le[-bom] | utf-16be[-bom]
+  --sample-window BYTES   sampling window per block; explicit because §5.2 sets no number
+  --sample-blocks N       number of evenly spaced sample blocks after the head (0 = head only)
+  --source ENC            optional global source override: utf-8 | gb18030 | big5 |
+                          shift-jis | latin1 | utf-16le | utf-16be
+  --invalid POLICY        invalid-sequence policy (default: replace-and-count, §5.2)
+  --platform-prior PRIOR  chinese-windows | other (default: other; informational only)
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --json                  machine-readable plan output
+
 apply/undo/cleanup:
-  apply consumes a previously generated C09 plan and moves entries to quarantine;
+  apply consumes a previously generated plan: c09 entries move to quarantine; c01
+  entries transcode in place (backup in quarantine, undo restores from the Journal);
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -73,6 +100,9 @@ fn main() {
     }
     if args[1] == "apply" {
         std::process::exit(run_apply(&args));
+    }
+    if args[1] == "c01" {
+        std::process::exit(run_c01(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -285,18 +315,72 @@ fn run_apply(args: &[String]) -> i32 {
         }
     };
     let license = AlwaysAllowLicense;
-    let mut context = ApplyContext {
-        fs: &adapter,
-        license: &license,
-        journal: &mut journal,
-        task_id: new_ulid(&format!("apply:{}", plan.plan_id)),
-        now_rfc3339: now_rfc3339(),
-        protected_dirs,
-        case_sense: adapter.case_sensitivity(),
-        progress: None,
-        cancel: None,
-    };
-    match apply_plan(&plan, &ApplyOptions::default(), &mut context) {
+    if plan.kind == kernel::plan::C09_KIND {
+        let mut context = ApplyContext {
+            fs: &adapter,
+            license: &license,
+            journal: &mut journal,
+            task_id: new_ulid(&format!("apply:{}", plan.plan_id)),
+            now_rfc3339: now_rfc3339(),
+            protected_dirs,
+            case_sense: adapter.case_sensitivity(),
+            progress: None,
+            cancel: None,
+        };
+        run_generic_or_specific(
+            apply_plan(&plan, &ApplyOptions::default(), &mut context),
+            json,
+        )
+    } else {
+        // 通用执行器：c01 等 rename/move/copy/delete/edit-content 计划。
+        let has_edit_content = plan
+            .entries
+            .iter()
+            .any(|entry| entry.action == kernel::plan::PlanAction::EditContent);
+        let encoding = match has_edit_content {
+            true => match generic_plan_encoding(&plan) {
+                Ok(encoding) => Some(encoding),
+                Err(error) => return print_kernel_error(&error),
+            },
+            false => None,
+        };
+        let editor = |data: &[u8]| -> Result<Vec<u8>, kernel::error::KernelError> {
+            let Some((target, invalid, prior, source)) = encoding else {
+                return Err(kernel::error::KernelError::invalid_params(
+                    "content editor is only available for transcode plans",
+                ));
+            };
+            let source = match source {
+                Some(source) => source,
+                None => detect(data, prior).require_encoding()?,
+            };
+            transcode(data, source, target, invalid).map(|result| result.bytes)
+        };
+        let content_editor = has_edit_content.then_some(&editor as ContentEditor<'_>);
+        let mut generic = GenericApplyContext {
+            fs: &adapter,
+            license: &license,
+            journal: &mut journal,
+            task_id: new_ulid(&format!("apply:{}", plan.plan_id)),
+            now_rfc3339: now_rfc3339(),
+            protected_dirs,
+            case_sense: adapter.case_sensitivity(),
+            progress: None,
+            cancel: None,
+            content_editor,
+        };
+        run_generic_or_specific(
+            apply_generic_plan(&plan, &ApplyOptions::default(), &mut generic),
+            json,
+        )
+    }
+}
+
+fn run_generic_or_specific(
+    outcome: Result<ApplyOutcome, kernel::error::KernelError>,
+    json: bool,
+) -> i32 {
+    match outcome {
         Ok(outcome) => {
             if json {
                 match serde_json::to_string(&outcome) {
@@ -314,6 +398,255 @@ fn run_apply(args: &[String]) -> i32 {
             } else {
                 1
             }
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+/// c01 计划的 apply 侧参数（与 plan 期写入的 params 快照保持一致）。
+fn generic_plan_encoding(
+    plan: &PlanDocument,
+) -> Result<
+    (
+        TargetEncoding,
+        InvalidSequencePolicy,
+        PlatformPrior,
+        Option<SourceEncoding>,
+    ),
+    kernel::error::KernelError,
+> {
+    let string_param = |name: &str| -> Result<&str, kernel::error::KernelError> {
+        match plan.params.get(name) {
+            Some(kernel::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
+            _ => Err(kernel::error::KernelError::missing_param(format!(
+                "plan param {name} is required"
+            ))),
+        }
+    };
+    let target = TargetEncoding::parse(string_param("target")?).ok_or_else(|| {
+        kernel::error::KernelError::invalid_params(
+            "plan param target is not a supported target encoding",
+        )
+    })?;
+    let invalid = InvalidSequencePolicy::parse(string_param("invalid")?).ok_or_else(|| {
+        kernel::error::KernelError::invalid_params(
+            "plan param invalid is not a supported invalid-sequence policy",
+        )
+    })?;
+    let prior = PlatformPrior::parse(string_param("platformPrior")?).ok_or_else(|| {
+        kernel::error::KernelError::invalid_params(
+            "plan param platformPrior is not a supported platform prior",
+        )
+    })?;
+    let source = match plan.params.get("source") {
+        Some(kernel::plan::PlanParamValue::String(value)) => {
+            Some(SourceEncoding::parse(value).ok_or_else(|| {
+                kernel::error::KernelError::invalid_params(
+                    "plan param source is not a supported source encoding",
+                )
+            })?)
+        }
+        _ => None,
+    };
+    Ok((target, invalid, prior, source))
+}
+
+fn run_c01(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut target = None;
+    let mut source = None;
+    let mut invalid = InvalidSequencePolicy::ReplaceAndCount;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_window = None;
+    let mut sample_blocks = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target requires an encoding");
+                };
+                let Some(parsed) = TargetEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown target encoding: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--invalid" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --invalid requires a policy");
+                };
+                let Some(parsed) = InvalidSequencePolicy::parse(value) else {
+                    return input_error(format!("E1002: unknown invalid-sequence policy: {value}"));
+                };
+                invalid = parsed;
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-window" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-window requires bytes");
+                };
+                match value.parse::<u64>() {
+                    Ok(window) if window > 0 => sample_window = Some(window),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-window must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--sample-blocks" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-blocks requires a count");
+                };
+                match value.parse::<usize>() {
+                    Ok(blocks) => sample_blocks = Some(blocks),
+                    Err(_) => {
+                        return input_error(format!(
+                            "E1002: --sample-blocks must be a non-negative integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c01 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: c01 requires at least one --file <path>");
+    }
+    let Some(target) = target else {
+        return input_error("E1001: c01 requires --target <encoding>");
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: c01 requires --sample-window <bytes> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    let Some(sample_blocks) = sample_blocks else {
+        return input_error("E1001: c01 requires --sample-blocks <n> (0 = head only)");
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let spec = SampleSpec {
+        window_bytes: sample_window,
+        blocks: sample_blocks,
+    };
+    let mut plan_files = Vec::with_capacity(files.len());
+    for path in &files {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: c01 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let sampled = match sample_bytes(&absolute, spec) {
+            Ok(sampled) => sampled,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot sample file ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanC01File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: sampled.file_size,
+            sample: sampled.bytes,
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c01"));
+    let input = kernel::plan::PlanC01Input {
+        plan_id,
+        target,
+        invalid,
+        prior,
+        confirmed_source: source,
+        protected_dirs,
+        case_sense,
+        files: plan_files,
+    };
+    match plan_c01(input) {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
         }
         Err(error) => print_kernel_error(&error),
     }

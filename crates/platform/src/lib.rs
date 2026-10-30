@@ -12,3 +12,4 @@ pub mod preflight;
 pub mod protected;
 pub mod retention;
 pub mod scan;
+pub mod text;

@@ -32,6 +32,32 @@ pub enum SourceEncoding {
 }
 
 impl SourceEncoding {
+    /// 线协议/参数快照用的稳定字符串（追加式，冻结后只增不改）。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Utf8 => "utf-8",
+            Self::Gb18030 => "gb18030",
+            Self::Big5 => "big5",
+            Self::ShiftJis => "shift-jis",
+            Self::Latin1 => "latin1",
+            Self::Utf16Le => "utf-16le",
+            Self::Utf16Be => "utf-16be",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "utf-8" => Self::Utf8,
+            "gb18030" => Self::Gb18030,
+            "big5" => Self::Big5,
+            "shift-jis" => Self::ShiftJis,
+            "latin1" => Self::Latin1,
+            "utf-16le" => Self::Utf16Le,
+            "utf-16be" => Self::Utf16Be,
+            _ => return None,
+        })
+    }
+
     fn from_encoding(encoding: &'static Encoding) -> Option<Self> {
         // Encoding 是 DST，比较用指针等价；GB18030 为 GBK/GB2312 超集（§5.2）。
         let same = |other: &'static Encoding| std::ptr::eq(encoding, other);
@@ -129,6 +155,23 @@ pub enum PlatformPrior {
     ChineseWindows,
     #[default]
     Other,
+}
+
+impl PlatformPrior {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ChineseWindows => "chinese-windows",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "chinese-windows" => Some(Self::ChineseWindows),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
 }
 
 /// 置信度（§5.2）：高置信自动采用；中低置信必须弹候选预览由用户选择。
@@ -280,6 +323,52 @@ pub enum TargetEncoding {
     Utf16Be { bom: bool },
 }
 
+impl TargetEncoding {
+    /// 线协议/参数快照用的稳定字符串（BOM 策略并入名字，如 `utf-8-bom`）。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Utf8 { bom: false } => "utf-8",
+            Self::Utf8 { bom: true } => "utf-8-bom",
+            Self::Gb18030 => "gb18030",
+            Self::Utf16Le { bom: false } => "utf-16le",
+            Self::Utf16Le { bom: true } => "utf-16le-bom",
+            Self::Utf16Be { bom: false } => "utf-16be",
+            Self::Utf16Be { bom: true } => "utf-16be-bom",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "utf-8" => Self::Utf8 { bom: false },
+            "utf-8-bom" => Self::Utf8 { bom: true },
+            "gb18030" => Self::Gb18030,
+            "utf-16le" => Self::Utf16Le { bom: false },
+            "utf-16le-bom" => Self::Utf16Le { bom: true },
+            "utf-16be" => Self::Utf16Be { bom: false },
+            "utf-16be-bom" => Self::Utf16Be { bom: true },
+            _ => return None,
+        })
+    }
+
+    /// 目标编码对应的源编码族（用于"已在目标编码"的免改写判定）。
+    pub const fn source_family(self) -> SourceEncoding {
+        match self {
+            Self::Utf8 { .. } => SourceEncoding::Utf8,
+            Self::Gb18030 => SourceEncoding::Gb18030,
+            Self::Utf16Le { .. } => SourceEncoding::Utf16Le,
+            Self::Utf16Be { .. } => SourceEncoding::Utf16Be,
+        }
+    }
+
+    /// 目标要求的 BOM；`None` 表示该编码族不写 BOM。
+    pub const fn bom_requirement(self) -> Option<bool> {
+        match self {
+            Self::Utf8 { bom } | Self::Utf16Le { bom } | Self::Utf16Be { bom } => Some(bom),
+            Self::Gb18030 => None,
+        }
+    }
+}
+
 /// 解码遇非法字节的策略（§5.2：替换/中止/换候选，默认替换并计数上报）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -287,6 +376,23 @@ pub enum InvalidSequencePolicy {
     #[default]
     ReplaceAndCount,
     Abort,
+}
+
+impl InvalidSequencePolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplaceAndCount => "replace-and-count",
+            Self::Abort => "abort",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "replace-and-count" => Some(Self::ReplaceAndCount),
+            "abort" => Some(Self::Abort),
+            _ => None,
+        }
+    }
 }
 
 /// 转码结果：输出字节与替换计数（§5.2"默认替换并计数上报"）。
@@ -548,5 +654,42 @@ mod tests {
         )
         .unwrap();
         assert!(!result.bytes.is_empty());
+    }
+
+    #[test]
+    fn parameter_names_round_trip() {
+        for encoding in [
+            SourceEncoding::Utf8,
+            SourceEncoding::Gb18030,
+            SourceEncoding::Big5,
+            SourceEncoding::ShiftJis,
+            SourceEncoding::Latin1,
+            SourceEncoding::Utf16Le,
+            SourceEncoding::Utf16Be,
+        ] {
+            assert_eq!(SourceEncoding::parse(encoding.as_str()), Some(encoding));
+        }
+        for target in [
+            TargetEncoding::Utf8 { bom: false },
+            TargetEncoding::Utf8 { bom: true },
+            TargetEncoding::Gb18030,
+            TargetEncoding::Utf16Le { bom: false },
+            TargetEncoding::Utf16Le { bom: true },
+            TargetEncoding::Utf16Be { bom: false },
+            TargetEncoding::Utf16Be { bom: true },
+        ] {
+            assert_eq!(TargetEncoding::parse(target.as_str()), Some(target));
+        }
+        for prior in [PlatformPrior::ChineseWindows, PlatformPrior::Other] {
+            assert_eq!(PlatformPrior::parse(prior.as_str()), Some(prior));
+        }
+        for policy in [
+            InvalidSequencePolicy::ReplaceAndCount,
+            InvalidSequencePolicy::Abort,
+        ] {
+            assert_eq!(InvalidSequencePolicy::parse(policy.as_str()), Some(policy));
+        }
+        assert_eq!(SourceEncoding::parse("utf8"), None);
+        assert_eq!(TargetEncoding::parse("utf-8-with-bom"), None);
     }
 }

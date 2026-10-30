@@ -12,11 +12,15 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::duplicate::{Confidence, DuplicateGroup, DuplicateReport, GroupingMode};
+use crate::encoding::{
+    detect, detect_bom, Bom, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::path::{protected_by, try_normalize, ProtectedDir};
 
 pub const C09_KIND: &str = "c09";
+pub const C01_KIND: &str = "c01";
 
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -438,6 +442,209 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
     })
 }
 
+/// C01 逐文件输入。`sample` 由壳层采样读取（`platform::text::sample_bytes`），
+/// kernel 只做纯判定（方案 §5.2"头部与随机采样块"）。
+#[derive(Clone, Debug)]
+pub struct PlanC01File {
+    pub path: String,
+    pub canonical_path: Option<String>,
+    pub file_size: u64,
+    pub sample: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanC01Input {
+    pub plan_id: String,
+    pub target: TargetEncoding,
+    pub invalid: InvalidSequencePolicy,
+    pub prior: PlatformPrior,
+    /// 用户显式选定的**全局**源编码；None 时逐文件按采样检测。
+    pub confirmed_source: Option<SourceEncoding>,
+    pub protected_dirs: Vec<ProtectedDir>,
+    pub case_sense: CaseSense,
+    pub files: Vec<PlanC01File>,
+}
+
+/// Build a C01 transcode plan (in-place `edit-content` entries).
+///
+/// Detection runs on the shell-provided sample; a manual-confirmation result
+/// becomes a blocked E3001 entry (never a silent guess, §5.2). Files already in
+/// the target encoding/BOM policy are `resolution: skip`. Apply re-detects on
+/// the full content unless `confirmed_source` was recorded in `params.source`.
+pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
+    if input.plan_id.trim().is_empty() {
+        return Err(KernelError::missing_param("planId is required"));
+    }
+    if !is_ulid(&input.plan_id) {
+        return Err(KernelError::invalid_params(
+            "planId must be a 26-character ULID",
+        ));
+    }
+    if input.files.is_empty() {
+        return Err(KernelError::missing_param("c01 requires at least one file"));
+    }
+
+    let mut params = BTreeMap::new();
+    params.insert(
+        "target".to_string(),
+        PlanParamValue::String(input.target.as_str().to_string()),
+    );
+    params.insert(
+        "invalid".to_string(),
+        PlanParamValue::String(input.invalid.as_str().to_string()),
+    );
+    params.insert(
+        "platformPrior".to_string(),
+        PlanParamValue::String(input.prior.as_str().to_string()),
+    );
+    if let Some(source) = input.confirmed_source {
+        params.insert(
+            "source".to_string(),
+            PlanParamValue::String(source.as_str().to_string()),
+        );
+    }
+
+    let mut entries = Vec::with_capacity(input.files.len());
+    for file in &input.files {
+        let detection = detect(&file.sample, input.prior);
+        let selected = input.confirmed_source.or_else(|| {
+            (!detection.needs_manual)
+                .then_some(detection.encoding)
+                .flatten()
+        });
+        let (blocked, reason, skip) = match selected {
+            Some(source) => {
+                let blocked = c01_path_block(
+                    &file.path,
+                    file.canonical_path.as_deref(),
+                    &input.protected_dirs,
+                    input.case_sense,
+                );
+                let origin = if input.confirmed_source.is_some() {
+                    "user-selected"
+                } else {
+                    "detected"
+                };
+                let skip = already_in_target(&file.sample, source, input.target);
+                let reason = if skip {
+                    format!(
+                        "{origin} {}; already in target encoding {}, no conversion needed",
+                        source.as_str(),
+                        input.target.as_str()
+                    )
+                } else {
+                    let mut reason =
+                        format!("{origin} {} -> {}", source.as_str(), input.target.as_str());
+                    if let Some(note) = &detection.note {
+                        reason.push_str("; note: ");
+                        reason.push_str(note);
+                    }
+                    reason
+                };
+                (blocked, reason, skip)
+            }
+            None => {
+                let detected = detection.encoding.map_or("unknown", |value| value.as_str());
+                let mut reason = format!(
+                    "encoding is undetermined (detected {detected}); user confirmation is required"
+                );
+                if let Some(note) = &detection.note {
+                    reason.push_str("; note: ");
+                    reason.push_str(note);
+                }
+                (
+                    Some(PlanBlocked {
+                        code: "E3001".to_string(),
+                        reason: "encoding is undetermined; user confirmation is required"
+                            .to_string(),
+                        hint: Some(
+                            "preview candidate decodings and choose the source encoding"
+                                .to_string(),
+                        ),
+                    }),
+                    reason,
+                    false,
+                )
+            }
+        };
+
+        entries.push(PlanEntry {
+            entry_id: format!("{}-{:04}", input.plan_id, entries.len() + 1),
+            source: file.path.clone(),
+            target: None,
+            action: PlanAction::EditContent,
+            relation: None,
+            reason,
+            conflict: None,
+            resolution: skip.then_some(PlanResolution::Skip),
+            blocked,
+            expected: Some(PlanExpected {
+                size: file.file_size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+        });
+    }
+
+    let stats = PlanStats {
+        total: entries.len(),
+        conflict: 0,
+        warning: 0,
+        blocked: entries
+            .iter()
+            .filter(|entry| entry.blocked.is_some())
+            .count(),
+    };
+
+    Ok(PlanDocument {
+        plan_id: input.plan_id,
+        kind: C01_KIND.to_string(),
+        params,
+        entries,
+        stats,
+        warnings: Vec::new(),
+    })
+}
+
+fn c01_path_block(
+    path: &str,
+    canonical: Option<&str>,
+    protected: &[ProtectedDir],
+    sense: CaseSense,
+) -> Option<PlanBlocked> {
+    match try_normalize(path) {
+        Ok(normalized) => {
+            protected_by(&normalized, canonical, protected, sense).map(|hit| PlanBlocked {
+                code: "E2009".to_string(),
+                reason: format!("path is under protected directory {hit}"),
+                hint: Some("remove it from protectedDirs or choose another source".to_string()),
+            })
+        }
+        Err(error) => Some(PlanBlocked {
+            code: error.code,
+            reason: error.message,
+            hint: None,
+        }),
+    }
+}
+
+/// 源编码族与目标一致、且 BOM 已符合目标策略时，无需改写。
+fn already_in_target(sample: &[u8], family: SourceEncoding, target: TargetEncoding) -> bool {
+    if family != target.source_family() {
+        return false;
+    }
+    let Some(required) = target.bom_requirement() else {
+        return true;
+    };
+    let present = matches!(
+        (family, detect_bom(sample)),
+        (SourceEncoding::Utf8, Some(Bom::Utf8))
+            | (SourceEncoding::Utf16Le, Some(Bom::Utf16Le))
+            | (SourceEncoding::Utf16Be, Some(Bom::Utf16Be))
+    );
+    present == required
+}
+
 fn index_files(files: &[PlanFile]) -> Result<BTreeMap<u64, &PlanFile>, KernelError> {
     let mut index = BTreeMap::new();
     for file in files {
@@ -791,5 +998,140 @@ mod tests {
             .entries
             .iter()
             .all(|entry| entry.action == PlanAction::Delete && entry.target.is_none()));
+    }
+
+    fn c01_file(path: &str, sample: &[u8]) -> PlanC01File {
+        PlanC01File {
+            path: path.to_string(),
+            canonical_path: None,
+            file_size: sample.len() as u64,
+            sample: sample.to_vec(),
+        }
+    }
+
+    fn c01_input(files: Vec<PlanC01File>, target: TargetEncoding) -> PlanC01Input {
+        PlanC01Input {
+            plan_id: PLAN_ID.to_string(),
+            target,
+            invalid: InvalidSequencePolicy::ReplaceAndCount,
+            prior: PlatformPrior::Other,
+            confirmed_source: None,
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            files,
+        }
+    }
+
+    const CHINESE: &[u8] = "中文内容，用于编码检测采样。".as_bytes();
+
+    #[test]
+    fn c01_plans_edit_content_for_detected_utf8() {
+        let plan = plan_c01(c01_input(
+            vec![c01_file("a.txt", CHINESE)],
+            TargetEncoding::Gb18030,
+        ))
+        .unwrap();
+        assert_eq!(plan.kind, C01_KIND);
+        assert_eq!(plan.entries.len(), 1);
+        let entry = &plan.entries[0];
+        assert_eq!(entry.action, PlanAction::EditContent);
+        assert!(entry.target.is_none(), "就地改写不应有目标路径");
+        assert!(entry.blocked.is_none());
+        assert_eq!(entry.resolution, None);
+        assert!(entry.reason.contains("detected utf-8"));
+        assert!(entry.reason.contains("-> gb18030"));
+        assert_eq!(entry.expected.as_ref().unwrap().size, CHINESE.len() as u64);
+        assert_eq!(
+            plan.params["target"],
+            PlanParamValue::String("gb18030".into())
+        );
+        assert_eq!(plan.stats.total, 1);
+        assert_eq!(plan.stats.blocked, 0);
+    }
+
+    #[test]
+    fn c01_blocks_ambiguous_samples_with_e3001() {
+        // 控制字符污染 → 检测要求人工确认（§5.2 绝不静默猜错）。
+        let plan = plan_c01(c01_input(
+            vec![c01_file("binary.bin", &[0x01, 0x02, 0x03, 0x04])],
+            TargetEncoding::Utf8 { bom: false },
+        ))
+        .unwrap();
+        let entry = &plan.entries[0];
+        assert_eq!(entry.blocked.as_ref().unwrap().code, "E3001");
+        assert_eq!(entry.resolution, None);
+        assert_eq!(plan.stats.blocked, 1);
+        assert!(entry.reason.contains("user confirmation is required"));
+    }
+
+    #[test]
+    fn c01_confirmed_source_overrides_detection_and_is_recorded() {
+        let mut input = c01_input(
+            vec![c01_file("binary.bin", &[0x01, 0x02, 0x03, 0x04])],
+            TargetEncoding::Utf8 { bom: false },
+        );
+        input.confirmed_source = Some(SourceEncoding::Gb18030);
+        let plan = plan_c01(input).unwrap();
+        let entry = &plan.entries[0];
+        assert!(entry.blocked.is_none());
+        assert!(entry.reason.contains("user-selected gb18030"));
+        assert_eq!(
+            plan.params["source"],
+            PlanParamValue::String("gb18030".into())
+        );
+    }
+
+    #[test]
+    fn c01_skips_files_already_in_target_encoding() {
+        let plan = plan_c01(c01_input(
+            vec![c01_file("a.txt", CHINESE)],
+            TargetEncoding::Utf8 { bom: false },
+        ))
+        .unwrap();
+        let entry = &plan.entries[0];
+        assert_eq!(entry.resolution, Some(PlanResolution::Skip));
+        assert!(entry.reason.contains("already in target encoding"));
+    }
+
+    #[test]
+    fn c01_treats_bom_policy_mismatch_as_conversion() {
+        let with_bom = [b"\xEF\xBB\xBF".as_slice(), CHINESE].concat();
+        let plan = plan_c01(c01_input(
+            vec![c01_file("bom.txt", &with_bom)],
+            TargetEncoding::Utf8 { bom: false },
+        ))
+        .unwrap();
+        assert_eq!(plan.entries[0].resolution, None, "需去掉 BOM");
+
+        let plan = plan_c01(c01_input(
+            vec![c01_file("plain.txt", CHINESE)],
+            TargetEncoding::Utf8 { bom: true },
+        ))
+        .unwrap();
+        assert_eq!(plan.entries[0].resolution, None, "需补写 BOM");
+    }
+
+    #[test]
+    fn c01_blocks_protected_paths() {
+        let mut input = c01_input(
+            vec![c01_file("/protected/a.txt", CHINESE)],
+            TargetEncoding::Gb18030,
+        );
+        input.protected_dirs = vec![ProtectedDir::new("/protected")];
+        let plan = plan_c01(input).unwrap();
+        assert_eq!(plan.entries[0].blocked.as_ref().unwrap().code, "E2009");
+    }
+
+    #[test]
+    fn c01_rejects_empty_file_list_and_invalid_plan_ids() {
+        let error = plan_c01(c01_input(Vec::new(), TargetEncoding::Gb18030)).unwrap_err();
+        assert_eq!(error.code, "E1001");
+
+        let error = plan_c01(PlanC01Input {
+            plan_id: "not-a-ulid".to_string(),
+            ..c01_input(vec![c01_file("a.txt", CHINESE)], TargetEncoding::Gb18030)
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "E1002");
     }
 }

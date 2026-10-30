@@ -315,3 +315,102 @@ fn cleanup_and_undo_respect_retention_window() {
         0
     );
 }
+
+#[test]
+fn c01_plan_apply_and_undo_round_trip() {
+    let dir = TempDir::new();
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    let source = dir.0.join("legacy.txt");
+    let utf8_text = "中文内容测试\n第二行\n";
+
+    // 用 kernel 纯函数把 UTF-8 文本转成 GB18030 字节，作为历史遗留输入。
+    let transcoded = kernel::encoding::transcode(
+        utf8_text.as_bytes(),
+        kernel::encoding::SourceEncoding::Utf8,
+        kernel::encoding::TargetEncoding::Gb18030,
+        kernel::encoding::InvalidSequencePolicy::ReplaceAndCount,
+    )
+    .expect("encode GB18030 fixture");
+    fs::write(&source, &transcoded.bytes).unwrap();
+    let original = fs::read(&source).unwrap();
+    assert_ne!(original, utf8_text.as_bytes());
+
+    let plan_run = batchdesk(&[
+        "c01",
+        "--file",
+        path_text(&source),
+        "--target",
+        "utf-8",
+        "--source",
+        "gb18030",
+        "--sample-window",
+        "8",
+        "--sample-blocks",
+        "1",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan_run.status.success(),
+        "c01 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan_run.stdout),
+        String::from_utf8_lossy(&plan_run.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&plan_run.stdout).unwrap();
+    assert_eq!(plan["kind"], "c01");
+    assert_eq!(plan["stats"]["total"], 1);
+    assert_eq!(plan["entries"][0]["action"], "edit-content");
+    assert_eq!(plan["entries"][0]["source"], path_text(&source));
+    assert_eq!(plan["params"]["target"], "utf-8");
+    assert_eq!(plan["params"]["source"], "gb18030");
+    fs::write(&plan_path, &plan_run.stdout).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c01 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(report["report"]["entries"][0]["status"], "ok");
+    assert_eq!(fs::read(&source).unwrap(), utf8_text.as_bytes());
+    assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 1);
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "c01 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 1);
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        original,
+        "undo 必须还原原始 GB18030 字节"
+    );
+    // 覆盖写的备份是复制而非移动：撤销后仍留在隔离目录，由保留期清理（设计 01 §8）。
+    assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 1);
+}
