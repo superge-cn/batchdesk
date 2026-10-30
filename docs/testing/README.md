@@ -13,7 +13,7 @@
 | [AI助手测试分册-AI-v0.1.md](./AI助手测试分册-AI-v0.1.md) | F15 Phase 1/2/3 AI 助手/工具调用/多计划/提示注入 | v0.1 | AI-01…AI-26；`fixtures/ai/`；mock provider |
 | [`fixtures/corpus/manual-results.md`](../../fixtures/corpus/manual-results.md) | 4 条人工语料台账 | 待执行 | R05/E01/E02/E04；阶段末/闭门前执行 |
 
-## 2. 自动化现状（2026-10-29）
+## 2. 自动化现状（2026-10-31）
 
 | 对象 | 已实现 | 未实现 |
 |---|---|---|
@@ -23,11 +23,11 @@
 | 云契约 | 02 §4 的 8 端点契约 | mock 档自动化、staging 档 |
 | AI 助手（F15 Phase 1/2/3） | `fixtures/ai/` 用例规范、设计 14 契约 | mock provider、真实 provider/staging、自动断言 harness |
 | 性能 | C-1…C-8 数据集脚本/模板（C-7 阻塞）；C-6 的 C09 只读/计划预览断言（本地手动） | 基准执行 SOP、结果台账、CI 对比脚本 |
-| C09 代码 | kernel 102 + platform 35 + CLI 6 单测 + 3 集成；kernel 进度/取消回滚单测；C-6 只读/计划预览；apply→undo、S02、保留期集成；plan→apply 内容再校验（E2010）；Windows 文件身份（WinAPI，ADR-0012）；S01 preflight 9 项、S02 目标路径复核 2 项、S03 恢复 4 项（壳层） | 长路径、TC S01/S02 的 10–12 条 UI 用例逐条执行 |
+| 代码与测试总览 | kernel 266 + 语料断言 21 + platform 85 + CLI 6 单测 + 28 集成；C-6 只读/计划预览；apply→undo、S02、保留期集成；plan→apply 内容再校验（E2010）；Windows 文件身份（WinAPI，ADR-0012）与长路径前缀收口；S01 preflight 9 项、S02 目标路径复核 2 项、S03 恢复 4 项（壳层） | TC S01/S02 的 10–12 条 UI 用例逐条执行；E03/Z01/Z02 语料断言 |
 | 配置/模板/UiState（C37/B9） | kernel `config`/`recipe`/`ui_state` 类型与迁移、`platform::config_store` 损坏兜底/原子写/模板 CRUD；单测 25+12 项 | 设置 UI 与人工执行（TC-C37 8 条、TC-XCT-B9 8 条待跑）；Web OPFS |
-| 桌面 IPC/UI（C09） | 壳层队列/恢复测试 8 项；web `tsc --noEmit` + `vite build`；Tauri `cargo check`；浏览器 mock 流；WebView E2E（apply→undo、cleanup 演练、取消回滚） | Vitest/Playwright、i18n/虚拟滚动、任务列表 UI、S03 实机崩溃演练 |
+| 桌面 IPC/UI（C09） | 壳层队列/恢复/重试/合帧/审计测试 13 项；web `tsc --noEmit` + `vite build`；Tauri `cargo check`；浏览器 mock 流；WebView E2E（apply→undo、cleanup 演练、取消回滚） | Vitest/Playwright、i18n/虚拟滚动、任务列表 UI、S03 实机崩溃演练 |
 
-> **CI 口径**：当前 `cargo test` 为单元测试＋CLI 集成测试（C09 共 **146 项**：kernel 102 + platform 35 + CLI 6 + 集成 3）；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期；壳层任务队列/中断恢复由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖（8 项），WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤只做生成 + 范围核对 + 哈希/幂等；TC v0.3 已展开 C37/B9 实例，但人工执行尚未开始，S01/S02 的 UI 用例亦未逐条执行；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；另有 web build、desktop cargo check 与 **Windows 单元测试（run 40872864062 已全绿）** 三个 job。
+> **CI 口径**：当前 `cargo test --workspace` **406 项**（kernel 266 + 语料断言 21 + platform 85 + CLI 6 单测 + 28 集成）；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期及 F01–F12 plan→apply→undo；壳层任务队列/中断恢复由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖（13 项），WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤执行生成 + 范围核对 + 哈希/幂等 + 已接入的 21 项断言（16 asserted／5 partial；E03/Z01/Z02 仍 pending）；TC v0.3 已展开 C37/B9 实例，但人工执行尚未开始，S01/S02 的 UI 用例亦未逐条执行；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；**CI 七 job 全绿（run 41096642116，2026-10-31，head 4f91a60，含 Windows 单元测试与 desktop/deny/SBOM）**。
 
 ## 3. 执行流程
 
