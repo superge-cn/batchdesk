@@ -28,6 +28,7 @@ pub mod plan;
 pub mod preflight;
 pub mod progress;
 pub mod recipe;
+pub mod regex_rename;
 pub mod rename;
 pub mod split;
 pub mod ui_state;

@@ -1957,6 +1957,145 @@ fn f12_reports_existing_conflicts_and_invalid_targets() {
 }
 
 #[test]
+fn f13_regex_capture_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let root = dir.0.join("regex");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("photo-001.jpg"), b"a").unwrap();
+    fs::write(root.join("photo-002.jpg"), b"b").unwrap();
+
+    let plan = batchdesk(&[
+        "f13",
+        "--dir",
+        path_text(&root),
+        "--regex",
+        r"^photo-(\d+)\.jpg$",
+        "--replace",
+        "img_$1.jpg",
+        "--scope",
+        "full",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f13 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f13");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(document["params"]["twoPhase"], false);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f13 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(root.join("img_001.jpg").exists());
+    assert!(root.join("img_002.jpg").exists());
+    assert!(!root.join("photo-001.jpg").exists());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(root.join("photo-001.jpg").exists());
+    assert!(root.join("photo-002.jpg").exists());
+    assert!(!root.join("img_001.jpg").exists());
+}
+
+#[test]
+fn f13_rejects_invalid_regex_and_missing_capture_references() {
+    let dir = TempDir::new();
+    let root = dir.0.join("regex");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+
+    let invalid = batchdesk(&[
+        "f13",
+        "--dir",
+        path_text(&root),
+        "--regex",
+        "(",
+        "--replace",
+        "x",
+        "--json",
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("E1002"));
+
+    let missing = batchdesk(&[
+        "f13",
+        "--dir",
+        path_text(&root),
+        "--regex",
+        r"^(\w+)\.txt$",
+        "--replace",
+        "$2.txt",
+        "--json",
+    ]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("missing capture group"));
+}
+
+#[test]
+fn f13_no_match_creates_no_entries_and_writes_nothing() {
+    let dir = TempDir::new();
+    let root = dir.0.join("regex");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+
+    let plan = batchdesk(&[
+        "f13",
+        "--dir",
+        path_text(&root),
+        "--regex",
+        "zzz",
+        "--replace",
+        "x",
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(document["entries"].as_array().unwrap().is_empty());
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "no-change"));
+    assert!(root.join("a.txt").exists());
+    assert_eq!(
+        fs::read_dir(&root).unwrap().filter_map(Result::ok).count(),
+        1,
+        "no-match preview must not write"
+    );
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

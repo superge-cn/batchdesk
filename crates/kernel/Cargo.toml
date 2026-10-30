@@ -13,6 +13,8 @@ path = "src/lib.rs"
 [dependencies]
 chardetng = "1.0.0"
 encoding_rs = "0.8.42"
+# F13 正则重命名（方案 §5.5）：regex 为有限自动机实现，线性时间且无回溯爆炸（ADR-0026）。
+regex = "1"
 # Plan/Apply/Journal DTOs are wire-visible (design 01 §2.1: camelCase serde).
 serde = { version = "1", features = ["derive"] }
 # ConfigDocument 的 patch 与 SettingValue 需要动态 JSON 值（设计 03 §2/§4；ADR-0010 同一选型）。

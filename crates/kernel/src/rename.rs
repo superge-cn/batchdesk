@@ -98,16 +98,85 @@ struct Mapping {
 
 /// 生成 F12 计划；每个输入最多一条目标条目，必要时追加两阶段临时条目。
 pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
-    if input.plan_id.trim().is_empty() {
+    input.rule.validate()?;
+    let PlanF12Input {
+        plan_id,
+        items,
+        existing_targets,
+        protected_dirs,
+        case_sense,
+        long_path_supported,
+        rule,
+    } = input;
+    let mut params = BTreeMap::new();
+    params.insert(
+        "scope".to_string(),
+        PlanParamValue::String(rule.scope.as_str().to_string()),
+    );
+    params.insert(
+        "prefix".to_string(),
+        PlanParamValue::String(rule.prefix.clone().unwrap_or_default()),
+    );
+    params.insert(
+        "suffix".to_string(),
+        PlanParamValue::String(rule.suffix.clone().unwrap_or_default()),
+    );
+    params.insert(
+        "find".to_string(),
+        PlanParamValue::String(rule.find.clone().unwrap_or_default()),
+    );
+    params.insert(
+        "replace".to_string(),
+        PlanParamValue::String(rule.replace.clone()),
+    );
+    plan_rename(
+        RenamePlanContext {
+            plan_id,
+            items,
+            existing_targets,
+            protected_dirs,
+            case_sense,
+            long_path_supported,
+        },
+        F12_KIND,
+        params,
+        |name| apply_rule(name, &rule),
+    )
+}
+
+pub(crate) struct RenamePlanContext {
+    pub plan_id: String,
+    pub items: Vec<PlanF12Item>,
+    pub existing_targets: Vec<String>,
+    pub protected_dirs: Vec<ProtectedDir>,
+    pub case_sense: CaseSense,
+    pub long_path_supported: bool,
+}
+
+/// F12/F13 共用的重命名计划核心：冲突扫描、长路径分级与两阶段编排。
+pub(crate) fn plan_rename(
+    context: RenamePlanContext,
+    kind: &str,
+    mut params: BTreeMap<String, PlanParamValue>,
+    transform: impl Fn(&str) -> Result<String, String>,
+) -> Result<PlanDocument, KernelError> {
+    let RenamePlanContext {
+        plan_id,
+        items,
+        existing_targets,
+        protected_dirs,
+        case_sense,
+        long_path_supported,
+    } = context;
+    if plan_id.trim().is_empty() {
         return Err(KernelError::missing_param("planId is required"));
     }
-    if !is_ulid(&input.plan_id) {
+    if !is_ulid(&plan_id) {
         return Err(KernelError::invalid_params(
             "planId must be a 26-character ULID",
         ));
     }
-    input.rule.validate()?;
-    if input.items.is_empty() {
+    if items.is_empty() {
         return Err(KernelError::missing_param(
             "rename plans require at least one item",
         ));
@@ -120,9 +189,9 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
     let mut long_path_caution = Vec::new();
     let mut long_path_skips = Vec::new();
 
-    for item in &input.items {
-        let source_key = conflict_key(&item.path, input.case_sense);
-        let target_name = match apply_rule(&item.name, &input.rule) {
+    for item in &items {
+        let source_key = conflict_key(&item.path, case_sense);
+        let target_name = match transform(&item.name) {
             Ok(name) => name,
             Err(reason) => {
                 blocked_items.push((item.clone(), reason));
@@ -134,7 +203,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             continue;
         }
         let target = target_path(&item.path, &target_name);
-        let target_key = conflict_key(&target, input.case_sense);
+        let target_key = conflict_key(&target, case_sense);
         let target_warnings = validate_target_name(&target_name);
         let mut blocked = None;
         if let Some(warning) = target_warnings.first() {
@@ -145,19 +214,12 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             });
         }
         if blocked.is_none() {
-            blocked = crate::csv_merge::source_block(
-                &item.path,
-                None,
-                &input.protected_dirs,
-                input.case_sense,
-            )
-            .or_else(|| {
-                crate::csv_merge::target_block(&target, &input.protected_dirs, input.case_sense)
-            });
+            blocked = crate::csv_merge::source_block(&item.path, None, &protected_dirs, case_sense)
+                .or_else(|| crate::csv_merge::target_block(&target, &protected_dirs, case_sense));
         }
         if let Some(blocked) = blocked {
             entries.push(blocked_entry(
-                &input.plan_id,
+                &plan_id,
                 item,
                 &target,
                 blocked,
@@ -165,14 +227,14 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             ));
             continue;
         }
-        match crate::preflight::path_length_level(&target, input.long_path_supported).0 {
+        match crate::preflight::path_length_level(&target, long_path_supported).0 {
             crate::preflight::PreflightLevel::Pass => {}
             crate::preflight::PreflightLevel::Warn => {
                 long_path_caution.push(target.clone());
             }
             crate::preflight::PreflightLevel::Block => {
                 let mut entry = plain_entry(
-                    &input.plan_id,
+                    &plan_id,
                     item,
                     &target,
                     entries.len(),
@@ -197,15 +259,13 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
 
     // 本批次将移走的源路径不算外部占用；其余现存项参与冲突扫描。
     let moving_sources: BTreeSet<String> = mappings.iter().map(|m| m.source_key.clone()).collect();
-    let mut existing_effective: BTreeSet<String> = input
-        .existing_targets
+    let mut existing_effective: BTreeSet<String> = existing_targets
         .iter()
         .map(|path| crate::path::normalize(path))
         .collect();
-    existing_effective
-        .retain(|path| !moving_sources.contains(&conflict_key(path, input.case_sense)));
-    for item in &input.items {
-        let key = conflict_key(&item.path, input.case_sense);
+    existing_effective.retain(|path| !moving_sources.contains(&conflict_key(path, case_sense)));
+    for item in &items {
+        let key = conflict_key(&item.path, case_sense);
         if !moving_sources.contains(&key) {
             existing_effective.insert(crate::path::normalize(&item.path));
         }
@@ -219,7 +279,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             )
         })
         .collect();
-    let scan = scan_conflicts(&pairs, &existing_effective, input.case_sense);
+    let scan = scan_conflicts(&pairs, &existing_effective, case_sense);
 
     let mut valid = Vec::new();
     for (index, mapping) in mappings.into_iter().enumerate() {
@@ -233,7 +293,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
                 name: crate::conflict::file_name_of(&mapping.source).to_string(),
             };
             let mut entry = plain_entry(
-                &input.plan_id,
+                &plan_id,
                 &item,
                 &mapping.target,
                 entries.len(),
@@ -247,18 +307,18 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
         valid.push(mapping);
     }
 
-    let two_phase = needs_two_phase(&valid, input.case_sense);
+    let two_phase = needs_two_phase(&valid, case_sense);
     if two_phase {
-        append_two_phase(&input.plan_id, &valid, &existing_effective, &mut entries);
+        append_two_phase(&plan_id, &valid, &existing_effective, &mut entries);
     } else {
-        for index in topological_order(&valid, input.case_sense) {
+        for index in topological_order(&valid, case_sense) {
             let mapping = &valid[index];
             let item = PlanF12Item {
                 path: mapping.source.clone(),
                 name: crate::conflict::file_name_of(&mapping.source).to_string(),
             };
             entries.push(plain_entry(
-                &input.plan_id,
+                &plan_id,
                 &item,
                 &mapping.target,
                 entries.len(),
@@ -270,7 +330,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
     for (item, reason) in blocked_items {
         let target = target_path(&item.path, &item.name);
         entries.push(blocked_entry(
-            &input.plan_id,
+            &plan_id,
             &item,
             &target,
             PlanBlocked {
@@ -337,30 +397,9 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
         });
     }
 
-    let mut params = BTreeMap::new();
-    params.insert(
-        "scope".to_string(),
-        PlanParamValue::String(input.rule.scope.as_str().to_string()),
-    );
-    params.insert(
-        "prefix".to_string(),
-        PlanParamValue::String(input.rule.prefix.clone().unwrap_or_default()),
-    );
-    params.insert(
-        "suffix".to_string(),
-        PlanParamValue::String(input.rule.suffix.clone().unwrap_or_default()),
-    );
-    params.insert(
-        "find".to_string(),
-        PlanParamValue::String(input.rule.find.clone().unwrap_or_default()),
-    );
-    params.insert(
-        "replace".to_string(),
-        PlanParamValue::String(input.rule.replace.clone()),
-    );
     params.insert(
         "itemCount".to_string(),
-        PlanParamValue::Number(input.items.len() as u64),
+        PlanParamValue::Number(items.len() as u64),
     );
     params.insert(
         "validCount".to_string(),
@@ -369,7 +408,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
     params.insert("twoPhase".to_string(), PlanParamValue::Bool(two_phase));
     params.insert(
         "longPathSupported".to_string(),
-        PlanParamValue::Bool(input.long_path_supported),
+        PlanParamValue::Bool(long_path_supported),
     );
 
     let stats = PlanStats {
@@ -385,8 +424,8 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             .count(),
     };
     Ok(PlanDocument {
-        plan_id: input.plan_id,
-        kind: F12_KIND.to_string(),
+        plan_id,
+        kind: kind.to_string(),
         params,
         entries,
         stats,
@@ -399,26 +438,38 @@ pub fn apply_rule(name: &str, rule: &PlanF12Rule) -> Result<String, String> {
     if name.is_empty() {
         return Err("source name is empty".to_string());
     }
+    transform_name(name, rule.scope, |segment| {
+        let mut changed = match &rule.find {
+            Some(find) => segment.replace(find, &rule.replace),
+            None => segment.to_string(),
+        };
+        if let Some(prefix) = &rule.prefix {
+            changed = format!("{prefix}{changed}");
+        }
+        if let Some(suffix) = &rule.suffix {
+            changed.push_str(suffix);
+        }
+        changed
+    })
+}
+
+/// 对作用范围（全名/词根/扩展名）应用名称变换，并重新拼装、校验路径字符。
+pub(crate) fn transform_name(
+    name: &str,
+    scope: RenameScope,
+    transform: impl FnOnce(&str) -> String,
+) -> Result<String, String> {
     let (stem, extension) = split_extension(name);
-    let segment = match rule.scope {
+    let segment = match scope {
         RenameScope::Full => name.to_string(),
         RenameScope::Stem => stem.to_string(),
         RenameScope::Ext => extension.unwrap_or("").to_string(),
     };
-    if rule.scope == RenameScope::Ext && extension.is_none() {
+    if scope == RenameScope::Ext && extension.is_none() {
         return Ok(name.to_string());
     }
-    let mut changed = match &rule.find {
-        Some(find) => segment.replace(find, &rule.replace),
-        None => segment,
-    };
-    if let Some(prefix) = &rule.prefix {
-        changed = format!("{prefix}{changed}");
-    }
-    if let Some(suffix) = &rule.suffix {
-        changed.push_str(suffix);
-    }
-    let result = match rule.scope {
+    let changed = transform(&segment);
+    let result = match scope {
         RenameScope::Full => changed,
         RenameScope::Stem => match extension {
             Some(extension) => format!("{changed}.{extension}"),

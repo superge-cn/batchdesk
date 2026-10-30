@@ -119,6 +119,7 @@ version = "0.1.0"
 dependencies = [
  "chardetng",
  "encoding_rs",
+ "regex",
  "serde",
  "serde_json",
 ]
