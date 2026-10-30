@@ -27,7 +27,7 @@
 
 ## 2. 当前可走通性
 
-- **可运行**：`cargo test --workspace`（kernel 168 + 语料断言 11 + platform 61 + CLI 6 单测 + CLI 9 集成，共 255 项）；`cargo fmt/clippy`；`web` 的 `tsc --noEmit` + `vite build`；`cargo test --manifest-path src-tauri/Cargo.toml`（队列/恢复/重试/合帧/审计 13）；Windows 长路径交叉检查 `cargo check --target x86_64-pc-windows-msvc` 零 error；C-6 只读/计划预览断言（本地手动）；**CI 七 job 全绿（run 41014606624，2026-10-30，head 0d7773a；含 Windows 单元测试与 deny/SBOM；历史 run 41007666354/40992120684/40983125143/40989723526）**。
+- **可运行**：`cargo test --workspace`（kernel 168 + 语料断言 11 + platform 61 + CLI 6 单测 + CLI 9 集成，共 255 项）；`cargo fmt/clippy`；`web` 的 `tsc --noEmit` + `vite build`；`cargo test --manifest-path src-tauri/Cargo.toml`（队列/恢复/重试/合帧/审计 13）；Windows 长路径交叉检查 `cargo check --target x86_64-pc-windows-msvc` 零 error；C-6 只读/计划预览断言（本地手动）；**CI 七 job 全绿（run 41023504319，2026-10-30，head 5a4fc7e；含 Windows 单元测试与 deny/SBOM；历史 run 41014606624/41007666354/40992120684/40983125143/40989723526）**。
 - **可端到端走通的功能**：**C09 CLI 切片**（扫描→计划→隔离清理→Journal 撤销）、**C01/F01/F02/F03/F04 CLI 切片**（plan→apply→undo）与**桌面任务队列切片**（plan→apply→undo、执行中取消回滚）均走通；后者已通过真实 Tauri WebView E2E（`scripts/e2e-tauri.mjs`），浏览器 mock 流保留。
 - **C09**：CLI scan/plan/apply/undo + S02 + cleanup，以及 Tauri 任务队列/事件/React UI；apply 只处理 C09 delete，移入隔离目录、逐条写 Journal、AlwaysAllow 授权；取消在条目边界回滚并终态 `cancelled`；快速窗口由调用方显式传入（OQ-28 待确认）；保留策略默认 `earliest`（OQ-29 已确认，待基线收编）。
 - **C37 处理模板/持久化**：ConfigDocument/UiState/Recipe 类型、存储与 12 条壳层命令已建（见 03 行）；C37 Phase A/B 的 plan/apply 与 UI、设置 UI 未实现。
