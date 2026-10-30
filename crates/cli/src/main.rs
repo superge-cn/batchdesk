@@ -23,7 +23,7 @@ use kernel::license::AlwaysAllowLicense;
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
 };
-use kernel::split::{plan_f01, PlanF01File, PlanF01Input};
+use kernel::split::{plan_f01, plan_f02, PlanF01File, PlanF01Input, PlanF02Input};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -32,7 +32,7 @@ use platform::retention::{
     cleanup, validate_retention_days, CleanupOutcome, DEFAULT_RETENTION_DAYS,
 };
 use platform::scan::{scan_path, ScanMode, ScanOptions, ScanOutcome};
-use platform::text::{sample_bytes, split_layout, SampleSpec};
+use platform::text::{sample_bytes, split_layout, split_layout_by_lines, SampleSpec};
 
 const USAGE: &str = "usage:
   batchdesk c09 <path> [--mode full|fast] [--quick-window-bytes N]
@@ -44,6 +44,8 @@ const USAGE: &str = "usage:
                 [--platform-prior chinese-windows|other]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f02 --file <path>... --lines N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
@@ -79,10 +81,17 @@ f01 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
+f02 options:
+  --file PATH             repeatable source text file
+  --lines N               lines per part (N > 0; tail part kept; §5.15)
+  --output-dir DIR        directory for generated parts
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --json                  machine-readable plan output
+
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place (backup in quarantine, undo restores from the Journal);
-  f01 entries write line-aligned parts (undo moves the parts into quarantine);
+  f01/f02 entries write line-aligned parts (undo moves the parts into quarantine);
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -117,6 +126,9 @@ fn main() {
     }
     if args[1] == "f01" {
         std::process::exit(run_f01(&args));
+    }
+    if args[1] == "f02" {
+        std::process::exit(run_f02(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -666,9 +678,41 @@ fn run_c01(args: &[String]) -> i32 {
     }
 }
 
+/// F01/F02 共用 CLI 入口，仅计量基准与数量参数不同。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitMode {
+    Bytes,
+    Lines,
+}
+
+impl SplitMode {
+    fn kind(self) -> &'static str {
+        match self {
+            SplitMode::Bytes => "f01",
+            SplitMode::Lines => "f02",
+        }
+    }
+
+    fn quantity_flag(self) -> &'static str {
+        match self {
+            SplitMode::Bytes => "--target-bytes",
+            SplitMode::Lines => "--lines",
+        }
+    }
+}
+
 fn run_f01(args: &[String]) -> i32 {
+    run_split(args, SplitMode::Bytes)
+}
+
+fn run_f02(args: &[String]) -> i32 {
+    run_split(args, SplitMode::Lines)
+}
+
+fn run_split(args: &[String], mode: SplitMode) -> i32 {
+    let kind = mode.kind();
     let mut files = Vec::new();
-    let mut target_bytes = None;
+    let mut quantity = None;
     let mut output_dir = None;
     let mut plan_id = None;
     let mut protected_dirs = Vec::new();
@@ -683,16 +727,30 @@ fn run_f01(args: &[String]) -> i32 {
                 };
                 files.push(PathBuf::from(value));
             }
-            "--target-bytes" => {
+            "--target-bytes" if mode == SplitMode::Bytes => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     return input_error("E1001: --target-bytes requires a byte count");
                 };
                 match value.parse::<u64>() {
-                    Ok(bytes) if bytes > 0 => target_bytes = Some(bytes),
+                    Ok(bytes) if bytes > 0 => quantity = Some(bytes),
                     _ => {
                         return input_error(format!(
                             "E1002: --target-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--lines" if mode == SplitMode::Lines => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --lines requires a line count");
+                };
+                match value.parse::<u64>() {
+                    Ok(lines) if lines > 0 => quantity = Some(lines),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --lines must be a positive line count: {value}"
                         ))
                     }
                 }
@@ -719,19 +777,22 @@ fn run_f01(args: &[String]) -> i32 {
                 protected_dirs.push(PathBuf::from(value));
             }
             "--json" => json = true,
-            other => return input_error(format!("E1002: unknown f01 argument: {other}")),
+            other => return input_error(format!("E1002: unknown {kind} argument: {other}")),
         }
         index += 1;
     }
 
     if files.is_empty() {
-        return input_error("E1001: f01 requires at least one --file <path>");
+        return input_error(format!("E1001: {kind} requires at least one --file <path>"));
     }
-    let Some(target_bytes) = target_bytes else {
-        return input_error("E1001: f01 requires --target-bytes <n>");
+    let Some(quantity) = quantity else {
+        return input_error(format!(
+            "E1001: {kind} requires {} <n>",
+            mode.quantity_flag()
+        ));
     };
     let Some(output_dir) = output_dir else {
-        return input_error("E1001: f01 requires --output-dir <dir>");
+        return input_error(format!("E1001: {kind} requires --output-dir <dir>"));
     };
     let output_dir = make_absolute(&output_dir);
     let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
@@ -758,10 +819,17 @@ fn run_f01(args: &[String]) -> i32 {
             }
         };
         if !metadata.is_file() {
-            eprintln!("E1002: f01 requires regular files: {}", absolute.display());
+            eprintln!(
+                "E1002: {kind} requires regular files: {}",
+                absolute.display()
+            );
             return 2;
         }
-        let layout = match split_layout(&absolute, target_bytes) {
+        let layout = match mode {
+            SplitMode::Bytes => split_layout(&absolute, quantity),
+            SplitMode::Lines => split_layout_by_lines(&absolute, quantity),
+        };
+        let layout = match layout {
             Ok(layout) => layout,
             Err(error) => {
                 eprintln!(
@@ -790,22 +858,34 @@ fn run_f01(args: &[String]) -> i32 {
         plan_files.push(PlanF01File {
             path: absolute.to_string_lossy().into_owned(),
             canonical_path,
-            group_id: new_ulid("f01"),
+            group_id: new_ulid(kind),
             layout,
         });
     }
 
-    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f01"));
-    let input = PlanF01Input {
-        plan_id,
-        target_bytes,
-        output_dir: output_dir.to_string_lossy().into_owned(),
-        protected_dirs,
-        case_sense,
-        existing_targets,
-        files: plan_files,
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid(kind));
+    let output_dir = output_dir.to_string_lossy().into_owned();
+    let planned = match mode {
+        SplitMode::Bytes => plan_f01(PlanF01Input {
+            plan_id,
+            target_bytes: quantity,
+            output_dir,
+            protected_dirs,
+            case_sense,
+            existing_targets,
+            files: plan_files,
+        }),
+        SplitMode::Lines => plan_f02(PlanF02Input {
+            plan_id,
+            lines_per_part: quantity,
+            output_dir,
+            protected_dirs,
+            case_sense,
+            existing_targets,
+            files: plan_files,
+        }),
     };
-    match plan_f01(input) {
+    match planned {
         Ok(plan) => {
             if json {
                 print_plan_json(&plan);

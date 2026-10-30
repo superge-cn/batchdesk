@@ -37,10 +37,10 @@
 - 基线/契约/测试文档体系：产品方案 v1.19、T v1.12、U v1.3、设计 01–14、ADR、PDR、TC v0.3。
 - kernel：C09 纯分组、`PlanDocument`/`plan_c09`、`FsAdapter`/`LicenseService`/`Journal`/`apply_plan`/`undo_plan`、`ProgressSink`/`CancelToken`（逐条进度、取消回滚）、路径 normalize/is_under 与 S02 blocked、plan→apply 内容指纹复核（`expected`+E2010，设计 01 v1.3）；通用执行器 `generic_apply` 覆盖 rename/move/delete/`copy`/`edit-content`（copy 新建逆向＝产物进隔离目录、覆盖/内容改写逆向＝`dataRef` 备份还原，设计 01 v1.7），撤销统一走共享 `execute_reverse`；编码检测与转码纯函数层 `encoding`（ADR-0014：chardetng 主路径＋encoding_rs，方案 §5.2 四级流水线，零阈值置信门控）；C01 计划生成 `plan_c01`（检测→`edit-content`/skip/blocked E3001）。
 - `crates/platform`：扫描/BLAKE3、原生 FsAdapter、FileJournal、保留期 cleanup、文本采样/行数估算/分段流式读取（`text`，Wave 2-0b），CLI 与桌面壳共用。
-- CLI：C09 scan → plan → apply → undo/cleanup、S02、`--protected-dir`、`--retention-days`；C01 `c01` 计划命令与 `apply` 按 `kind` 路由 `generic_apply`；F01 `f01` 计划命令（流式布局＋1:N 条目）与同一 `apply` 路由。
+- CLI：C09 scan → plan → apply → undo/cleanup、S02、`--protected-dir`、`--retention-days`；C01 `c01` 计划命令与 `apply` 按 `kind` 路由 `generic_apply`；F01 `f01`／F02 `f02` 计划命令（流式布局＋1:N 条目，共用 `run_split`）与同一 `apply` 路由。
 - 桌面：`src-tauri` Tauri v2 任务队列（`tasks.rs`）与 `task://progress`/`task://state`/`task://done`；`applyPlan`/`undoPlan` 返回 `{taskId}`；取消/暂停/恢复/重试（`retryTask`，仅失败条目、新 taskId 引用原 planId）/崩溃恢复（`recoverTask`）/预检（`preflightPlan`）与 list/get 已注册；`task://progress` 按方案 §9.1 节流区间下限合帧；LicenseService 由装配点注入（`TaskQueue::with_license`，方案 13.8）；C17a 最小操作日志落库（rusqlite bundled，ADR-0013：任务收尾单事务批量写、`logFullPaths` 脱敏、E1007/损坏降级不阻断批处理）；应用数据目录下 quarantine/journal/oplog。
 - Web：React 19/Vite 7 C09 页面，U v1.3 token + 液态玻璃外壳；计划预览、确认执行、事件驱动进度/暂停/取消、撤销、保留期演练/永久清理；任务事件按 taskId 归档，避免 IPC 返回前完成导致丢报告；浏览器 mock IPC 流已验证。
-- 验证：`cargo test --workspace` **216 项**通过（kernel 138 + 语料断言 11 + platform 56 + CLI 6 + CLI 集成 5）；`cargo test --manifest-path src-tauri/Cargo.toml` 13 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 七 job 全绿（run 40992120684，2026-10-30，head 407592e；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success；历史 run 40983125143/40989723526）**。
+- 验证：`cargo test --workspace` **227 项**通过（kernel 146 + 语料断言 11 + platform 58 + CLI 6 + CLI 集成 6）；`cargo test --manifest-path src-tauri/Cargo.toml` 13 项通过；`scripts/e2e-tauri.mjs` 真实 WebView apply→undo、cleanup 演练与执行中取消回滚通过；C-6 断言通过；`pnpm build` 通过；`src-tauri` cargo check 通过；**CI 七 job 全绿（run 40992120684，2026-10-30，head 407592e；lint/deny/test·ubuntu/test·windows/web/desktop/bench 全 success；历史 run 40983125143/40989723526）**。
 - 门禁：fmt/clippy、docs、语料范围/哈希、迁移 schema。
 
 ### 3.2 部分完成/有明确缺口
@@ -55,7 +55,7 @@
 
 ### 3.3 未开始（按功能组）
 
-- **阶段 0 文本/编码**：F02–F13（合并/抽列/编码/表头/换行/替换/正则改名等）、C02/C03/C04/C05/C06/C07/C08/C10/C11/C12/C13/C14/C15/C18（C01 已接线到 plan/apply/CLI 切片；F01 已接线到 plan/apply/CLI 切片但只做源字节直通、无转码与 UI，见 §6.1 2026-10-30 两行；>10 MB 流式转码与替换计数上报待补；K01–K08 语料断言已起步，见 §6.1 OQ-08 行）。
+- **阶段 0 文本/编码**：F02–F13（合并/抽列/编码/表头/换行/替换/正则改名等）、C02/C03/C04/C05/C06/C07/C08/C10/C11/C12/C13/C14/C15/C18（C01 已接线到 plan/apply/CLI 切片；F01/F02 已接线到 plan/apply/CLI 切片但只做源字节直通、无转码与 UI，见 §6.1 2026-10-30 三行；>10 MB 流式转码与替换计数上报待补；K01–K08 语料断言已起步，见 §6.1 OQ-08 行）。
 - **阶段 0 安全/环境**：C-7 授权状态集（阻塞；S01/S02/S03 的内核与壳层切片已完成，见 §3.2 平台核心行）。
 - **阶段 1**：C37 处理模板（存储/迁移/导入导出已完成，Phase A/B 的 plan/apply 与 UI 未做）、F15 AI 助手 Phase 1/2/3、设置与持久化 UI。
 - **P1/P2**：C21–C63 中未进入阶段 0 的功能、CLI C40 正式命令面、性能基准结果台账。
@@ -66,9 +66,9 @@
 | 问题 | 结论 |
 |---|---|
 | 有几个产品功能完成 T 验收？ | **0** |
-| 有几个功能有可运行纵向切片？ | **3**（C09；C01、F01 仅 CLI plan/apply/undo 切片，无 UI；C01 缺替换计数，F01 缺转码分片） |
+| 有几个功能有可运行纵向切片？ | **4**（C09；C01、F01、F02 仅 CLI plan/apply/undo 切片，无 UI；C01 缺替换计数，F01 缺转码分片，F02 缺行数预估进度与源编码统一） |
 | 平台核心是否足够支撑第二个功能？ | **是**：S01/S02/S03、Config/UiState、通用文件操作主链、retryTask/合帧、授权注入 seam、C17a 最小日志已建；仍缺诊断日志轨、商业授权实现与 Hashing 端口（均为可后置平台件） |
-| 现在最该做什么？ | **继续 Wave 2**：F01 纵向切片已完成（源字节直通），下一步 F02–F04（合并/抽列）复用 `split`/`range` 与流式管线；Wave 1 平台件与通用执行器撤销链（copy/edit-content/split）已齐；剩余平台件（诊断日志、Hashing 端口）按依赖插入；W0-6 仅剩 C09 的 T 全量 UI 验收（人工项） |
+| 现在最该做什么？ | **继续 Wave 2**：F01/F02 纵向切片已完成（源字节直通），下一步 F03–F04（按份数分割/合并）复用 `split`/`range` 与流式管线；Wave 1 平台件与通用执行器撤销链（copy/edit-content/split）已齐；剩余平台件（诊断日志、Hashing 端口）按依赖插入；W0-6 仅剩 C09 的 T 全量 UI 验收（人工项） |
 
 ## 4. 开发顺序（按依赖，不重排基线优先级）
 
@@ -158,11 +158,12 @@
 | 任务 | 状态 | 产出 | 验收 | 依赖 |
 |---|---|---|---|---|
 | W2-0a 编码检测/转码纯函数层 | **切片** | kernel `encoding`（ADR-0014） | kernel 10 项单测；K01–K08 语料接线待做 | 方案 §5.2 |
-| W2-0b 文本采样/流式读取（platform） | **切片** | platform `text`：`sample_bytes`、`estimate_lines`、`stream_segments` | 不整文件读入内存；T03 超长行、T06 无换行可报；采样窗口/块数均为调用方显式入参（§5.2 无数值）；platform 单测 41→55 | T03/T06 告警已在 F01 plan 呈现；>2 GB 预扫描接进度 |
+| W2-0b 文本采样/流式读取（platform） | **切片** | platform `text`：`sample_bytes`、`estimate_lines`、`stream_segments` | 不整文件读入内存；T03 超长行、T06 无换行可报；采样窗口/块数均为调用方显式入参（§5.2 无数值）；platform 单测 41→55 | T03/T06 告警已在 F01/F02 plan 呈现；>2 GB 预扫描接进度 |
 | C01 编码转换纵向切片 | **切片** | kernel `plan_c01`（检测→`edit-content`/skip/blocked E3001）+ CLI `c01` 与 `apply` 路由 `generic_apply`（备份→转码→原子写回，Journal 撤销） | kernel +7 项 plan 单测、encoding 参数往返 1 项；`apply_flow` GB18030→UTF-8 plan→apply→undo 字节往返；workspace 190 项 | 替换计数上报、>10 MB 流式转码、K01–K08 语料断言（OQ-08）、UI 候选预览/人工确认 |
 | F01 TXT 按大小分割 | **切片** | kernel `split`（`SplitAccumulator` 纯函数边界＋`plan_f01` 1:N 条目＋`PlanAction::Split`/`range`）＋platform `text::split_layout` 与 `FsAdapter::copy_range_atomic`（64 KiB 流式区间复制）＋CLI `f01`/`apply` 路由；ADR-0015、设计 01 v1.8 | 行边界断开、超长行独占并标注（T03）、无换行硬切告警（T06）、目标值小于单行至少 1 行/片、空文件告警、C19 同名/批内冲突标 `sequence`；kernel `split` 12 项＋split apply 1 项、platform +1、`apply_flow` f01 plan→apply→undo 1 项、语料 T03/T05/T06 转 asserted；workspace **216 项**；fmt/clippy -D warnings/check_docs/check_scope 全绿 | 分片转码、>2 GB 预扫描进度、C-2 大文件实机、UI 预览 | W2-0b |
-| F02–F04 TXT 分割/合并 | 未开始 | 同上 | TC F02/F03/F04 | F01 |
-| OQ-08 语料断言 harness | **切片** | `crates/kernel/tests/corpus.rs` + `assertions.tsv` | 11 项断言覆盖 K01–K08＋T03/T05/T06（F01 告警/空文件），含 K03 暴露并修复 UTF-8 `had_bom_input` 漏报；台账覆盖测试守 24 条不漏测；workspace 216 项 | T01/T02/T04/T07/T08、R01–R04/R06、E03、Z01–Z02 共 13 条 pending；K04–K08 为 partial（统计判定/魔数探测/F05 每片 BOM 未接）；24 条全量断言未落地，CI 仍不能表述为“语料零失败” |
+| F02 TXT 按行数分割 | **切片** | kernel `split` 新增 `SplitBasis::Lines` 与 `plan_f02`（共用累加器／计划结构，`linesPerPart` 参数）＋platform `text::split_layout_by_lines`＋CLI `f02`（与 `f01` 共用 `run_split`） | 每满 N 行一片、尾片保留（方案 §5.15）、N > 总行数→单片、N=1、无换行文件单片且不误报硬切、空文件告警；kernel `split` 新增 8 项、platform +2、`apply_flow` f02 plan→apply→undo 1 项；workspace **227 项**；fmt/clippy -D warnings/check_docs/check_scope 全绿 | 行数预扫描用于进度（>2 GB）、源编码统一/转码分片、C-2 大文件实机、UI 预览 | F01 |
+| F03–F04 TXT 按份数分割/合并 | 未开始 | 同上 | TC F03/F04 | F02 |
+| OQ-08 语料断言 harness | **切片** | `crates/kernel/tests/corpus.rs` + `assertions.tsv` | 11 项断言覆盖 K01–K08＋T03/T05/T06（F01 告警/空文件），含 K03 暴露并修复 UTF-8 `had_bom_input` 漏报；台账覆盖测试守 24 条不漏测；workspace 227 项 | T01/T02/T04/T07/T08、R01–R04/R06、E03、Z01–Z02 共 13 条 pending；K04–K08 为 partial（统计判定/魔数探测/F05 每片 BOM 未接）；24 条全量断言未落地，CI 仍不能表述为“语料零失败” |
 | 人工项收尾 | 部分 | C09 T 全量 UI、UNC/长路径矩阵、S03 崩溃演练 | `fixtures/corpus/manual-results.md` 台账 | Windows 实机 |
 
 ## 6. 完成判定与维护
@@ -202,6 +203,7 @@
 | 2026-10-30 | Wave 2-0b：文本采样/流式读取 | 切片 | `crates/platform/src/text.rs`：`sample_bytes`（头部+等距窗口、重叠去重、`complete` 标记）、`estimate_lines`（按新行比例外推，完整采样末行补计）、`stream_segments`（固定 64 KiB 块切段回调：`line_index`/`line_start`/`ends_line`；T03 超长行计数 + T06 无换行信号）；采样窗口/块数/超长行阈值全部调用方显式传入，crate 无产品默认值。`cargo test -p batchdesk-platform` 41→55；fmt/clippy -D warnings 通过 | 采样块边界可能截断多字节字符→检测降级为人工确认（ADR-0014）；T03/T06 告警尚未接入 F01 plan；`estimate_lines` 以 `\n` 计行，CR-only 文件估算为 0 | 开发代理 |
 | 2026-10-30 | C01 编码转换纵向切片 | 切片 | **kernel** `plan_c01`：采样检测→`edit-content` 条目；需人工确认→blocked E3001（不静默猜错）；已在目标编码/BOM→`resolution: skip`；受保护/非法路径→blocked；`params` 快照 target/invalid/platformPrior/source（apply 侧按快照重建变换，无 source 时对整文件重检测）。**CLI**：新增 `c01` 计划命令（采样窗口/块数必填），`apply` 按 `kind` 路由 `apply_generic_plan`（c09 仍走专用执行器），`undo` 复用 Journal 备份还原。**测试**：kernel 125（plan +7、encoding 参数往返 +1）、platform 55、CLI 6、集成 4＝**190 项**；`apply_flow` 新增 GB18030→UTF-8 plan→apply→undo 字节往返；fmt/clippy -D warnings 通过 | 替换计数未上报（`ContentEditor` 仅回传字节，需契约扩展）、>10 MB 流式转码（generic_apply 仍整文件读）、K01–K08 语料断言（OQ-08）、UI 候选预览/人工确认交互 | 开发代理 |
 | 2026-10-30 | F01 TXT 按大小分割纵向切片 | 切片 | **kernel** `split`：`SplitAccumulator`（逐行 O(分片数) 边界、超长行独占、无换行硬切、空文件）＋`plan_f01`（1:N `split` 条目、`range`、`expected.size=分片长度`、T03/T06 告警、C19 同名/批内冲突标 `sequence`、保护目录 E2009）；`PlanAction::Split` 纳入通用执行器，`expected` 指纹按 `range.end ≤ 源大小` 复核（E2010），Journal forward=`WriteAtomic{dataRef:None}`／reverse=`Quarantine`。**platform** `text::split_layout`（stream_segments 驱动累加器）＋`FsAdapter::copy_range_atomic`（64 KiB 流式、临时文件＋原子改名、目标占用按策略）。**CLI** `f01`（`--file/--target-bytes/--output-dir/--plan-id/--json`）与 `apply` 按 `kind` 路由。**契约/决策**：ADR-0015、设计 01 v1.8（`split` 动作、`range` 字段、reverse 规则）。**测试**：kernel `split` 12 项＋split apply 1 项、platform +1、`apply_flow` f01 plan→apply→undo 1 项；语料 T03/T05/T06 由 pending 转 asserted；`cargo test --workspace` **216 项**；fmt/clippy -D warnings/check_docs/check_scope 全绿；推送 407592e 后 CI 七 job 全 success（run 40992120684，含 windows-latest） | 分片转码（本切片 `encoding="source-bytes"` 直通）、>2 GB 预扫描进度、C-2 大文件实机、UI 预览、Windows 实机 | 开发代理 |
+| 2026-10-30 | F02 TXT 按行数分割纵向切片 | 切片 | **kernel** `split` 抽出 `SplitBasis`（`Bytes`/`Lines`）复用同一累加器与计划结构；`SplitAccumulator::new_lines` 每满 N 行收片、尾片保留（方案 §5.15），无换行文件保持单片且不误报硬切；`plan_f02` 输出 `linesPerPart` 参数与 1:N `split` 条目（`range`/`expected`/命名同 F01）。**platform** `text::split_layout_by_lines`（与 `split_layout` 共用 `scan_layout`）。**CLI** `f02`（`--lines`）与 `f01` 共用 `run_split`，`apply` 沿用既有 `kind` 路由。**测试**：kernel `split` 20 项（新增 8）、platform text 16 项（新增 2）、`apply_flow` f02 plan→apply→undo 1 项；`cargo test --workspace` **227 项**；fmt/clippy -D warnings/check_docs/check_scope/src-tauri check 全绿（本地，待推送后 CI 复验） | 行数预扫描用于大文件进度、源编码统一/转码分片、C-2 大文件实机、UI 预览、F02 TC 的取消/尾份交互用例未逐条执行 | 开发代理 |
 | 2026-10-30 | OQ-08 语料断言 harness 起步 | 切片 | **harness**：`crates/kernel/tests/corpus.rs` 读取 `fixtures/corpus/{编号}/out` 真实样本（缺失时报出生成命令，不静默跳过）；K01（GB18030 检测＋转码 9 行×4 列）、K02（不误判 GBK）、K03（BOM 优先＋目标 BOM）、K05（默认 UTF-8 且提示）、K08（UTF-16 BOM 转码 6 行）直连 `encoding`；K04/K06/K07 断言“不静默采用”（`plan_c01` 产出 blocked E3001）。**台账**：`crates/kernel/tests/assertions.tsv` 登记 24 条自动化语料（asserted 3／partial 5／pending 16），覆盖测试校验“与磁盘自动化集合一一对应、人工项不得登记、非 asserted 必须写缺口”。**修缺陷**：K03 首跑红——`transcode` 对 UTF-8 源 `had_bom_input` 恒 false（`expected_bom` 缺 UTF-8 分支），补 `EF BB BF` 后转绿。`cargo test --workspace` **198 项**（kernel 125＋corpus 8＋platform 55＋CLI 6＋集成 4）；fmt/clippy -D warnings 通过 | 逐条断言还剩 16 条 pending（CSV 解析器 F05、ZIP 执行器 C10、E03 预检接线）；K04/K06/K07/K05/K08 的 partial 缺口见 `assertions.tsv`；CI 覆盖性观察随推送复验 | 开发代理 |
 
 ## 7. 关联

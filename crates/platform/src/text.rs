@@ -270,9 +270,28 @@ where
 ///
 /// 只保留分片边界（内存 O(分片数)），不缓存文件内容（方案 §5.1）。
 pub fn split_layout(path: &Path, target_bytes: u64) -> io::Result<kernel::split::SplitLayout> {
-    let file_size = File::open(fs_path(path))?.metadata()?.len();
-    let mut accumulator = kernel::split::SplitAccumulator::new(target_bytes)
+    let accumulator = kernel::split::SplitAccumulator::new(target_bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
+    scan_layout(path, accumulator)
+}
+
+/// F02 分片布局：每满 `lines_per_part` 行收一片，尾片保留（方案 §5.15）。
+///
+/// 与 F01 共用同一流式扫描与累加器，只是计量基准换成行数。
+pub fn split_layout_by_lines(
+    path: &Path,
+    lines_per_part: u64,
+) -> io::Result<kernel::split::SplitLayout> {
+    let accumulator = kernel::split::SplitAccumulator::new_lines(lines_per_part)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
+    scan_layout(path, accumulator)
+}
+
+fn scan_layout(
+    path: &Path,
+    mut accumulator: kernel::split::SplitAccumulator,
+) -> io::Result<kernel::split::SplitLayout> {
+    let file_size = File::open(fs_path(path))?.metadata()?.len();
     let mut line_bytes = 0u64;
     stream_segments(path, None, |segment| {
         line_bytes += segment.bytes.len() as u64;
@@ -545,5 +564,39 @@ mod tests {
         assert_eq!(summary.lines, 0);
         assert_eq!(summary.bytes_read, 0);
         assert!(!summary.had_newline);
+    }
+
+    #[test]
+    fn splits_layout_by_line_count_and_keeps_tail() {
+        let dir = TempDir::new();
+        let path = dir.0.join("rows.txt");
+        fs::write(&path, b"a\nb\nc\nd\ne\n").unwrap();
+
+        let layout = split_layout_by_lines(&path, 2).unwrap();
+        assert_eq!(layout.file_size, 10);
+        assert_eq!(layout.spans.len(), 3);
+        assert_eq!(
+            layout
+                .spans
+                .iter()
+                .map(|span| span.lines)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 1],
+            "尾片保留（方案 §5.15）"
+        );
+        assert!(layout.spans.iter().all(|span| !span.hard_cut));
+    }
+
+    #[test]
+    fn line_layout_keeps_unterminated_tail_in_same_part() {
+        let dir = TempDir::new();
+        let path = dir.0.join("tail.txt");
+        fs::write(&path, b"a\nb\nlast").unwrap();
+
+        let layout = split_layout_by_lines(&path, 2).unwrap();
+        assert_eq!(layout.spans.len(), 2);
+        assert_eq!(layout.spans[0].lines, 2);
+        assert_eq!(layout.spans[1].lines, 1, "末行无换行单独计入尾片");
+        assert_eq!((layout.spans[1].start, layout.spans[1].end), (4, 8));
     }
 }
