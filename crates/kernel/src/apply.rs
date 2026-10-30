@@ -671,6 +671,8 @@ pub(crate) fn execute_reverse(fs: &dyn FsAdapter, reverse: &FsOp) -> Result<(), 
         FsOp::WriteAtomic { data_ref: None, .. } => Err(KernelError::invalid_params(
             "write_atomic reverse requires a backup dataRef",
         )),
+        FsOp::CreateDir { path } => fs.create_dir(path),
+        FsOp::RemoveDir { path } => fs.remove_dir_if_empty(path),
         FsOp::Copy { .. } => Err(KernelError::invalid_params(
             "copy is not a reversible journal op; reverses are rename/quarantine/write_atomic",
         )),

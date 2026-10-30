@@ -171,6 +171,14 @@ impl FsAdapter for CliFsAdapter {
         })
     }
 
+    fn create_dir(&self, path: &str) -> Result<(), KernelError> {
+        fs::create_dir(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
+    }
+
+    fn remove_dir_if_empty(&self, path: &str) -> Result<(), KernelError> {
+        fs::remove_dir(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
+    }
+
     fn rename(
         &self,
         from: &str,

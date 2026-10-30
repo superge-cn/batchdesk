@@ -1698,6 +1698,145 @@ fn f10_empty_directory_and_target_inside_root_are_reported() {
 }
 
 #[test]
+fn f11_plan_apply_and_undo_creates_multi_level_directories() {
+    let dir = TempDir::new();
+    let root = dir.0.join("target");
+    let list = dir.0.join("list.csv");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(&list, "路径\na/b\nc\n".as_bytes()).unwrap();
+
+    let plan = batchdesk(&[
+        "f11",
+        "--list",
+        path_text(&list),
+        "--root",
+        path_text(&root),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f11 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f11");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 3);
+    assert!(document["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["action"] == "create-dir"));
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f11 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(root.join("a").is_dir());
+    assert!(root.join("a/b").is_dir());
+    assert!(root.join("c").is_dir());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f11 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    assert!(!root.join("a").exists());
+    assert!(!root.join("c").exists());
+    assert!(root.exists(), "the target root itself is not removed");
+}
+
+#[test]
+fn f11_accepts_the_f10_listing_format_and_reports_invalid_rows() {
+    let dir = TempDir::new();
+    let root = dir.0.join("target");
+    let list = dir.0.join("listing.csv");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        &list,
+        "相对路径,名称,类型,大小,修改时间,层级\n\
+         sub,sub,目录,0,2026-10-30T00:00:00Z,1\n\
+         sub/a.txt,a.txt,文件,3,2026-10-30T00:00:00Z,2\n\
+         ../escape,escape,目录,0,2026-10-30T00:00:00Z,1\n",
+    )
+    .unwrap();
+
+    let plan = batchdesk(&[
+        "f11",
+        "--list",
+        path_text(&list),
+        "--root",
+        path_text(&root),
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        document["entries"][0]["target"].as_str().unwrap(),
+        path_text(&root.join("sub"))
+    );
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "invalid-rows"));
+}
+
+#[test]
+fn f11_existing_target_is_skipped() {
+    let dir = TempDir::new();
+    let root = dir.0.join("target");
+    let list = dir.0.join("list.csv");
+    fs::create_dir_all(root.join("already")).unwrap();
+    fs::write(&list, "already\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f11",
+        "--list",
+        path_text(&list),
+        "--root",
+        path_text(&root),
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(
+        document["entries"][0]["conflict"]["kind"],
+        "existing-target"
+    );
+    assert_eq!(document["entries"][0]["resolution"], "skip");
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

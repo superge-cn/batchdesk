@@ -82,7 +82,8 @@ pub fn apply_generic_plan(
             | PlanAction::Merge
             | PlanAction::CsvExtract
             | PlanAction::CsvRows
-            | PlanAction::Listing => {}
+            | PlanAction::Listing
+            | PlanAction::CreateDir => {}
             other => {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries need a dedicated executor",
@@ -109,6 +110,7 @@ pub fn apply_generic_plan(
             | PlanAction::CsvExtract
             | PlanAction::CsvRows
             | PlanAction::Listing
+            | PlanAction::CreateDir
                 if entry.target.is_none() =>
             {
                 return Err(KernelError::invalid_params(format!(
@@ -249,17 +251,19 @@ pub fn apply_generic_plan(
             continue;
         }
 
-        let normalized = match try_normalize(&entry.source) {
-            Ok(normalized) => normalized,
-            Err(error) => {
-                failed += 1;
-                reports.push(failed_entry(entry.entry_id.clone(), error));
+        if entry.action != PlanAction::CreateDir {
+            let normalized = match try_normalize(&entry.source) {
+                Ok(normalized) => normalized,
+                Err(error) => {
+                    failed += 1;
+                    reports.push(failed_entry(entry.entry_id.clone(), error));
+                    continue;
+                }
+            };
+            if let Some(error) = protected_path_hit(context, &entry.source, &normalized) {
+                reports.push(skipped_entry(entry.entry_id.clone(), error));
                 continue;
             }
-        };
-        if let Some(error) = protected_path_hit(context, &entry.source, &normalized) {
-            reports.push(skipped_entry(entry.entry_id.clone(), error));
-            continue;
         }
 
         match context.license.capability(&plan.kind) {
@@ -292,70 +296,72 @@ pub fn apply_generic_plan(
             }
         }
 
-        let stat = match context.fs.stat(&entry.source) {
-            Ok(stat) => stat,
-            Err(error) => {
-                failed += 1;
-                reports.push(failed_entry(entry.entry_id.clone(), error));
-                continue;
-            }
-        };
-        if entry.action == PlanAction::Listing {
-            if stat.kind != EntryKind::Dir {
-                failed += 1;
-                reports.push(failed_entry(
-                    entry.entry_id.clone(),
-                    KernelError::invalid_params("listing expects a directory source"),
-                ));
-                continue;
-            }
-        } else if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
-            failed += 1;
-            reports.push(failed_entry(
-                entry.entry_id.clone(),
-                KernelError::invalid_params(format!(
-                    "{} expects a file source",
-                    entry.action.as_str()
-                )),
-            ));
-            continue;
-        }
-        if stat.attrs.placeholder {
-            reports.push(skipped_entry(
-                entry.entry_id.clone(),
-                KernelError::new("E2006", "placeholder file skipped", None, true),
-            ));
-            continue;
-        }
-        if let Some(error) = fingerprint_mismatch(context, entry, stat.size) {
-            reports.push(skipped_entry(entry.entry_id.clone(), error));
-            continue;
-        }
-        if entry.action == PlanAction::Split {
-            if let Some(range) = entry.range {
-                let required_end = entry
-                    .csv
-                    .as_ref()
-                    .and_then(|csv| csv.header)
-                    .map_or(range.end, |header| range.end.max(header.end));
-                if required_end > stat.size {
-                    reports.push(skipped_entry(
+        if entry.action != PlanAction::CreateDir {
+            let stat = match context.fs.stat(&entry.source) {
+                Ok(stat) => stat,
+                Err(error) => {
+                    failed += 1;
+                    reports.push(failed_entry(entry.entry_id.clone(), error));
+                    continue;
+                }
+            };
+            if entry.action == PlanAction::Listing {
+                if stat.kind != EntryKind::Dir {
+                    failed += 1;
+                    reports.push(failed_entry(
                         entry.entry_id.clone(),
-                        KernelError::new(
-                            "E2010",
-                            "source file shrank since plan preview; re-plan before applying",
-                            None,
-                            true,
-                        ),
+                        KernelError::invalid_params("listing expects a directory source"),
                     ));
                     continue;
                 }
+            } else if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
+                failed += 1;
+                reports.push(failed_entry(
+                    entry.entry_id.clone(),
+                    KernelError::invalid_params(format!(
+                        "{} expects a file source",
+                        entry.action.as_str()
+                    )),
+                ));
+                continue;
             }
-        }
-        if entry.action == PlanAction::Merge {
-            if let Some(error) = merge_source_mismatch(context, entry) {
+            if stat.attrs.placeholder {
+                reports.push(skipped_entry(
+                    entry.entry_id.clone(),
+                    KernelError::new("E2006", "placeholder file skipped", None, true),
+                ));
+                continue;
+            }
+            if let Some(error) = fingerprint_mismatch(context, entry, stat.size) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
                 continue;
+            }
+            if entry.action == PlanAction::Split {
+                if let Some(range) = entry.range {
+                    let required_end = entry
+                        .csv
+                        .as_ref()
+                        .and_then(|csv| csv.header)
+                        .map_or(range.end, |header| range.end.max(header.end));
+                    if required_end > stat.size {
+                        reports.push(skipped_entry(
+                            entry.entry_id.clone(),
+                            KernelError::new(
+                                "E2010",
+                                "source file shrank since plan preview; re-plan before applying",
+                                None,
+                                true,
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+            }
+            if entry.action == PlanAction::Merge {
+                if let Some(error) = merge_source_mismatch(context, entry) {
+                    reports.push(skipped_entry(entry.entry_id.clone(), error));
+                    continue;
+                }
             }
         }
 
@@ -388,6 +394,7 @@ pub fn apply_generic_plan(
                 | PlanAction::CsvExtract
                 | PlanAction::CsvRows
                 | PlanAction::Listing
+                | PlanAction::CreateDir
         ) {
             if let Some(error) = protected_target_hit(context, &target) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
@@ -880,6 +887,26 @@ fn perform(
             PlanAction::Listing => {
                 let target = target.expect("validated: listing requires a target");
                 perform_listing(context, plan, entry, target, overwrite)
+            }
+            PlanAction::CreateDir => {
+                let target = target.expect("validated: create-dir requires a target");
+                context.fs.create_dir(target)?;
+                let forward = FsOp::CreateDir {
+                    path: target.to_string(),
+                };
+                let reverse = forward.inverse().ok_or_else(|| {
+                    KernelError::internal(
+                        "create-dir reverse is not expressible",
+                        format!("{forward:?}"),
+                    )
+                })?;
+                Ok(Performed {
+                    skipped: false,
+                    replaced: false,
+                    final_path: target.to_string(),
+                    forward,
+                    reverse,
+                })
             }
             PlanAction::EditContent => {
                 // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。

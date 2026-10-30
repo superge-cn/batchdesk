@@ -84,6 +84,24 @@ pub enum CaseSense {
 pub trait FsAdapter: Send + Sync {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError>;
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError>;
+    /// 创建单级目录（父目录由计划保证已存在）。
+    fn create_dir(&self, _path: &str) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "directory creation is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+    /// 删除空目录（撤销 create-dir）；非空目录必须失败，不得递归删除。
+    fn remove_dir_if_empty(&self, _path: &str) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "empty-directory removal is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
     /// 以流式回调写入目标（临时文件＋原子改名）；F10 目录清单专用。
     ///
     /// 回调只负责向 writer 写内容，目标冲突已在调用方解析；适配层不得整段缓存

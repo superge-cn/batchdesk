@@ -10,9 +10,12 @@ use std::env;
 use std::path::PathBuf;
 
 use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome};
+use kernel::create_dirs::{
+    normalize_list_path, plan_f11, target_for_list_path, PlanF11Input, PlanF11Row,
+};
 use kernel::csv::{plan_f05, CsvSplitBasis, Delimiter, PlanF05File, PlanF05Input};
 use kernel::csv_extract::{plan_f07, ColumnPick, PlanF07File, PlanF07Input};
-use kernel::csv_merge::{plan_f06, PlanF06File, PlanF06Input};
+use kernel::csv_merge::{parse_records, plan_f06, PlanF06File, PlanF06Input};
 use kernel::csv_range::{plan_f09, PlanF09File, PlanF09Input};
 use kernel::csv_rows::{plan_f08, PlanF08File, PlanF08Input, RowWindow};
 use kernel::duplicate::{
@@ -106,6 +109,9 @@ const USAGE: &str = "usage:
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f10 --root <dir>... (--output <file> | --output-dir <dir>)
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f11 --list <csv> --root <dir>
+                [--source <encoding>] [--plan-id ULID]
+                [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
   batchdesk undo --plan <planId> --journal <file> [--retention-days N] [--json]
@@ -234,6 +240,14 @@ f10 options:
   --json                  machine-readable plan output
   Listing output is UTF-8 with BOM; columns: 相对路径,名称,类型,大小,修改时间,层级
 
+f11 options:
+  --list PATH             CSV list: F10 format (相对路径/类型) or one path per row
+  --root DIR              existing directory root for created folders
+  --source ENC            optional list encoding override; otherwise detected
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --protected-dir DIR     repeatable protected directory
+  --json                  machine-readable plan output
+
 f09 options:
   --file PATH             repeatable source CSV file
   --start X               first data row (1-based, inclusive; excludes header)
@@ -264,6 +278,8 @@ apply/undo/cleanup:
   header and selected byte range at apply time;
   f10 entries stream a directory tree into a UTF-8 BOM CSV listing
   (相对路径/名称/类型/大小/修改时间/层级); placeholders and symlinks are skipped;
+  f11 entries create relative folders under --root from a CSV list; parents are
+  created before children and undo removes created empty directories in reverse;
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -325,6 +341,9 @@ fn main() {
     }
     if args[1] == "f10" {
         std::process::exit(run_f10(&args));
+    }
+    if args[1] == "f11" {
+        std::process::exit(run_f11(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -2918,6 +2937,188 @@ fn run_f10(args: &[String]) -> i32 {
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
         files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f11(args: &[String]) -> i32 {
+    let mut list_path = None;
+    let mut root = None;
+    let mut source = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--list" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --list requires a CSV path");
+                };
+                list_path = Some(PathBuf::from(value));
+            }
+            "--root" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --root requires a directory");
+                };
+                root = Some(PathBuf::from(value));
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f11 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    let Some(list_path) = list_path else {
+        return input_error("E1001: f11 requires --list <csv>");
+    };
+    let Some(root) = root else {
+        return input_error("E1001: f11 requires --root <dir>");
+    };
+    let root = make_absolute(&root);
+    match std::fs::metadata(&root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return input_error("E1002: --root must be a directory"),
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot read target root ({}): {error}",
+                root.display()
+            );
+            return 2;
+        }
+    }
+    let root_text = root.to_string_lossy().into_owned();
+    let list_path = make_absolute(&list_path);
+    let bytes = match std::fs::read(&list_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot read list file ({}): {error}",
+                list_path.display()
+            );
+            return 2;
+        }
+    };
+    let list_encoding = match source {
+        Some(source) => source,
+        None => match detect(&bytes, PlatformPrior::Other).require_encoding() {
+            Ok(encoding) => encoding,
+            Err(error) => return print_kernel_error(&error),
+        },
+    };
+    let decoded = match transcode(
+        &bytes,
+        list_encoding,
+        TargetEncoding::Utf8 { bom: false },
+        InvalidSequencePolicy::Abort,
+    ) {
+        Ok(decoded) => decoded,
+        Err(error) => return print_kernel_error(&error),
+    };
+    let records = parse_records(&decoded.bytes, b',');
+    let mut path_index = 0usize;
+    let mut type_index = None;
+    let mut start = 0usize;
+    if let Some(first) = records.first() {
+        let header: Vec<&str> = first
+            .iter()
+            .map(|cell| cell.trim().trim_start_matches('\u{feff}'))
+            .collect();
+        if let Some(found) = header
+            .iter()
+            .position(|cell| matches!(*cell, "相对路径" | "路径" | "目录" | "path"))
+        {
+            path_index = found;
+            type_index = header
+                .iter()
+                .position(|cell| matches!(*cell, "类型" | "type"));
+            start = 1;
+        }
+    }
+    let mut rows = Vec::new();
+    for (line_index, record) in records.iter().enumerate().skip(start) {
+        if let Some(type_index) = type_index {
+            let kind = record
+                .get(type_index)
+                .map(|value| value.trim())
+                .unwrap_or_default();
+            if kind != "目录" && kind != "dir" {
+                continue;
+            }
+        }
+        let path = record.get(path_index).cloned().unwrap_or_default();
+        rows.push(PlanF11Row {
+            line: line_index as u64 + 1,
+            path,
+        });
+    }
+    let mut existing_targets = Vec::new();
+    for row in &rows {
+        let Ok(normalized) = normalize_list_path(&row.path) else {
+            continue;
+        };
+        let target = target_for_list_path(&root_text, &normalized);
+        if std::fs::metadata(&target).is_ok() {
+            existing_targets.push(target);
+        }
+    }
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let canonical_root = if protected_dirs.is_empty() {
+        None
+    } else {
+        platform::fs::canonicalize_display(&root)
+    };
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f11"));
+    let planned = plan_f11(PlanF11Input {
+        plan_id,
+        root: root_text,
+        canonical_root,
+        rows,
+        existing_targets,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
     });
     match planned {
         Ok(plan) => {

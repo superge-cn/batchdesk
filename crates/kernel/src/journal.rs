@@ -30,6 +30,14 @@ pub enum FsOp {
         from: String,
         to: String,
     },
+    /// 新建单级目录（F11）。
+    CreateDir {
+        path: String,
+    },
+    /// 删除空目录（CreateDir 的逆；非空目录必须失败）。
+    RemoveDir {
+        path: String,
+    },
 }
 
 impl FsOp {
@@ -59,6 +67,8 @@ impl FsOp {
                 path: path.clone(),
                 data_ref: Some(backup.clone()),
             }),
+            Self::CreateDir { path } => Some(Self::RemoveDir { path: path.clone() }),
+            Self::RemoveDir { path } => Some(Self::CreateDir { path: path.clone() }),
             Self::Copy { .. } | Self::WriteAtomic { data_ref: None, .. } => None,
         }
     }
