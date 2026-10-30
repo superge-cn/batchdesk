@@ -297,6 +297,8 @@ fn read_failure(error: std::io::Error) -> KernelError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
     use kernel::config::CURRENT_CONFIG_VERSION;
     use kernel::plan::PlanAction;
@@ -306,11 +308,18 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
+            // Windows 的时钟分辨率较粗，并行测试可能取到同一时间戳；进程内序号 + PID
+            // 保证路径唯一，避免一个测试的 Drop 删掉另一个测试的目录。
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("batchdesk-config-{nanos}"));
+            let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "batchdesk-config-{}-{nanos}-{sequence}",
+                std::process::id()
+            ));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -320,6 +329,13 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn temp_dirs_are_unique_for_parallel_tests() {
+        let dirs: Vec<TempDir> = (0..64).map(|_| TempDir::new()).collect();
+        let paths: std::collections::BTreeSet<_> = dirs.iter().map(|dir| dir.0.clone()).collect();
+        assert_eq!(paths.len(), dirs.len(), "并行测试的临时目录不得重名");
     }
 
     fn store() -> (TempDir, ConfigStore) {
