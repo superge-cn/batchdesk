@@ -224,6 +224,21 @@ pub struct PlanMerge {
     pub invalid: String,
 }
 
+/// F05 CSV 分割的载荷（仅 `split` 动作使用）：表头区间、分隔符与本片统计。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvSplit {
+    /// 表头在源文件中的字节区间；每片先写该区间再写 `range` 的记录。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<PlanRange>,
+    /// 分隔符的稳定字符串（`,` `;` `\t` `|`）。
+    pub delimiter: String,
+    /// 本片记录数（不含表头）。
+    pub rows: u64,
+    /// 本片列数与表头不一致的记录数（只上报，不静默修正）。
+    pub dirty_rows: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
@@ -249,6 +264,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：合并的输入清单与编码策略（仅 `merge` 动作使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge: Option<PlanMerge>,
+    /// 追加式可选字段：CSV 表头区间与分隔符（仅 F05 的 `split` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv: Option<PlanCsvSplit>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -417,6 +435,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 }),
                 range: None,
                 merge: None,
+                csv: None,
             });
         }
     }
@@ -628,6 +647,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             }),
             range: None,
             merge: None,
+            csv: None,
         });
     }
 

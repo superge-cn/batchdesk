@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.10（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.11（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -122,7 +122,7 @@ pub trait RngSource: Send + Sync { fn fill(&self, buf: &mut [u8]); }
 ```rust
 // 输入输出全走参数与返回值；同类函数不再接受任何环境依赖
 pub fn detect_encoding(data: &[u8]) -> EncodingVerdict;                 // §5.2 四级流水线
-pub fn plan_csv_split(input: PlanCsvSplitInput) -> PlanDocument;        // §5.3 表头策略
+pub fn plan_f05(input: PlanF05Input) -> PlanDocument;                  // §5.3 CSV 分割（表头/记录边界）
 pub fn plan_f01(input: PlanF01Input) -> PlanDocument;                  // §5.1 按字节分片
 pub fn plan_f02(input: PlanF02Input) -> PlanDocument;                  // §5.15 按行数分片
 pub fn plan_f03(input: PlanF03Input) -> PlanDocument;                  // §5.15 按份数分片
@@ -324,6 +324,7 @@ interface PlanEntry {
                              // plan 期内容指纹；apply 前复核，变化记 skipped + E2010
                              // split 条目：size=该分片输出字节数，algorithm="byte-range"，hash 省略
                              // merge 条目：size=首个输入大小，algorithm="size"；全部输入在 §merge.sources 中逐项复核
+                             // F05 的 split 条目：size=表头区间字节数＋该片记录区间字节数，algorithm="csv-byte-range"
   range?: { start: number; end: number };
                              // 追加式可选字段：分片在源文件中的字节区间（左闭右开），仅 split 使用；
                              // apply 复核 range.end ≤ 源文件当前大小，否则 skipped + E2010
@@ -333,6 +334,13 @@ interface PlanEntry {
                              // sources 按合并顺序排列，size 为 plan 期输入大小（apply 逐项复核，变化 skipped + E2010）；
                              // encoding 省略=需人工确认（计划条目 blocked E3001）；targetEncoding 含 BOM 策略，
                              // 产物只在最前面写一次 BOM，各输入自身 BOM 由转码剥离（ADR-0016）
+  csv?: { header?: { start: number; end: number };
+          delimiter: string;   // "," | ";" | "\t" | "|"（稳定字符串）
+          rows: number;        // 本片记录数（不含表头）
+          dirtyRows: number }; // 本片列数与表头不一致的记录数（只上报，不静默修正）
+                             // 追加式可选字段：F05 CSV 分片载荷，仅 f05 的 split 使用；
+                             // header 为源文件表头区间，每片先写 header 再写 range（一次原子成文件，ADR-0017）；
+                             // header 省略=不保留表头；range 复核与 header 一并校验（apply 均 ≤ 源文件当前大小）
 }
 interface PlanRelation {
   groupId: string;           // 同一逻辑操作组（ULID）：1:N 的全部输出分片、N:1 的全部输入共享同组

@@ -145,6 +145,7 @@ pub fn plan_f04(input: PlanF04Input) -> Result<PlanDocument, KernelError> {
             target_encoding: input.target_encoding.as_str().to_string(),
             invalid: input.invalid.as_str().to_string(),
         }),
+        csv: None,
     };
     let entries = vec![entry];
 

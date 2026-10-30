@@ -293,6 +293,90 @@ impl FsAdapter for CliFsAdapter {
         })
     }
 
+    fn copy_ranges_atomic(
+        &self,
+        source: &str,
+        ranges: &[(u64, u64)],
+        target: &str,
+        policy: ConflictPolicy,
+    ) -> Result<PathOutcome, KernelError> {
+        if ranges.is_empty() {
+            return Err(KernelError::new(
+                "E1002",
+                "split requires at least one byte range",
+                None,
+                false,
+            ));
+        }
+        let from = fs_path(Path::new(source));
+        let allocated = fs::metadata(&from)
+            .map_err(|error| io_error(&error, Path::new(source)))?
+            .len();
+        for (start, end) in ranges {
+            if start >= end {
+                return Err(KernelError::new(
+                    "E1002",
+                    "split range must be non-empty",
+                    None,
+                    false,
+                ));
+            }
+            if *end > allocated {
+                return Err(KernelError::new(
+                    "E2010",
+                    "source file shrank since planning; re-plan before applying",
+                    Some(format!(
+                        "{} has {allocated} bytes, part needs up to {end}",
+                        source
+                    )),
+                    true,
+                ));
+            }
+        }
+        let Some(destination) =
+            self.resolve_target(Path::new(source), Path::new(target), policy)?
+        else {
+            return Ok(PathOutcome {
+                outcome: PathOutcomeKind::Skipped,
+                final_path: target.to_string(),
+            });
+        };
+        let replaced = path_exists(&destination);
+        let destination = fs_path(&destination);
+        let parent = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| {
+                KernelError::new("E1003", "target has no parent directory", None, false)
+            })?;
+        fs::create_dir_all(parent).map_err(|error| io_error(&error, parent))?;
+        let temp = parent.join(format!(
+            ".batchdesk-split-{}-{}",
+            std::process::id(),
+            self.next_id()
+        ));
+        if let Err(error) = copy_ranges_stream(&from, ranges, &temp) {
+            let _ = fs::remove_file(&temp);
+            return Err(io_error(&error, &destination));
+        }
+        #[cfg(windows)]
+        if destination.exists() {
+            fs::remove_file(&destination).map_err(|error| io_error(&error, &destination))?;
+        }
+        if let Err(error) = fs::rename(&temp, &destination) {
+            let _ = fs::remove_file(&temp);
+            return Err(io_error(&error, &destination));
+        }
+        Ok(PathOutcome {
+            outcome: if replaced {
+                PathOutcomeKind::Replaced
+            } else {
+                PathOutcomeKind::Applied
+            },
+            final_path: strip_extended_path(&destination.to_string_lossy()),
+        })
+    }
+
     fn move_path(
         &self,
         from: &str,
@@ -529,6 +613,31 @@ fn copy_range_stream(source: &Path, start: u64, end: u64, temp: &Path) -> io::Re
         }
         output.write_all(&buffer[..read])?;
         remaining -= read as u64;
+    }
+    output.flush()
+}
+
+/// 按顺序把多个源字节区间写入同一临时文件（F05：表头 + 记录）。
+fn copy_ranges_stream(source: &Path, ranges: &[(u64, u64)], temp: &Path) -> io::Result<()> {
+    const COPY_CHUNK: usize = 64 * 1024;
+    let mut input = fs::File::open(source)?;
+    let mut output = fs::File::create(temp)?;
+    let mut buffer = vec![0u8; COPY_CHUNK];
+    for (start, end) in ranges {
+        input.seek(SeekFrom::Start(*start))?;
+        let mut remaining = end.saturating_sub(*start);
+        while remaining > 0 {
+            let want = (buffer.len() as u64).min(remaining) as usize;
+            let read = input.read(&mut buffer[..want])?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "source shrank while copying split ranges",
+                ));
+            }
+            output.write_all(&buffer[..read])?;
+            remaining -= read as u64;
+        }
     }
     output.flush()
 }

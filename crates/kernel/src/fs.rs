@@ -117,6 +117,28 @@ pub trait FsAdapter: Send + Sync {
             false,
         ))
     }
+    /// 按顺序从源文件的多个字节区间 `[start, end)` 流式写入同一目标
+    /// （临时文件＋一次原子改名）。
+    ///
+    /// F05 CSV 分片专用：每片 = 表头区间 + 记录区间，必须一次成文件，
+    /// 不得分两次写目标（否则中途失败会留下半成品）。区间顺序即写入顺序，
+    /// 全部区间必须非空且落在源文件范围内。目标冲突按 `policy` 处理。
+    /// 适配层不支持时返回 E5001，调用方按契约拒绝该动作，不静默降级。
+    fn copy_ranges_atomic(
+        &self,
+        _source: &str,
+        _ranges: &[(u64, u64)],
+        _target: &str,
+        _policy: ConflictPolicy,
+    ) -> Result<PathOutcome, KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "multi-range copy is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+
     /// 从源文件的字节区间 `[start, end)` 流式写入目标（临时文件＋原子改名）。
     ///
     /// F01 分片专用：适配层按固定块流式复制，不得整文件读入内存

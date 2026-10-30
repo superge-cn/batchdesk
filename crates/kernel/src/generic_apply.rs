@@ -113,6 +113,25 @@ pub fn apply_generic_plan(
                         "split byte range must be non-empty",
                     ));
                 }
+                if let Some(csv) = &entry.csv {
+                    if csv.delimiter.is_empty() {
+                        return Err(KernelError::invalid_params(
+                            "csv split payload requires a delimiter",
+                        ));
+                    }
+                    if let Some(header) = csv.header {
+                        if header.start >= header.end {
+                            return Err(KernelError::invalid_params(
+                                "csv header range must be non-empty",
+                            ));
+                        }
+                        if header.end > range.start {
+                            return Err(KernelError::invalid_params(
+                                "csv header range must end before the record range",
+                            ));
+                        }
+                    }
+                }
             }
             PlanAction::Merge if entry.merge.is_none() => {
                 return Err(KernelError::invalid_params(
@@ -270,7 +289,12 @@ pub fn apply_generic_plan(
         }
         if entry.action == PlanAction::Split {
             if let Some(range) = entry.range {
-                if range.end > stat.size {
+                let required_end = entry
+                    .csv
+                    .as_ref()
+                    .and_then(|csv| csv.header)
+                    .map_or(range.end, |header| range.end.max(header.end));
+                if required_end > stat.size {
                     reports.push(skipped_entry(
                         entry.entry_id.clone(),
                         KernelError::new(
@@ -581,13 +605,22 @@ fn perform(
                 } else {
                     None
                 };
-                let outcome = context.fs.copy_range_atomic(
-                    &entry.source,
-                    range.start,
-                    range.end,
-                    target,
-                    policy,
-                )?;
+                let outcome = match entry.csv.as_ref().and_then(|csv| csv.header) {
+                    // F05：表头区间 + 记录区间一次写成同一分片（CSV 记录边界已在计划期确定）。
+                    Some(header) => context.fs.copy_ranges_atomic(
+                        &entry.source,
+                        &[(header.start, header.end), (range.start, range.end)],
+                        target,
+                        policy,
+                    )?,
+                    None => context.fs.copy_range_atomic(
+                        &entry.source,
+                        range.start,
+                        range.end,
+                        target,
+                        policy,
+                    )?,
+                };
                 let final_path = outcome.final_path.clone();
                 let reverse = match backup {
                     Some(backup) => FsOp::WriteAtomic {
@@ -1118,6 +1151,50 @@ mod tests {
             })
         }
 
+        fn copy_ranges_atomic(
+            &self,
+            source: &str,
+            ranges: &[(u64, u64)],
+            target: &str,
+            policy: ConflictPolicy,
+        ) -> Result<PathOutcome, KernelError> {
+            let mut files = self.files.lock().unwrap();
+            let data = files
+                .get(source)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            let mut joined = Vec::new();
+            for (start, end) in ranges {
+                if start >= end || *end > data.len() as u64 {
+                    return Err(KernelError::new(
+                        "E2010",
+                        "range is out of bounds",
+                        None,
+                        false,
+                    ));
+                }
+                joined.extend_from_slice(&data[*start as usize..*end as usize]);
+            }
+            if files.contains_key(target) {
+                if policy != ConflictPolicy::Overwrite {
+                    return Ok(PathOutcome {
+                        outcome: PathOutcomeKind::Skipped,
+                        final_path: target.to_string(),
+                    });
+                }
+                files.insert(target.to_string(), joined);
+                return Ok(PathOutcome {
+                    outcome: PathOutcomeKind::Replaced,
+                    final_path: target.to_string(),
+                });
+            }
+            files.insert(target.to_string(), joined);
+            Ok(PathOutcome {
+                outcome: PathOutcomeKind::Applied,
+                final_path: target.to_string(),
+            })
+        }
+
         fn backup_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
             let mut files = self.files.lock().unwrap();
             let data = files
@@ -1298,6 +1375,7 @@ mod tests {
             expected: None,
             range: None,
             merge: None,
+            csv: None,
         }
     }
 
@@ -1670,6 +1748,7 @@ mod tests {
                 target_encoding: target_encoding.as_str().to_string(),
                 invalid: "replace-and-count".to_string(),
             }),
+            csv: None,
         }
     }
 

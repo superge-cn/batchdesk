@@ -10,6 +10,7 @@ use std::env;
 use std::path::PathBuf;
 
 use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome};
+use kernel::csv::{plan_f05, CsvSplitBasis, Delimiter, PlanF05File, PlanF05Input};
 use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
 };
@@ -27,6 +28,7 @@ use kernel::plan::{
 use kernel::split::{
     plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input,
 };
+use platform::csv::{csv_split_layout, CsvScanOptions};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -59,6 +61,10 @@ const USAGE: &str = "usage:
                 [--source <encoding>] [--invalid replace-and-count|abort]
                 [--platform-prior chinese-windows|other]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f05 --file <path>... (--target-bytes N | --rows N) --output-dir <dir>
+                --sample-bytes <bytes> [--delimiter ,|;|tab||]
+                [--no-keep-header] [--plan-id ULID] [--protected-dir <dir>]...
+                [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
   batchdesk undo --plan <planId> --journal <file> [--retention-days N] [--json]
@@ -113,11 +119,23 @@ f04 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
+f05 options:
+  --file PATH             repeatable source CSV file
+  --target-bytes N        target part body size in bytes (record-aligned; §5.3)
+  --rows N                records per part (header excluded; §5.3)
+  --delimiter D           , | ; | tab | pipe; omitted = sniff from the sample window
+  --sample-bytes BYTES    head window for delimiter sniffing/encoding (explicit; §5.2)
+  --no-keep-header        do not repeat the header in every part (default: repeated)
+  --output-dir DIR        directory for generated parts
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --json                  machine-readable plan output
+
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place (backup in quarantine, undo restores from the Journal);
   f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   f04 entries merge sources in order into one output with a single BOM;
+  f05 entries write CSV parts on record boundaries, repeating the header by default;
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -161,6 +179,9 @@ fn main() {
     }
     if args[1] == "f04" {
         std::process::exit(run_f04(&args));
+    }
+    if args[1] == "f05" {
+        std::process::exit(run_f05(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -1168,6 +1189,226 @@ fn run_f04(args: &[String]) -> i32 {
         files: plan_files,
     };
     match plan_f04(input) {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f05(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut target_bytes = None;
+    let mut rows = None;
+    let mut output_dir = None;
+    let mut delimiter = None;
+    let mut keep_header = true;
+    let mut sample_window = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--target-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target-bytes requires a byte count");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => target_bytes = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --target-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--rows" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --rows requires a record count");
+                };
+                match value.parse::<u64>() {
+                    Ok(count) if count > 0 => rows = Some(count),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --rows must be a positive record count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires , ; tab | or pipe");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--no-keep-header" => keep_header = false,
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires a window size");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => sample_window = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f05 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: f05 requires at least one --file <path>");
+    }
+    let basis = match (target_bytes, rows) {
+        (Some(bytes), None) => CsvSplitBasis::Bytes(bytes),
+        (None, Some(count)) => CsvSplitBasis::Rows(count),
+        _ => {
+            return input_error(
+                "E1001: f05 requires exactly one of --target-bytes <n> or --rows <n>",
+            )
+        }
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: f05 requires --sample-bytes <n> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    let Some(output_dir) = output_dir else {
+        return input_error("E1001: f05 requires --output-dir <dir>");
+    };
+    let output_dir = make_absolute(&output_dir);
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    let mut existing_targets = Vec::new();
+    for path in &files {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: f05 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let layout = match csv_split_layout(
+            &absolute,
+            CsvScanOptions {
+                delimiter,
+                keep_header,
+                basis,
+                sample_window_bytes: sample_window,
+            },
+        ) {
+            Ok(layout) => layout,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot scan CSV for split layout ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let file_name = absolute
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file");
+        let total = layout.shards.len() as u32;
+        for shard in &layout.shards {
+            let target = output_dir.join(kernel::split::shard_name(file_name, shard.index, total));
+            if target.exists() {
+                existing_targets.push(target.to_string_lossy().into_owned());
+            }
+        }
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanF05File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            group_id: new_ulid("f05"),
+            layout,
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f05"));
+    let planned = plan_f05(PlanF05Input {
+        plan_id,
+        basis,
+        keep_header,
+        delimiter,
+        output_dir: output_dir.to_string_lossy().into_owned(),
+        protected_dirs,
+        case_sense,
+        existing_targets,
+        files: plan_files,
+    });
+    match planned {
         Ok(plan) => {
             if json {
                 print_plan_json(&plan);

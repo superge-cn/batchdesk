@@ -4,6 +4,7 @@
 //! The kernel remains pure and receives these adapters through its ports.
 
 pub mod config_store;
+pub mod csv;
 pub mod fs;
 pub mod ids;
 pub mod journal;

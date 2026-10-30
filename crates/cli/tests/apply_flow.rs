@@ -765,6 +765,92 @@ fn f04_plan_apply_and_undo_merge_with_encoding_unification() {
 }
 
 #[test]
+fn f05_plan_apply_and_undo_repeats_the_csv_header() {
+    let dir = TempDir::new();
+    let source = dir.0.join("data.csv");
+    let parts = dir.0.join("parts");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&source, b"h1,h2\n1,2\n3,4\n5,6\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f05",
+        "--file",
+        path_text(&source),
+        "--rows",
+        "2",
+        "--output-dir",
+        path_text(&parts),
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f05 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f05");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(document["entries"][0]["action"], "split");
+    assert_eq!(document["entries"][0]["range"]["start"], 6);
+    assert_eq!(document["entries"][0]["csv"]["header"]["end"], 6);
+    assert_eq!(document["entries"][0]["csv"]["rows"], 2);
+    assert_eq!(document["entries"][1]["range"]["start"], 14);
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f05 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(
+        fs::read(parts.join("data.1.csv")).unwrap(),
+        b"h1,h2\n1,2\n3,4\n",
+        "every part repeats the header"
+    );
+    assert_eq!(fs::read(parts.join("data.2.csv")).unwrap(), b"h1,h2\n5,6\n");
+    assert_eq!(fs::read(&source).unwrap(), b"h1,h2\n1,2\n3,4\n5,6\n");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f05 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 2);
+    assert!(!parts.join("data.1.csv").exists());
+    assert!(!parts.join("data.2.csv").exists());
+}
+
+#[test]
 fn f04_detects_encodings_and_writes_one_bom() {
     let dir = TempDir::new();
     let first = dir.0.join("first.txt");

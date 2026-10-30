@@ -8,6 +8,7 @@
 pub mod apply;
 pub mod config;
 pub mod conflict;
+pub mod csv;
 pub mod duplicate;
 pub mod encoding;
 pub mod error;

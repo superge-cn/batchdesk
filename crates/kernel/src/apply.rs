@@ -947,6 +947,7 @@ mod tests {
             expected: None,
             range: None,
             merge: None,
+            csv: None,
         }
     }
 
