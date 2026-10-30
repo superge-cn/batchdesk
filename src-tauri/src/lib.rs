@@ -24,6 +24,7 @@ use platform::config_store::ConfigStore;
 use platform::fs::CliFsAdapter;
 use platform::ids::{new_plan_id, new_ulid};
 use platform::journal::FileJournal;
+use platform::oplog::SqliteOperationLog;
 use platform::preflight::{
     available_space, is_network_path, long_path_supported, path_check, probe_root, probe_unc,
     same_volume, DEFAULT_DISK_MARGIN_FLOOR_BYTES, DEFAULT_DISK_MARGIN_RATIO,
@@ -99,6 +100,8 @@ struct DataPaths {
     quarantine_dir: PathBuf,
     journal_path: PathBuf,
     queue_path: PathBuf,
+    /// C17a 操作日志（审计轨，ADR-0013）。
+    oplog_path: PathBuf,
     config_dir: PathBuf,
 }
 
@@ -115,6 +118,7 @@ impl DataPaths {
             quarantine_dir,
             journal_path: base.join("journal.jsonl"),
             queue_path: base.join("tasks.json"),
+            oplog_path: base.join("oplog.sqlite3"),
             config_dir,
         })
     }
@@ -427,13 +431,30 @@ fn cleanupRetention(
     validate_retention_days(days).map_err(IpcError::from)?;
     let mut journal =
         FileJournal::open(state.paths.journal_path.clone()).map_err(IpcError::from)?;
-    cleanup(
+    let mut outcome = cleanup(
         &mut journal,
         &state.paths.quarantine_dir,
         days,
         apply.unwrap_or(false),
     )
-    .map_err(IpcError::from)
+    .map_err(IpcError::from)?;
+    // C17a 操作日志随保留期清理（设计 10 §4：天数即 logging.retentionDays，
+    // 不把日志保留期当撤销窗口）；清理失败降级诊断输出，不影响演练结果。
+    if apply.unwrap_or(false) {
+        match SqliteOperationLog::open(state.paths.oplog_path.clone()) {
+            Ok((mut oplog, warning)) => {
+                if let Some(warning) = warning {
+                    eprintln!("{}: {}", warning.code, warning.message);
+                }
+                match oplog.purge_before(&outcome.cutoff) {
+                    Ok(removed) => outcome.removed_log_records = removed,
+                    Err(error) => eprintln!("{}: {}", error.code, error.message),
+                }
+            }
+            Err(error) => eprintln!("{}: {}", error.code, error.message),
+        }
+    }
+    Ok(outcome)
 }
 
 // ── 配置 / 界面状态 / 处理模板（设计 03 §7）──────────────────────────
@@ -801,11 +822,13 @@ pub fn run() {
             let handle = app.handle().clone();
             // LicenseService 装配点（方案 13.8：接口不变、只换实现）：
             // 单机版注入 AlwaysAllow；商业版/QuotaBased 只替换此处实现。
+            let config_dir = paths.config_dir.clone();
             let tasks = TaskQueue::with_license(
                 TaskPaths {
                     quarantine_dir: paths.quarantine_dir.clone(),
                     journal_path: paths.journal_path.clone(),
                     queue_path: paths.queue_path.clone(),
+                    oplog_path: paths.oplog_path.clone(),
                 },
                 Arc::new(move |event, payload| {
                     if let Err(error) = handle.emit(event, payload) {
@@ -813,6 +836,15 @@ pub fn run() {
                     }
                 }),
                 Arc::new(kernel::license::AlwaysAllowLicense),
+                // C17a：写入前实时读 `logging.logFullPaths`（03 §4.1，默认 false）。
+                Arc::new(move || {
+                    ConfigStore::new(config_dir.clone())
+                        .load_config()
+                        .ok()
+                        .and_then(|load| load.document.scopes.logging)
+                        .and_then(|logging| logging.log_full_paths)
+                        .unwrap_or(false)
+                }),
             );
             app.manage(AppState::new(paths, tasks));
             Ok(())

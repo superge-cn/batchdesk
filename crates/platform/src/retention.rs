@@ -47,6 +47,9 @@ pub struct CleanupOutcome {
     pub expired_quarantine_files: usize,
     pub removed_entries: usize,
     pub removed_files: usize,
+    /// C17a 操作日志随保留期清理的记录数（设计 10 §4；桌面壳填写，CLI 恒 0）。
+    #[serde(default)]
+    pub removed_log_records: usize,
     pub failed: Vec<CleanupFailure>,
 }
 
@@ -149,6 +152,7 @@ pub fn cleanup(
         expired_quarantine_files,
         removed_entries,
         removed_files,
+        removed_log_records: 0,
         failed,
     })
 }

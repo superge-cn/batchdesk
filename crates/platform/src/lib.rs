@@ -7,6 +7,7 @@ pub mod config_store;
 pub mod fs;
 pub mod ids;
 pub mod journal;
+pub mod oplog;
 pub mod preflight;
 pub mod protected;
 pub mod retention;

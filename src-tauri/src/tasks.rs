@@ -18,7 +18,7 @@ use kernel::apply::{
 };
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
-use kernel::journal::JournalStore;
+use kernel::journal::{FsOp, JournalStore};
 use kernel::license::LicenseService;
 use kernel::path::ProtectedDir;
 use kernel::plan::PlanDocument;
@@ -26,6 +26,7 @@ use kernel::progress::{CancelToken, ProgressEvent, ProgressPhase, ProgressSink};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::new_ulid;
 use platform::journal::FileJournal;
+use platform::oplog::{OperationLogRecord, SqliteOperationLog};
 use platform::retention::DEFAULT_RETENTION_DAYS;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -101,6 +102,8 @@ pub struct TaskPaths {
     pub journal_path: PathBuf,
     /// 未完成任务快照（S03）：只落非终态任务，重启后标记为 interrupted。
     pub queue_path: PathBuf,
+    /// C17a 操作日志（审计轨）SQLite 路径（设计 10 §1、ADR-0013）。
+    pub oplog_path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +227,11 @@ struct Inner {
     emit: EventEmitter,
     /// LicenseService 注入（方案 13.8：接口不变、只换实现）。
     license: Arc<dyn LicenseService>,
+    /// C17a 操作日志连接；`None` 表示打开失败/高版本（E1007），审计轨降级，
+    /// 批处理不受阻（ADR-0013）。
+    oplog: Mutex<Option<SqliteOperationLog>>,
+    /// `logging.logFullPaths`（03 §4.1）读取口；默认 false，写入前实时取值。
+    log_full_paths: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 struct Job {
@@ -258,13 +266,14 @@ struct JobResult {
 }
 
 impl TaskQueue {
-    /// 唯一构造器即 LicenseService 注入口（方案 13.8：接口不变、只换实现）：
-    /// 单机版由装配点注入 AlwaysAllow，商业版/QuotaBased 只换注入实现，
-    /// 队列与 kernel 代码不变。
+    /// 唯一构造器即注入口（方案 13.8：接口不变、只换实现）：
+    /// - `license`：单机版注入 AlwaysAllow，商业版/QuotaBased 只换注入实现；
+    /// - `log_full_paths`：`logging.logFullPaths` 读取口（03 §4.1，默认 false）。
     pub fn with_license(
         paths: TaskPaths,
         emit: EventEmitter,
         license: Arc<dyn LicenseService>,
+        log_full_paths: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
         let _ = std::fs::create_dir_all(&paths.quarantine_dir);
         if let Some(parent) = paths.journal_path.parent() {
@@ -273,6 +282,21 @@ impl TaskQueue {
         if let Some(parent) = paths.queue_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        let oplog = match SqliteOperationLog::open(paths.oplog_path.clone()) {
+            Ok((log, warning)) => {
+                if let Some(warning) = warning {
+                    eprintln!("{}: {}", warning.code, warning.message);
+                }
+                Some(log)
+            }
+            Err(error) => {
+                eprintln!(
+                    "{}: {} (operation log disabled; batch processing is unaffected)",
+                    error.code, error.message
+                );
+                None
+            }
+        };
         let mut loaded = load_queue(&paths.queue_path);
         let mut tasks = HashMap::new();
         let mut order = Vec::new();
@@ -306,6 +330,8 @@ impl TaskQueue {
             paths,
             emit,
             license,
+            oplog: Mutex::new(oplog),
+            log_full_paths,
         });
         let (sender, receiver) = mpsc::channel::<Job>();
         let worker = Arc::clone(&inner);
@@ -750,6 +776,20 @@ impl TaskQueue {
 }
 
 impl Inner {
+    /// 审计轨尽力而为（ADR-0013）：写失败/未启用时降级 stderr，不阻断批处理。
+    fn write_oplog(&self, records: Vec<OperationLogRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        let mut guard = self.oplog.lock().unwrap();
+        let Some(oplog) = guard.as_mut() else {
+            return;
+        };
+        if let Err(error) = oplog.append_batch(&records) {
+            eprintln!("{}: {}", error.code, error.message);
+        }
+    }
+
     fn emit(&self, event: &str, payload: Value) {
         (self.emit)(event, payload);
     }
@@ -1040,17 +1080,31 @@ fn run_apply(
         cancel: Some(control.as_ref()),
     };
     match apply_plan(&plan.plan, &options, &mut context) {
-        Ok(outcome) => JobResult {
-            state: match outcome.state {
-                ApplyState::Completed => TaskState::Completed,
-                ApplyState::PartialFailed => TaskState::PartialFailed,
-                ApplyState::Failed => TaskState::Failed,
-                ApplyState::Cancelled => TaskState::Cancelled,
-            },
-            report: outcome.report,
-            message: None,
-        },
-        Err(error) => failed_result(plan_id, task_id, error),
+        Ok(outcome) => {
+            let result = JobResult {
+                state: match outcome.state {
+                    ApplyState::Completed => TaskState::Completed,
+                    ApplyState::PartialFailed => TaskState::PartialFailed,
+                    ApplyState::Failed => TaskState::Failed,
+                    ApplyState::Cancelled => TaskState::Cancelled,
+                },
+                report: outcome.report,
+                message: None,
+            };
+            let forward = journal
+                .entries_for_plan(&plan_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| (entry.entry_id, fs_op_paths(&entry.forward)))
+                .collect();
+            log_apply_oplog(inner, task_id, &plan.plan, &result, &forward);
+            result
+        }
+        Err(error) => {
+            let result = failed_result(plan_id.clone(), task_id, error);
+            log_failed_oplog(inner, task_id, &plan_id, &result);
+            result
+        }
     }
 }
 
@@ -1114,7 +1168,7 @@ fn run_undo(
             } else {
                 TaskState::Failed
             };
-            JobResult {
+            let result = JobResult {
                 state,
                 report: ApplyReport {
                     plan_id: plan_id.to_string(),
@@ -1127,9 +1181,19 @@ fn run_undo(
                 } else {
                     None
                 },
-            }
+            };
+            let forward = entries
+                .iter()
+                .map(|entry| (entry.entry_id.clone(), fs_op_paths(&entry.forward)))
+                .collect();
+            log_undo_oplog(inner, task_id, plan_id, &result, &forward);
+            result
         }
-        Err(error) => failed_result(plan_id.to_string(), task_id, error),
+        Err(error) => {
+            let result = failed_result(plan_id.to_string(), task_id, error);
+            log_failed_oplog(inner, task_id, plan_id, &result);
+            result
+        }
     }
 }
 
@@ -1144,6 +1208,277 @@ fn failed_result(plan_id: String, task_id: &str, error: KernelError) -> JobResul
         },
         message: Some(format!("{}: {}", error.code, error.message)),
     }
+}
+
+fn task_state_str(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Queued => "queued",
+        TaskState::Running => "running",
+        TaskState::Paused => "paused",
+        TaskState::Cancelling => "cancelling",
+        TaskState::Interrupted => "interrupted",
+        TaskState::Completed => "completed",
+        TaskState::PartialFailed => "partial-failed",
+        TaskState::Failed => "failed",
+        TaskState::Cancelled => "cancelled",
+    }
+}
+
+fn split_path(path: &str) -> (Option<String>, Option<String>) {
+    let path = Path::new(path);
+    (
+        path.parent()
+            .map(|value| value.to_string_lossy().into_owned()),
+        path.file_name()
+            .map(|value| value.to_string_lossy().into_owned()),
+    )
+}
+
+/// Journal forward 操作的（源，目标）路径；WriteAtomic 视为同路径替换。
+fn fs_op_paths(op: &FsOp) -> (String, String) {
+    match op {
+        FsOp::Rename { from, to } | FsOp::Copy { from, to } | FsOp::Quarantine { from, to } => {
+            (from.clone(), to.clone())
+        }
+        FsOp::WriteAtomic { path, .. } => (path.clone(), path.clone()),
+    }
+}
+
+fn task_started_at(inner: &Arc<Inner>, task_id: &str) -> Option<String> {
+    let state = inner.state.lock().unwrap();
+    state
+        .tasks
+        .get(task_id)
+        .and_then(|record| record.summary.started_at.clone())
+}
+
+/// C17a 记录构造（设计 10 §2、方案 §10.2 字段集；ADR-0013）。
+/// 拆分列（所在目录/旧名/新名）恒写；完整路径两列仅 `logFullPaths` 开启时写。
+#[allow(clippy::too_many_arguments)]
+fn oplog_record(
+    task_id: &str,
+    plan_id: &str,
+    entry_id: Option<String>,
+    op_kind: &str,
+    phase: &str,
+    status: &str,
+    code: Option<String>,
+    source: Option<&str>,
+    target: Option<&str>,
+    overall_completed: bool,
+    detail: Option<String>,
+    ts: &str,
+    log_full_paths: bool,
+) -> OperationLogRecord {
+    let (dir_name, old_name) = source.map(split_path).unwrap_or((None, None));
+    let new_name = target
+        .and_then(|value| Path::new(value).file_name())
+        .map(|value| value.to_string_lossy().into_owned());
+    let (before_path, after_path) = if log_full_paths {
+        (source.map(str::to_string), target.map(str::to_string))
+    } else {
+        (None, None)
+    };
+    OperationLogRecord {
+        id: new_ulid("oplog"),
+        ts: ts.to_string(),
+        task_id: task_id.to_string(),
+        plan_id: plan_id.to_string(),
+        entry_id,
+        op_kind: op_kind.to_string(),
+        phase: phase.to_string(),
+        status: status.to_string(),
+        code,
+        dir_name,
+        old_name,
+        new_name,
+        before_path,
+        after_path,
+        overall_completed,
+        detail,
+    }
+}
+
+/// 任务收尾时的审计落库（ADR-0013：单事务批量写；失败降级 stderr 不阻断）。
+fn log_apply_oplog(
+    inner: &Arc<Inner>,
+    task_id: &str,
+    plan: &PlanDocument,
+    result: &JobResult,
+    forward: &HashMap<String, (String, String)>,
+) {
+    let log_full_paths = (inner.log_full_paths)();
+    let overall = result.state == TaskState::Completed;
+    let now = now_rfc3339();
+    let started = task_started_at(inner, task_id).unwrap_or_else(|| now.clone());
+    let mut records = vec![oplog_record(
+        task_id,
+        &plan.plan_id,
+        None,
+        &plan.kind,
+        "start",
+        "ok",
+        None,
+        None,
+        None,
+        overall,
+        None,
+        &started,
+        log_full_paths,
+    )];
+    for entry in &result.report.entries {
+        let (source, target) = forward
+            .get(&entry.entry_id)
+            .map(|(from, to)| (Some(from.as_str()), Some(to.as_str())))
+            .unwrap_or((None, None));
+        records.push(oplog_record(
+            task_id,
+            &plan.plan_id,
+            Some(entry.entry_id.clone()),
+            &plan.kind,
+            "entry",
+            entry.status.as_str(),
+            entry.error.as_ref().map(|error| error.code.clone()),
+            source,
+            target,
+            overall,
+            None,
+            &now,
+            log_full_paths,
+        ));
+    }
+    records.push(oplog_record(
+        task_id,
+        &plan.plan_id,
+        None,
+        &plan.kind,
+        "finish",
+        if overall { "ok" } else { "failed" },
+        None,
+        None,
+        None,
+        overall,
+        Some(format!("overall state: {}", task_state_str(result.state))),
+        &now,
+        log_full_paths,
+    ));
+    inner.write_oplog(records);
+}
+
+/// 撤销审计：phase=rollback，成功恢复记 `reverted`（设计 01 §4.3 撤销报告注）。
+fn log_undo_oplog(
+    inner: &Arc<Inner>,
+    task_id: &str,
+    plan_id: &str,
+    result: &JobResult,
+    forward: &HashMap<String, (String, String)>,
+) {
+    let log_full_paths = (inner.log_full_paths)();
+    let overall = result.state == TaskState::Completed;
+    let now = now_rfc3339();
+    let started = task_started_at(inner, task_id).unwrap_or_else(|| now.clone());
+    let kind = journal_plan_kind(&inner.paths, plan_id);
+    let mut records = vec![oplog_record(
+        task_id,
+        plan_id,
+        None,
+        &kind,
+        "start",
+        "ok",
+        None,
+        None,
+        None,
+        overall,
+        None,
+        &started,
+        log_full_paths,
+    )];
+    for entry in &result.report.entries {
+        let status = match entry.status {
+            ApplyStatus::Ok => "reverted",
+            other => other.as_str(),
+        };
+        let (source, target) = forward
+            .get(&entry.entry_id)
+            .map(|(from, to)| (Some(from.as_str()), Some(to.as_str())))
+            .unwrap_or((None, None));
+        records.push(oplog_record(
+            task_id,
+            plan_id,
+            Some(entry.entry_id.clone()),
+            &kind,
+            "rollback",
+            status,
+            entry.error.as_ref().map(|error| error.code.clone()),
+            source,
+            target,
+            overall,
+            None,
+            &now,
+            log_full_paths,
+        ));
+    }
+    records.push(oplog_record(
+        task_id,
+        plan_id,
+        None,
+        &kind,
+        "finish",
+        if overall { "ok" } else { "failed" },
+        None,
+        None,
+        None,
+        overall,
+        Some(format!("overall state: {}", task_state_str(result.state))),
+        &now,
+        log_full_paths,
+    ));
+    inner.write_oplog(records);
+}
+
+/// 编排级失败（如 Journal 不可写）：只落批次 start/finish 与错误码。
+fn log_failed_oplog(inner: &Arc<Inner>, task_id: &str, plan_id: &str, result: &JobResult) {
+    let log_full_paths = (inner.log_full_paths)();
+    let now = now_rfc3339();
+    let kind = journal_plan_kind(&inner.paths, plan_id);
+    let code = result
+        .report
+        .entries
+        .iter()
+        .find_map(|entry| entry.error.as_ref().map(|error| error.code.clone()));
+    let records = vec![
+        oplog_record(
+            task_id,
+            plan_id,
+            None,
+            &kind,
+            "start",
+            "ok",
+            None,
+            None,
+            None,
+            false,
+            None,
+            &now,
+            log_full_paths,
+        ),
+        oplog_record(
+            task_id,
+            plan_id,
+            None,
+            &kind,
+            "finish",
+            "failed",
+            code,
+            None,
+            None,
+            false,
+            result.message.clone(),
+            &now,
+            log_full_paths,
+        ),
+    ];
+    inner.write_oplog(records);
 }
 
 fn load_queue(path: &Path) -> PersistedQueue {
@@ -1314,11 +1649,17 @@ mod tests {
             quarantine_dir: temp.0.join("quarantine"),
             journal_path: temp.0.join("journal.jsonl"),
             queue_path: temp.0.join("tasks.json"),
+            oplog_path: temp.0.join("oplog.sqlite3"),
         }
     }
 
     fn test_queue(paths: TaskPaths, emit: EventEmitter) -> TaskQueue {
-        TaskQueue::with_license(paths, emit, Arc::new(kernel::license::AlwaysAllowLicense))
+        TaskQueue::with_license(
+            paths,
+            emit,
+            Arc::new(kernel::license::AlwaysAllowLicense),
+            Arc::new(|| false),
+        )
     }
 
     fn write_snapshot(paths: &TaskPaths, task_id: &str, plan: &PlanDocument, state: TaskState) {
@@ -1373,6 +1714,7 @@ mod tests {
                 quarantine_dir: quarantine.clone(),
                 journal_path: journal.clone(),
                 queue_path: queue_path.clone(),
+                oplog_path: temp.0.join("oplog.sqlite3"),
             },
             Arc::new(move |event, payload| {
                 sink.lock().unwrap().push((event.to_string(), payload));
@@ -1395,7 +1737,7 @@ mod tests {
         assert!(!second.exists());
         assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 2);
 
-        let undo_id = queue.enqueue_undo(plan_id);
+        let undo_id = queue.enqueue_undo(plan_id.clone());
         let undone = wait_terminal(&queue, &undo_id);
         assert_eq!(undone.summary.state, TaskState::Completed);
         assert_eq!(undone.entries.len(), 2);
@@ -1408,6 +1750,37 @@ mod tests {
             persisted.tasks.is_empty(),
             "terminal tasks must not be persisted for crash recovery"
         );
+
+        // C17a：操作日志落库——批次 start/finish、逐条 entry、undo 记 reverted；
+        // logFullPaths 默认关闭时不写完整路径（ADR-0013）。
+        let (oplog, _) = SqliteOperationLog::open(queue.inner.paths.oplog_path.clone()).unwrap();
+        let records = oplog.entries_for_plan(&plan_id).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.phase == "entry" && record.status == "ok")
+                .count(),
+            2
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.phase == "rollback" && record.status == "reverted")
+                .count(),
+            2
+        );
+        assert!(records
+            .iter()
+            .any(|record| record.phase == "finish" && record.overall_completed));
+        assert!(records
+            .iter()
+            .all(|record| record.before_path.is_none() && record.after_path.is_none()));
+        assert!(records
+            .iter()
+            .filter(|record| record.phase == "entry")
+            .all(|record| record.dir_name.is_some()
+                && record.old_name.is_some()
+                && record.new_name.is_some()));
 
         let events = events.lock().unwrap();
         assert!(events.iter().any(|(name, _)| name == EVENT_PROGRESS));
@@ -1430,6 +1803,7 @@ mod tests {
                 quarantine_dir: temp.0.join("quarantine"),
                 journal_path: temp.0.join("journal.jsonl"),
                 queue_path: temp.0.join("tasks.json"),
+                oplog_path: temp.0.join("oplog.sqlite3"),
             },
             Arc::new(move |event, payload| {
                 sink.lock().unwrap().push((event.to_string(), payload));
@@ -1717,6 +2091,7 @@ mod tests {
             quarantine_dir: temp.0.join("quarantine"),
             journal_path: journal_dir,
             queue_path: temp.0.join("tasks.json"),
+            oplog_path: temp.0.join("oplog.sqlite3"),
         };
         fs::create_dir_all(&paths.quarantine_dir).unwrap();
         let queue = test_queue(paths, Arc::new(|_, _| {}));
@@ -1744,6 +2119,41 @@ mod tests {
             retried.summary.total, 2,
             "every entry was requeued after an orchestration-level failure"
         );
+    }
+
+    #[test]
+    fn apply_completes_when_operation_log_is_unavailable() {
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("a.txt");
+        fs::write(&file, b"same").unwrap();
+        // 预置高版本操作日志（E1007）→ 审计轨降级，批处理不受阻（ADR-0013）。
+        let oplog_path = temp.0.join("oplog.sqlite3");
+        let connection = rusqlite::Connection::open(&oplog_path).unwrap();
+        connection
+            .execute_batch("PRAGMA user_version = 99")
+            .unwrap();
+        drop(connection);
+
+        let plan = plan_for(&new_ulid("oplog-degraded"), std::slice::from_ref(&file));
+        let queue = test_queue(paths_for(&temp), Arc::new(|_, _| {}));
+        let apply_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &apply_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        assert!(!file.exists(), "the batch itself must still run");
+        match SqliteOperationLog::open(oplog_path) {
+            Err(error) => assert_eq!(error.code, "E1007"),
+            Ok(_) => panic!("the degraded operation log stays unusable"),
+        }
     }
 
     #[test]

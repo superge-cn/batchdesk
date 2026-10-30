@@ -25,3 +25,6 @@ batchdesk-platform = { path = "../crates/platform" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+rusqlite = "0.41.1"
