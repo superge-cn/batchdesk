@@ -44,4 +44,4 @@
 
 - 代码落点：`crates/platform/src/oplog.rs`（存储与迁移）、`src-tauri/src/tasks.rs`（事务写入）、`platform::retention`/`cleanupRetention`（保留期清理）；
 - 本 ADR 同时解决设计 10 §7 第 1 项待决（schema/索引/迁移策略）；第 2 项（诊断日志轮转参数）与本 ADR 无关，另行决策；
-- CLI 侧暂不落操作日志（OQ-30 实验命令，设计 13 v0.4 §2.1）。
+- CLI 侧暂不落操作日志（OQ-30 实验命令，设计 13 v0.5 §2.1）。

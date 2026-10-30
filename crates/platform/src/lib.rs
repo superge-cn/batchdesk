@@ -10,6 +10,7 @@ pub mod csv_range;
 pub mod fs;
 pub mod ids;
 pub mod journal;
+pub mod listing;
 pub mod oplog;
 pub mod preflight;
 pub mod protected;

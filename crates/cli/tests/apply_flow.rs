@@ -1572,6 +1572,132 @@ fn f09_rejects_an_invalid_range() {
 }
 
 #[test]
+fn f10_plan_apply_and_undo_writes_directory_listing() {
+    let dir = TempDir::new();
+    let root = dir.0.join("tree");
+    let sub = root.join("sub");
+    let output = dir.0.join("list.csv");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(root.join("a.txt"), b"abc").unwrap();
+    fs::write(sub.join("b.txt"), b"hello").unwrap();
+
+    let plan = batchdesk(&[
+        "f10",
+        "--root",
+        path_text(&root),
+        "--output",
+        path_text(&output),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f10 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f10");
+    assert_eq!(document["entries"][0]["action"], "listing");
+    assert_eq!(document["params"]["format"], "csv");
+    assert_eq!(document["params"]["includeFiles"], true);
+    assert_eq!(document["params"]["includeDirs"], true);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f10 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let bytes = fs::read(&output).unwrap();
+    assert_eq!(&bytes[..3], b"\xEF\xBB\xBF");
+    let text = String::from_utf8(bytes[3..].to_vec()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "相对路径,名称,类型,大小,修改时间,层级");
+    let a = lines
+        .iter()
+        .find(|line| line.starts_with("a.txt,"))
+        .unwrap();
+    let sub_line = lines.iter().find(|line| line.starts_with("sub,")).unwrap();
+    let b = lines
+        .iter()
+        .find(|line| line.starts_with("sub/b.txt,"))
+        .unwrap();
+    assert!(a.contains(",文件,3,"));
+    assert!(sub_line.contains(",目录,0,"));
+    assert!(b.contains(",文件,5,"));
+    assert!(a.ends_with(",1"));
+    assert!(sub_line.ends_with(",1"));
+    assert!(b.ends_with(",2"));
+    let fields: Vec<&str> = a.split(',').collect();
+    assert_eq!(fields.len(), 6);
+    assert!(!fields[4].is_empty(), "mtime must be present");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!output.exists());
+}
+
+#[test]
+fn f10_empty_directory_and_target_inside_root_are_reported() {
+    let dir = TempDir::new();
+    let empty = dir.0.join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    let output = dir.0.join("empty.csv");
+    let plan = batchdesk(&[
+        "f10",
+        "--root",
+        path_text(&empty),
+        "--output",
+        path_text(&output),
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "empty-directory"));
+
+    let inside = empty.join("list.csv");
+    let plan = batchdesk(&[
+        "f10",
+        "--root",
+        path_text(&empty),
+        "--output",
+        path_text(&inside),
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["blocked"]["code"], "E1002");
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

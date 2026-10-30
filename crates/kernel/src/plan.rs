@@ -107,6 +107,8 @@ pub enum PlanAction {
     CsvExtract,
     /// F08/F09 CSV 行抽取产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvRows,
+    /// F10 目录清单产物（1:1，每个根目录一条 entry；方案 §5.15）。
+    Listing,
 }
 
 impl PlanAction {
@@ -125,6 +127,7 @@ impl PlanAction {
             Self::Merge => "merge",
             Self::CsvExtract => "csv-extract",
             Self::CsvRows => "csv-rows",
+            Self::Listing => "listing",
         }
     }
 }

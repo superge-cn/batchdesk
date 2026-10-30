@@ -84,6 +84,22 @@ pub enum CaseSense {
 pub trait FsAdapter: Send + Sync {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError>;
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError>;
+    /// 以流式回调写入目标（临时文件＋原子改名）；F10 目录清单专用。
+    ///
+    /// 回调只负责向 writer 写内容，目标冲突已在调用方解析；适配层不得整段缓存
+    /// 输出。回调返回错误时清理临时文件并原样返回。适配层不支持时返回 E5001。
+    fn write_atomic_with(
+        &self,
+        _path: &str,
+        _write: &mut dyn FnMut(&mut dyn std::io::Write) -> Result<(), KernelError>,
+    ) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "streaming atomic write is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
     fn rename(
         &self,
         from: &str,

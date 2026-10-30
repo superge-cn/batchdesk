@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.16（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.17（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -97,6 +97,14 @@ pub trait FsAdapter: Send + Sync {
 pub trait ProgressSink: Send + Sync { fn report(&self, ev: ProgressEvent); }
 pub trait CancelToken: Send + Sync { fn is_cancelled(&self) -> bool; }
 
+/// F10 目录清单的流式遍历/写出端口（apply 期由壳层/平台注入）。
+/// ListingOptions { includeFiles, includeDirs }
+/// ListingStats { files, dirs, placeholders, skipped, maxDepth }
+pub trait DirectoryLister: Send + Sync {
+    fn write_listing(&self, root: &str, options: &ListingOptions, out: &mut dyn std::io::Write)
+        -> Result<ListingStats, KernelError>;
+}
+
 /// 授权端口（§12.4 / §13.8）。三种形态只换实现，接口与调用点不变。
 pub trait LicenseService: Send + Sync {
     fn capability(&self, op: OperationKind) -> Capability;  // Allow | Deny(reason) | Quota{used, limit}
@@ -127,6 +135,7 @@ pub fn plan_f06(input: PlanF06Input) -> PlanDocument;                  // §5.4 
 pub fn plan_f07(input: PlanF07Input) -> PlanDocument;                  // §5.15 CSV 抽取指定列
 pub fn plan_f08(input: PlanF08Input) -> PlanDocument;                  // §5.15 CSV 抽取指定数量行
 pub fn plan_f09(input: PlanF09Input) -> PlanDocument;                  // §5.15 CSV 抽取指定位置行（X–Y）
+pub fn plan_f10(input: PlanF10Input) -> PlanDocument;                  // §5.15 生成目录清单（CSV）
 pub fn plan_f01(input: PlanF01Input) -> PlanDocument;                  // §5.1 按字节分片
 pub fn plan_f02(input: PlanF02Input) -> PlanDocument;                  // §5.15 按行数分片
 pub fn plan_f03(input: PlanF03Input) -> PlanDocument;                  // §5.15 按份数分片
@@ -306,6 +315,7 @@ interface PlanDocument {
   planId: string;            // ULID
   kind: OperationKind;       // 与功能编号 F/C 对应（§3.2 清单）
   params: Record<string, unknown>;  // 生成计划时的参数快照（§7.1 溯源）
+                             // listing 计划：format="csv"、includeFiles/includeDirs、targetEncoding="utf-8-bom"
   entries: PlanEntry[];
   stats: { total: number; conflict: number; warning: number; blocked: number };
   warnings: PlanWarning[];   // 预警，不阻断；结构见 §5.1 核对表
@@ -316,8 +326,8 @@ interface PlanEntry {
   target?: string;           // 无目标动作（如删除→隔离）可省
   action: "rename" | "move" | "copy" | "archive" | "extract" | "create-dir"
         | "transcode" | "edit-content" | "delete" | "split" | "merge"
-        | "csv-extract" | "csv-rows";
-                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01/F02/F03）、merge=TXT 合并（F04，单条汇总 N 个输入）/CSV 合并（F06，携带 `csvMerge` 载荷）、csv-extract=CSV 抽取指定列（F07，1:1，携带 `csvExtract` 载荷）、csv-rows=CSV 行抽取（F08 数量/F09 位置区间，1:1，携带 `csvRows` 载荷）；追加式枚举，只增不改
+        | "csv-extract" | "csv-rows" | "listing";
+                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01/F02/F03）、merge=TXT 合并（F04，单条汇总 N 个输入）/CSV 合并（F06，携带 `csvMerge` 载荷）、csv-extract=CSV 抽取指定列（F07，1:1，携带 `csvExtract` 载荷）、csv-rows=CSV 行抽取（F08 数量/F09 位置区间，1:1，携带 `csvRows` 载荷）、listing=目录清单（F10，1:1，source=根目录、target=清单文件，内容在 apply 期流式生成）；追加式枚举，只增不改
   relation?: PlanRelation;   // 1:N / N:1 分组（拆分/合并/压缩解压），见下方语义（F04 由 §5 的 `merge` 载荷表达、F06 由 `csvMerge` 载荷表达；F07/F08 为 1:1，均不设 relation）
   reason: string;            // 预览面板展示（§6.4）
   conflict?: ConflictInfo;   // §5.13 三类冲突，预览期全部暴露；默认处置=跳过（不变量 7）
@@ -332,6 +342,7 @@ interface PlanEntry {
                              // csvMerge 条目：size=首个输入大小，algorithm="size"；全部输入在 §csvMerge.files 中逐项复核
                              // csvExtract 条目：size=源文件大小，algorithm="size"；apply 复核源大小并在执行期重验表头
                              // csvRows 条目：size=源文件大小，algorithm="size"；apply 复核源大小并在执行期重验表头
+                             // listing 条目：省略 expected；目录树在 apply 期重新遍历，清单是快照
                              // F05 的 split 条目：size=表头区间字节数＋该片记录区间字节数，algorithm="csv-byte-range"
   range?: { start: number; end: number };
                              // 追加式可选字段：分片在源文件中的字节区间（左闭右开），仅 split 使用；
@@ -436,7 +447,7 @@ interface ApplyReport {
 | 杀软敏感 → 批次内节流（每 N 项微暂停） | **已定值（来源：用户确认 2026-10-27；已收编基线 §9.1——11.6-10，历史收编于方案 v1.7 R72）**：批次项数与微暂停时长以 §9.1 的杀软防护节流行准，参数可配置 | 已定值（契约先行，基线已收编） |
 
 - `PlanDocument` 可序列化落盘为草稿，但**生成过程绝不落盘**（不变量 2）；`planId` 是 apply、撤销、日志三方共同的关联键。
-- **1:N / N:1 分组语义**（`relation`）：F01–F03/F05/C10 解压＝1:N（N 条 entry 共享 `groupId`，`role="output"`，`source` 相同）；C10 压缩＝N:1（N 条 entry 共享 `groupId`，`role="source"`，`target` 相同）；**F04 合并为单条 `merge` entry（N:1 的输入清单记录在 `entry.merge.sources`），F06 CSV 合并为单条 `merge` entry（输入清单在 `entry.csvMerge.files`），F07 CSV 抽取为每个输入一条 `csv-extract` entry（1:1），F08 CSV 抽取数量行为每个输入一条 `csv-rows` entry（1:1），均不设 `relation`**（ADR-0016/ADR-0018/ADR-0019/ADR-0020：单条 `write_atomic` 保证产物原子性，撤销只需一条 Journal reverse）。Journal 仍按条目逐条记录；组回滚＝组内条目按 Journal 逆序逐条 `reverse`，无需组级操作；`stats.total` 按条目计数。
+- **1:N / N:1 分组语义**（`relation`）：F01–F03/F05/C10 解压＝1:N（N 条 entry 共享 `groupId`，`role="output"`，`source` 相同）；C10 压缩＝N:1（N 条 entry 共享 `groupId`，`role="source"`，`target` 相同）；**F04 合并为单条 `merge` entry（N:1 的输入清单记录在 `entry.merge.sources`），F06 CSV 合并为单条 `merge` entry（输入清单在 `entry.csvMerge.files`），F07 CSV 抽取为每个输入一条 `csv-extract` entry（1:1），F08 CSV 抽取数量行为每个输入一条 `csv-rows` entry（1:1），F09 位置区间为每个输入一条 `csv-rows` entry（1:1），F10 目录清单为每个根目录一条 `listing` entry（1:1），均不设 `relation`**（ADR-0016/ADR-0018/ADR-0019/ADR-0020：单条 `write_atomic` 保证产物原子性，撤销只需一条 Journal reverse）。Journal 仍按条目逐条记录；组回滚＝组内条目按 Journal 逆序逐条 `reverse`，无需组级操作；`stats.total` 按条目计数。
 
 ## 6. 任务状态机（§4.4 / §7.5–§7.7）
 
@@ -528,3 +539,4 @@ interface JournalEntry {
 | v1.14 | 2026-10-30 | §3.1 追加 `plan_f08`；§5 追加 `csv-rows` 动作与可选 `csvRows{encoding,size,delimiter,hasHeader,columns,columnCount,dataRows,window,count,targetEncoding,invalid,dirtyRows}` 载荷（F08 1:1，每个输入一条 entry）；§5.1 修订 F08 分组语义与 `relation` 省略；`expected` 口径补 csvRows 条目。决策见 [ADR-0020](../adr/0020-F08-CSV抽取数量行与前后窗口.md)。 |
 | v1.15 | 2026-10-30 | §5 F06 `csvMerge` 说明补 T07/T08 告警：无表头 `no-header-positional`、表头 BOM/trim 规范化 `header-normalized`、重复规范化列名 `duplicate-column-names`（均 Caution、不阻断）。决策见 [ADR-0018](../adr/0018-F06-CSV合并列对齐与来源列.md) §2.5。 |
 | v1.16 | 2026-10-30 | §3.1 追加 `plan_f09`；§5 `csvRows` 追加 `window="range"`、`startRow/endRow/headerRange/dataRange/totalKnown`（F09 1:1，每个输入一条 entry）；FsAdapter 追加 `read_ranges`（只读选中字节区间）。决策见 [ADR-0021](../adr/0021-F09-CSV位置行区间与流式读取.md)。 |
+| v1.17 | 2026-10-30 | §3.1 追加 `plan_f10`；§3 追加 `DirectoryLister` 端口；§5 追加 `listing` 动作（F10 1:1，source=根目录、target=CSV 清单，`expected` 省略）与 `write_atomic_with` 流式原子写能力。决策见 [ADR-0022](../adr/0022-F10-目录清单CSV与流式写出.md)。 |

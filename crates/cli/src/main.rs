@@ -25,6 +25,7 @@ use kernel::fs::FsAdapter;
 use kernel::generic_apply::{apply_generic_plan, ContentEditor, GenericApplyContext};
 use kernel::journal::JournalStore;
 use kernel::license::AlwaysAllowLicense;
+use kernel::listing::{plan_f10, ListingOptions, PlanF10File, PlanF10Input};
 use kernel::merge::{plan_f04, PlanF04File, PlanF04Input};
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
@@ -38,6 +39,7 @@ use platform::csv_range::{csv_range_layout, CsvRangeScanOptions};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
+use platform::listing::{inspect_tree, FsDirectoryLister};
 use platform::protected::{make_absolute, protected_dirs_from_paths};
 use platform::retention::{
     cleanup, validate_retention_days, CleanupOutcome, DEFAULT_RETENTION_DAYS,
@@ -101,6 +103,8 @@ const USAGE: &str = "usage:
                 [--delimiter ,|;|tab||] [--no-header] [--source <encoding>]
                 [--invalid replace-and-count|abort]
                 [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f10 --root <dir>... (--output <file> | --output-dir <dir>)
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
@@ -221,6 +225,15 @@ f08 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
+f10 options:
+  --root DIR              repeatable directory to list (non-recursive content reads)
+  --output PATH           single listing file (exactly one --root)
+  --output-dir DIR        one listing per root, named <root>.csv
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --protected-dir DIR     repeatable protected directory
+  --json                  machine-readable plan output
+  Listing output is UTF-8 with BOM; columns: 相对路径,名称,类型,大小,修改时间,层级
+
 f09 options:
   --file PATH             repeatable source CSV file
   --start X               first data row (1-based, inclusive; excludes header)
@@ -249,6 +262,8 @@ apply/undo/cleanup:
   f08 entries take the first or last N data rows, keeping the header;
   f09 entries take data rows X-Y (1-based, header excluded), reading only the
   header and selected byte range at apply time;
+  f10 entries stream a directory tree into a UTF-8 BOM CSV listing
+  (相对路径/名称/类型/大小/修改时间/层级); placeholders and symlinks are skipped;
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -307,6 +322,9 @@ fn main() {
     }
     if args[1] == "f09" {
         std::process::exit(run_f09(&args));
+    }
+    if args[1] == "f10" {
+        std::process::exit(run_f10(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -561,6 +579,7 @@ fn run_apply(args: &[String]) -> i32 {
             transcode(data, source, target, invalid).map(|result| result.bytes)
         };
         let content_editor = has_edit_content.then_some(&editor as ContentEditor<'_>);
+        let lister = FsDirectoryLister;
         let mut generic = GenericApplyContext {
             fs: &adapter,
             license: &license,
@@ -572,6 +591,7 @@ fn run_apply(args: &[String]) -> i32 {
             progress: None,
             cancel: None,
             content_editor,
+            directory_lister: Some(&lister),
         };
         run_generic_or_specific(
             apply_generic_plan(&plan, &ApplyOptions::default(), &mut generic),
@@ -2740,6 +2760,163 @@ fn run_f09(args: &[String]) -> i32 {
         end_row,
         protected_dirs,
         case_sense,
+        files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_f10(args: &[String]) -> i32 {
+    let mut roots = Vec::new();
+    let mut output = None;
+    let mut output_dir = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --root requires a directory");
+                };
+                roots.push(PathBuf::from(value));
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown f10 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if roots.is_empty() {
+        return input_error("E1001: f10 requires at least one --root <dir>");
+    }
+    if output.is_some() && output_dir.is_some() {
+        return input_error("E1001: use either --output or --output-dir, not both");
+    }
+    let targets: Vec<PathBuf> = match (output, output_dir) {
+        (Some(output), None) => {
+            if roots.len() != 1 {
+                return input_error("E1002: --output requires exactly one --root");
+            }
+            vec![make_absolute(&output)]
+        }
+        (None, Some(dir)) => {
+            let dir = make_absolute(&dir);
+            roots
+                .iter()
+                .map(|root| {
+                    let name = root
+                        .file_name()
+                        .map(|value| value.to_os_string())
+                        .unwrap_or_else(|| "listing.csv".into());
+                    let name = PathBuf::from(name);
+                    dir.join(name.with_extension("csv"))
+                })
+                .collect()
+        }
+        _ => return input_error("E1001: f10 requires --output <file> or --output-dir <dir>"),
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let options = ListingOptions::default();
+    let mut plan_files = Vec::with_capacity(roots.len());
+    for (root, target) in roots.iter().zip(targets.iter()) {
+        let absolute = make_absolute(root);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read directory metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_dir() {
+            eprintln!(
+                "E1002: f10 requires directory roots: {}",
+                absolute.display()
+            );
+            return 2;
+        }
+        let stats = match inspect_tree(&absolute, &options) {
+            Ok(stats) => stats,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot inspect directory tree ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let canonical_root = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanF10File {
+            root: absolute.to_string_lossy().into_owned(),
+            canonical_root,
+            target: target.to_string_lossy().into_owned(),
+            target_occupied: target.exists(),
+            files: stats.files,
+            dirs: stats.dirs,
+            placeholders: stats.placeholders,
+            skipped: stats.skipped,
+            max_depth: stats.max_depth,
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("f10"));
+    let planned = plan_f10(PlanF10Input {
+        plan_id,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
         files: plan_files,
     });
     match planned {

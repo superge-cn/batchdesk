@@ -125,6 +125,17 @@ impl FsAdapter for CliFsAdapter {
     }
 
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
+        self.write_atomic_with(path, &mut |out| {
+            out.write_all(data)
+                .map_err(|error| io_error(&error, Path::new(path)))
+        })
+    }
+
+    fn write_atomic_with(
+        &self,
+        path: &str,
+        write: &mut dyn FnMut(&mut dyn Write) -> Result<(), KernelError>,
+    ) -> Result<(), KernelError> {
         let target = fs_path(Path::new(path));
         let parent = target
             .parent()
@@ -138,7 +149,18 @@ impl FsAdapter for CliFsAdapter {
             std::process::id(),
             self.next_id()
         ));
-        fs::write(&temp, data).map_err(|error| io_error(&error, &temp))?;
+        let mut file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        if let Err(error) = write(&mut file) {
+            drop(file);
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
+        if let Err(error) = file.flush() {
+            drop(file);
+            let _ = fs::remove_file(&temp);
+            return Err(io_error(&error, &temp));
+        }
+        drop(file);
         #[cfg(windows)]
         if target.exists() {
             fs::remove_file(&target).map_err(|error| io_error(&error, &target))?;
@@ -845,7 +867,7 @@ pub fn is_placeholder_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn mtime(metadata: &fs::Metadata) -> String {
+pub(crate) fn mtime(metadata: &fs::Metadata) -> String {
     metadata
         .modified()
         .map(format_rfc3339)

@@ -25,9 +25,11 @@ use crate::error::KernelError;
 use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind};
 use crate::journal::{FsOp, JournalStore};
 use crate::license::{Capability, LicenseService};
-use crate::path::{protected_by, try_normalize, ProtectedDir};
+use crate::listing::{DirectoryLister, ListingOptions};
+use crate::path::{is_under, protected_by, try_normalize, ProtectedDir};
 use crate::plan::{
-    PlanAction, PlanCsvExtract, PlanCsvMerge, PlanCsvRows, PlanDocument, PlanResolution,
+    PlanAction, PlanCsvExtract, PlanCsvMerge, PlanCsvRows, PlanDocument, PlanParamValue,
+    PlanResolution,
 };
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
@@ -46,6 +48,8 @@ pub struct GenericApplyContext<'a> {
     pub cancel: Option<&'a dyn CancelToken>,
     /// `edit-content` 条目的内容变换函数（如转码/换行/替换）；其他动作为 None。
     pub content_editor: Option<ContentEditor<'a>>,
+    /// F10 目录清单的流式遍历/写出端口；其他动作为 None。
+    pub directory_lister: Option<&'a dyn DirectoryLister>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,7 +81,8 @@ pub fn apply_generic_plan(
             | PlanAction::Split
             | PlanAction::Merge
             | PlanAction::CsvExtract
-            | PlanAction::CsvRows => {}
+            | PlanAction::CsvRows
+            | PlanAction::Listing => {}
             other => {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries need a dedicated executor",
@@ -103,6 +108,7 @@ pub fn apply_generic_plan(
             | PlanAction::Merge
             | PlanAction::CsvExtract
             | PlanAction::CsvRows
+            | PlanAction::Listing
                 if entry.target.is_none() =>
             {
                 return Err(KernelError::invalid_params(format!(
@@ -294,7 +300,16 @@ pub fn apply_generic_plan(
                 continue;
             }
         };
-        if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
+        if entry.action == PlanAction::Listing {
+            if stat.kind != EntryKind::Dir {
+                failed += 1;
+                reports.push(failed_entry(
+                    entry.entry_id.clone(),
+                    KernelError::invalid_params("listing expects a directory source"),
+                ));
+                continue;
+            }
+        } else if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
             failed += 1;
             reports.push(failed_entry(
                 entry.entry_id.clone(),
@@ -372,6 +387,7 @@ pub fn apply_generic_plan(
                 | PlanAction::Merge
                 | PlanAction::CsvExtract
                 | PlanAction::CsvRows
+                | PlanAction::Listing
         ) {
             if let Some(error) = protected_target_hit(context, &target) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
@@ -389,7 +405,7 @@ pub fn apply_generic_plan(
             PlanAction::EditContent => None,
             _ => Some(target.as_str()),
         };
-        let performed = match perform(context, entry, target_param, overwrite) {
+        let performed = match perform(context, plan, entry, target_param, overwrite) {
             Ok(Ok(performed)) => performed,
             Ok(Err(error)) => {
                 context.license.release(&plan.kind, 1);
@@ -562,10 +578,105 @@ struct Performed {
 }
 
 /// 执行单条动作并推导 Journal 的 forward/reverse（设计 01 §8）：
+fn listing_options(plan: &PlanDocument) -> Result<ListingOptions, KernelError> {
+    match plan.params.get("format") {
+        Some(PlanParamValue::String(format)) if format == "csv" => {}
+        _ => {
+            return Err(KernelError::invalid_params(
+                "listing plans require format=csv",
+            ))
+        }
+    }
+    let include_files = match plan.params.get("includeFiles") {
+        Some(PlanParamValue::Bool(value)) => *value,
+        _ => {
+            return Err(KernelError::invalid_params(
+                "listing plans require includeFiles",
+            ))
+        }
+    };
+    let include_dirs = match plan.params.get("includeDirs") {
+        Some(PlanParamValue::Bool(value)) => *value,
+        _ => {
+            return Err(KernelError::invalid_params(
+                "listing plans require includeDirs",
+            ))
+        }
+    };
+    if !include_files && !include_dirs {
+        return Err(KernelError::invalid_params(
+            "listing plans must include files or dirs",
+        ));
+    }
+    Ok(ListingOptions {
+        include_files,
+        include_dirs,
+    })
+}
+
+fn perform_listing(
+    context: &GenericApplyContext<'_>,
+    plan: &PlanDocument,
+    entry: &crate::plan::PlanEntry,
+    target: &str,
+    overwrite: bool,
+) -> Result<Performed, KernelError> {
+    let options = listing_options(plan)?;
+    if let (Ok(root), Ok(target_path)) = (try_normalize(&entry.source), try_normalize(target)) {
+        if is_under(&target_path, &root, context.case_sense) {
+            return Err(KernelError::invalid_params(
+                "listing target must be outside the listed root",
+            ));
+        }
+    }
+    let lister = context.directory_lister.ok_or_else(|| {
+        KernelError::new(
+            "E5001",
+            "directory lister is not available for this apply context",
+            None,
+            false,
+        )
+    })?;
+    let backup = if overwrite {
+        Some(context.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+    context.fs.write_atomic_with(target, &mut |out| {
+        lister
+            .write_listing(&entry.source, &options, out)
+            .map(|_| ())
+    })?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: context
+                .fs
+                .quarantine_target_path(&file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
+}
+
 /// copy 覆盖与 edit-content 先备份原内容（`dataRef`），copy 新建的逆是
 /// "产物进隔离目录"（reverse=`Quarantine`，路径由适配层预留）。
 fn perform(
     context: &GenericApplyContext<'_>,
+    plan: &PlanDocument,
     entry: &crate::plan::PlanEntry,
     target: Option<&str>,
     overwrite: bool,
@@ -765,6 +876,10 @@ fn perform(
                     KernelError::invalid_params("csv-rows entries require a csvRows payload")
                 })?;
                 perform_csv_rows(context, &entry.source, target, overwrite, payload)
+            }
+            PlanAction::Listing => {
+                let target = target.expect("validated: listing requires a target");
+                perform_listing(context, plan, entry, target, overwrite)
             }
             PlanAction::EditContent => {
                 // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。
@@ -2269,6 +2384,7 @@ mod tests {
             progress: None,
             cancel: None,
             content_editor: None,
+            directory_lister: None,
         }
     }
 
