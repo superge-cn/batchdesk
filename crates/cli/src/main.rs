@@ -23,7 +23,9 @@ use kernel::license::AlwaysAllowLicense;
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
 };
-use kernel::split::{plan_f01, plan_f02, PlanF01File, PlanF01Input, PlanF02Input};
+use kernel::split::{
+    plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input,
+};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::{is_ulid, new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -32,7 +34,9 @@ use platform::retention::{
     cleanup, validate_retention_days, CleanupOutcome, DEFAULT_RETENTION_DAYS,
 };
 use platform::scan::{scan_path, ScanMode, ScanOptions, ScanOutcome};
-use platform::text::{sample_bytes, split_layout, split_layout_by_lines, SampleSpec};
+use platform::text::{
+    sample_bytes, split_layout, split_layout_by_lines, split_layout_by_parts, SampleSpec,
+};
 
 const USAGE: &str = "usage:
   batchdesk c09 <path> [--mode full|fast] [--quick-window-bytes N]
@@ -46,6 +50,8 @@ const USAGE: &str = "usage:
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f02 --file <path>... --lines N --output-dir <dir>
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk f03 --file <path>... --parts N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
                   [--protected-dir <dir>]... [--json]
@@ -81,9 +87,10 @@ f01 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
 
-f02 options:
+f03 options:
   --file PATH             repeatable source text file
-  --lines N               lines per part (N > 0; tail part kept; §5.15)
+  --parts N               number of parts (pre-scan line count, remainder to
+                          first parts, at least one line per part; §5.15)
   --output-dir DIR        directory for generated parts
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --json                  machine-readable plan output
@@ -91,7 +98,7 @@ f02 options:
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place (backup in quarantine, undo restores from the Journal);
-  f01/f02 entries write line-aligned parts (undo moves the parts into quarantine);
+  f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   undo replays the Journal reverse operations for that planId;
   cleanup defaults to dry-run; --apply permanently removes expired quarantine
   files and their Journal entries. Retention defaults to 7 days (1–30).";
@@ -129,6 +136,9 @@ fn main() {
     }
     if args[1] == "f02" {
         std::process::exit(run_f02(&args));
+    }
+    if args[1] == "f03" {
+        std::process::exit(run_f03(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -678,11 +688,12 @@ fn run_c01(args: &[String]) -> i32 {
     }
 }
 
-/// F01/F02 共用 CLI 入口，仅计量基准与数量参数不同。
+/// F01/F02/F03 共用 CLI 入口，仅计量基准与数量参数不同。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplitMode {
     Bytes,
     Lines,
+    Parts,
 }
 
 impl SplitMode {
@@ -690,6 +701,7 @@ impl SplitMode {
         match self {
             SplitMode::Bytes => "f01",
             SplitMode::Lines => "f02",
+            SplitMode::Parts => "f03",
         }
     }
 
@@ -697,6 +709,7 @@ impl SplitMode {
         match self {
             SplitMode::Bytes => "--target-bytes",
             SplitMode::Lines => "--lines",
+            SplitMode::Parts => "--parts",
         }
     }
 }
@@ -707,6 +720,10 @@ fn run_f01(args: &[String]) -> i32 {
 
 fn run_f02(args: &[String]) -> i32 {
     run_split(args, SplitMode::Lines)
+}
+
+fn run_f03(args: &[String]) -> i32 {
+    run_split(args, SplitMode::Parts)
 }
 
 fn run_split(args: &[String], mode: SplitMode) -> i32 {
@@ -751,6 +768,20 @@ fn run_split(args: &[String], mode: SplitMode) -> i32 {
                     _ => {
                         return input_error(format!(
                             "E1002: --lines must be a positive line count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--parts" if mode == SplitMode::Parts => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --parts requires a part count");
+                };
+                match value.parse::<u64>() {
+                    Ok(parts) if parts > 0 => quantity = Some(parts),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --parts must be a positive part count: {value}"
                         ))
                     }
                 }
@@ -828,6 +859,7 @@ fn run_split(args: &[String], mode: SplitMode) -> i32 {
         let layout = match mode {
             SplitMode::Bytes => split_layout(&absolute, quantity),
             SplitMode::Lines => split_layout_by_lines(&absolute, quantity),
+            SplitMode::Parts => split_layout_by_parts(&absolute, quantity),
         };
         let layout = match layout {
             Ok(layout) => layout,
@@ -878,6 +910,15 @@ fn run_split(args: &[String], mode: SplitMode) -> i32 {
         SplitMode::Lines => plan_f02(PlanF02Input {
             plan_id,
             lines_per_part: quantity,
+            output_dir,
+            protected_dirs,
+            case_sense,
+            existing_targets,
+            files: plan_files,
+        }),
+        SplitMode::Parts => plan_f03(PlanF03Input {
+            plan_id,
+            parts: quantity,
             output_dir,
             protected_dirs,
             case_sense,

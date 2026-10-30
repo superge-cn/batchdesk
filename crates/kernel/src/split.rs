@@ -27,12 +27,30 @@ use crate::plan::{
 
 pub const F01_KIND: &str = "f01";
 pub const F02_KIND: &str = "f02";
+pub const F03_KIND: &str = "f03";
 
-/// 分片计量基准：F01 按字节、F02 按行数（两者共用同一累加器与计划结构）。
+/// 分片计量基准：F01 按字节、F02 按行数、F03 按预扫描行数配额（三者共用同一累加器与计划结构）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitBasis {
     Bytes(u64),
     Lines(u64),
+    /// F03：按 [`part_line_quotas`] 得到的逐片行数配额收口（配额用尽后尾片吸收剩余行）。
+    Quota,
+}
+
+/// 按总行数与份数计算每片行数配额（方案 §5.15 F03：总行数÷份数取整，余数进前几片）。
+///
+/// 份数超过总行数时按行数封顶（每片至少 1 行，禁止产生空片）。
+pub fn part_line_quotas(total_lines: u64, parts: u64) -> Vec<u64> {
+    if total_lines == 0 || parts == 0 {
+        return Vec::new();
+    }
+    let effective = total_lines.min(parts);
+    let base = total_lines / effective;
+    let remainder = total_lines % effective;
+    (0..effective)
+        .map(|index| base + u64::from(index < remainder))
+        .collect()
 }
 
 /// 一个分片在源文件中的字节区间（左闭右开）。
@@ -73,6 +91,8 @@ pub struct SplitLayout {
 #[derive(Clone, Debug)]
 pub struct SplitAccumulator {
     basis: SplitBasis,
+    /// F03 逐片行数配额（队首为当前片目标行数）。
+    quotas: std::collections::VecDeque<u64>,
     offset: u64,
     current_start: u64,
     current_bytes: u64,
@@ -92,6 +112,26 @@ impl SplitAccumulator {
         Self::with_basis(SplitBasis::Lines(target_lines))
     }
 
+    /// F03：按预扫描得到的逐片行数配额收口；配额用尽后剩余行归入尾片。
+    pub fn new_quotas(quotas: Vec<u64>) -> Result<Self, KernelError> {
+        if quotas.contains(&0) {
+            return Err(KernelError::invalid_params(
+                "line quotas must be greater than zero",
+            ));
+        }
+        Ok(Self {
+            basis: SplitBasis::Quota,
+            quotas: quotas.into(),
+            offset: 0,
+            current_start: 0,
+            current_bytes: 0,
+            current_lines: 0,
+            spans: Vec::new(),
+            max_line_bytes: 0,
+            had_newline: false,
+        })
+    }
+
     fn with_basis(basis: SplitBasis) -> Result<Self, KernelError> {
         match basis {
             SplitBasis::Bytes(0) => {
@@ -108,6 +148,7 @@ impl SplitAccumulator {
         }
         Ok(Self {
             basis,
+            quotas: std::collections::VecDeque::new(),
             offset: 0,
             current_start: 0,
             current_bytes: 0,
@@ -136,6 +177,11 @@ impl SplitAccumulator {
         let full = match self.basis {
             SplitBasis::Bytes(target) => self.current_bytes >= target,
             SplitBasis::Lines(target) => self.current_lines >= target,
+            // 最后一份配额不提前收口，文件在预扫描后变化时多出的行并入尾片。
+            SplitBasis::Quota => match self.quotas.front() {
+                Some(quota) if self.quotas.len() > 1 => self.current_lines >= *quota,
+                _ => false,
+            },
         };
         if full {
             self.close_current();
@@ -186,6 +232,9 @@ impl SplitAccumulator {
 
     fn push_span(&mut self, bytes: u64, lines: u64, overlong_line: bool, hard_cut: bool) {
         debug_assert!(bytes > 0);
+        if matches!(self.basis, SplitBasis::Quota) {
+            self.quotas.pop_front();
+        }
         let start = self.current_start.max(self.offset);
         let end = start + bytes;
         self.spans.push(ShardSpan {
@@ -275,7 +324,7 @@ pub fn plan_f01(input: PlanF01Input) -> Result<PlanDocument, KernelError> {
         "encoding".to_string(),
         PlanParamValue::String("source-bytes".to_string()),
     );
-    build_split_document(&SplitSpec::from_f01(&input), F01_KIND, params)
+    build_split_document(&SplitSpec::from_f01(&input), F01_KIND, params, None)
 }
 
 /// 生成 F02 计划：每满 `linesPerPart` 行一片，尾片保留（方案 §5.15）。
@@ -300,10 +349,50 @@ pub fn plan_f02(input: PlanF02Input) -> Result<PlanDocument, KernelError> {
         "encoding".to_string(),
         PlanParamValue::String("source-bytes".to_string()),
     );
-    build_split_document(&SplitSpec::from_f02(&input), F02_KIND, params)
+    build_split_document(&SplitSpec::from_f02(&input), F02_KIND, params, None)
 }
 
-/// F01/F02 共用的计划字段（两者只有计量参数不同）。
+/// F03 输入：按份数均分（份数由调用方显式给出，方案 §5.15）。
+#[derive(Clone, Debug)]
+pub struct PlanF03Input {
+    pub plan_id: String,
+    /// 目标份数（> 0；份数超过总行数时按行数封顶）。
+    pub parts: u64,
+    pub output_dir: String,
+    pub protected_dirs: Vec<ProtectedDir>,
+    pub case_sense: CaseSense,
+    pub existing_targets: Vec<String>,
+    pub files: Vec<PlanF01File>,
+}
+
+/// 生成 F03 计划：按预扫描配额均分（余数进前几片），尾片保留（方案 §5.15）。
+pub fn plan_f03(input: PlanF03Input) -> Result<PlanDocument, KernelError> {
+    validate_plan_header(&input.plan_id)?;
+    if input.parts == 0 {
+        return Err(KernelError::invalid_params(
+            "parts must be greater than zero",
+        ));
+    }
+    validate_output(&input.output_dir, &input.files)?;
+    let mut params = std::collections::BTreeMap::new();
+    params.insert("parts".to_string(), PlanParamValue::Number(input.parts));
+    params.insert(
+        "outputDir".to_string(),
+        PlanParamValue::String(input.output_dir.clone()),
+    );
+    params.insert(
+        "encoding".to_string(),
+        PlanParamValue::String("source-bytes".to_string()),
+    );
+    build_split_document(
+        &SplitSpec::from_f03(&input),
+        F03_KIND,
+        params,
+        Some(input.parts),
+    )
+}
+
+/// F01/F02/F03 共用的计划字段（三者只有计量参数不同）。
 struct SplitSpec<'a> {
     plan_id: &'a str,
     output_dir: &'a str,
@@ -326,6 +415,17 @@ impl<'a> SplitSpec<'a> {
     }
 
     fn from_f02(input: &'a PlanF02Input) -> Self {
+        Self {
+            plan_id: &input.plan_id,
+            output_dir: &input.output_dir,
+            protected_dirs: &input.protected_dirs,
+            case_sense: input.case_sense,
+            existing_targets: &input.existing_targets,
+            files: &input.files,
+        }
+    }
+
+    fn from_f03(input: &'a PlanF03Input) -> Self {
         Self {
             plan_id: &input.plan_id,
             output_dir: &input.output_dir,
@@ -365,6 +465,7 @@ fn build_split_document(
     spec: &SplitSpec<'_>,
     kind: &str,
     params: std::collections::BTreeMap<String, PlanParamValue>,
+    expected_parts: Option<u64>,
 ) -> Result<PlanDocument, KernelError> {
     let existing: BTreeSet<String> = spec
         .existing_targets
@@ -394,6 +495,20 @@ fn build_split_document(
                 risk_level: RiskLevel::Safe,
             });
             continue;
+        }
+        if let Some(parts) = expected_parts {
+            if file.layout.spans.len() < parts as usize {
+                warnings.push(PlanWarning {
+                    kind: "parts-exceed-lines".to_string(),
+                    suggestion: Some(format!(
+                        "{} has {} line(s) but {} parts were requested; each part keeps at least one line",
+                        file.path,
+                        file.layout.spans.len(),
+                        parts
+                    )),
+                    risk_level: RiskLevel::Caution,
+                });
+            }
         }
         if file.layout.spans.iter().any(|span| span.overlong_line) {
             warnings.push(PlanWarning {
@@ -651,6 +766,26 @@ mod tests {
         }
     }
 
+    fn layout_from_quotas(lines: &[(u64, bool)], quotas: Vec<u64>, file_size: u64) -> SplitLayout {
+        let mut accumulator = SplitAccumulator::new_quotas(quotas).unwrap();
+        for (bytes, newline) in lines {
+            accumulator.push_line(*bytes, *newline);
+        }
+        accumulator.finish(file_size)
+    }
+
+    fn input_f03(files: Vec<PlanF01File>, parts: u64) -> PlanF03Input {
+        PlanF03Input {
+            plan_id: PLAN_ID.to_string(),
+            parts,
+            output_dir: "out".to_string(),
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            existing_targets: Vec::new(),
+            files,
+        }
+    }
+
     #[test]
     fn closes_parts_on_line_boundaries() {
         let layout = layout_from_lines(&[(40, true), (40, true), (40, true), (40, true)], 64, 160);
@@ -888,5 +1023,103 @@ mod tests {
         let layout = layout_from_line_count(&[(10, true)], 2, 10);
         let plan = plan_f02(input_f02(vec![file("a.txt", layout)], 0));
         assert!(plan.is_err());
+    }
+
+    #[test]
+    fn part_line_quotas_distributes_remainder_to_first_parts() {
+        assert_eq!(part_line_quotas(10, 3), vec![4, 3, 3]);
+        assert_eq!(part_line_quotas(5, 5), vec![1, 1, 1, 1, 1]);
+        assert_eq!(part_line_quotas(7, 2), vec![4, 3]);
+        assert_eq!(part_line_quotas(1, 1), vec![1]);
+    }
+
+    #[test]
+    fn part_line_quotas_caps_parts_at_line_count() {
+        assert_eq!(part_line_quotas(3, 5), vec![1, 1, 1]);
+        assert!(part_line_quotas(0, 5).is_empty());
+        assert!(part_line_quotas(5, 0).is_empty());
+    }
+
+    #[test]
+    fn quota_accumulator_closes_on_each_quota_and_keeps_tail() {
+        let lines = [(10, true); 10];
+        let layout = layout_from_quotas(&lines, part_line_quotas(10, 3), 100);
+        assert_eq!(
+            layout
+                .spans
+                .iter()
+                .map(|span| span.lines)
+                .collect::<Vec<_>>(),
+            vec![4, 3, 3]
+        );
+        assert_eq!(
+            layout.spans.iter().map(ShardSpan::len).collect::<Vec<_>>(),
+            vec![40, 30, 30]
+        );
+        assert!(layout.spans.iter().all(|span| !span.hard_cut));
+    }
+
+    #[test]
+    fn quota_accumulator_absorbs_extra_lines_into_tail_part() {
+        // 预扫描 3 行、实际 5 行：最后一份配额不提前收口，多出的行并入尾片。
+        let lines = [(10, true); 5];
+        let layout = layout_from_quotas(&lines, part_line_quotas(3, 3), 50);
+        assert_eq!(
+            layout
+                .spans
+                .iter()
+                .map(|span| span.lines)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 3]
+        );
+    }
+
+    #[test]
+    fn f03_plan_uses_parts_params_and_split_entries() {
+        let lines = [(10, true); 10];
+        let layout = layout_from_quotas(&lines, part_line_quotas(10, 3), 100);
+        let plan = plan_f03(input_f03(vec![file("big.txt", layout)], 3)).unwrap();
+        assert_eq!(plan.kind, F03_KIND);
+        assert_eq!(plan.params.get("parts"), Some(&PlanParamValue::Number(3)));
+        assert_eq!(plan.entries.len(), 3);
+        let sizes: Vec<u64> = plan
+            .entries
+            .iter()
+            .map(|entry| entry.expected.as_ref().unwrap().size)
+            .collect();
+        assert_eq!(sizes, vec![40, 30, 30]);
+        assert!(plan
+            .entries
+            .iter()
+            .all(|entry| entry.action == PlanAction::Split && entry.range.is_some()));
+    }
+
+    #[test]
+    fn f03_plan_warns_when_parts_exceed_lines() {
+        let lines = [(10, true), (10, true), (10, true)];
+        let layout = layout_from_quotas(&lines, part_line_quotas(3, 5), 30);
+        let plan = plan_f03(input_f03(vec![file("small.txt", layout)], 5)).unwrap();
+        assert_eq!(plan.entries.len(), 3, "每片至少 1 行，不产生空片");
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "parts-exceed-lines"));
+    }
+
+    #[test]
+    fn f03_no_newline_file_is_single_part_without_hard_cut() {
+        let layout = layout_from_quotas(&[(150, false)], part_line_quotas(1, 3), 150);
+        let plan = plan_f03(input_f03(vec![file("blob.txt", layout)], 3)).unwrap();
+        assert_eq!(plan.entries.len(), 1);
+        assert!(plan
+            .warnings
+            .iter()
+            .all(|warning| warning.kind != "no-newline-hard-cut"));
+    }
+
+    #[test]
+    fn f03_plan_rejects_zero_parts() {
+        let layout = layout_from_quotas(&[(10, true)], part_line_quotas(1, 1), 10);
+        assert!(plan_f03(input_f03(vec![file("a.txt", layout)], 0)).is_err());
     }
 }

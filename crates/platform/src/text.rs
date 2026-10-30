@@ -287,6 +287,36 @@ pub fn split_layout_by_lines(
     scan_layout(path, accumulator)
 }
 
+/// F03 分片布局：先做行数预扫描，再按"总行数÷份数取整、余数进前几片"分配（方案 §5.15）。
+///
+/// 预扫描只计行数（不缓存内容）；第二遍流式扫描把字节边界落到行尾。
+/// 份数超过总行数时按行数封顶（每片至少 1 行，不产生空片）。
+pub fn split_layout_by_parts(path: &Path, parts: u64) -> io::Result<kernel::split::SplitLayout> {
+    if parts == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "parts must be greater than zero",
+        ));
+    }
+    let mut line_bytes = 0u64;
+    let mut total_lines = 0u64;
+    stream_segments(path, None, |segment| {
+        line_bytes += segment.bytes.len() as u64;
+        if segment.ends_line {
+            total_lines += 1;
+            line_bytes = 0;
+        }
+        StreamFlow::Continue
+    })?;
+    if line_bytes > 0 {
+        total_lines += 1;
+    }
+    let quotas = kernel::split::part_line_quotas(total_lines, parts);
+    let accumulator = kernel::split::SplitAccumulator::new_quotas(quotas)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
+    scan_layout(path, accumulator)
+}
+
 fn scan_layout(
     path: &Path,
     mut accumulator: kernel::split::SplitAccumulator,
@@ -598,5 +628,66 @@ mod tests {
         assert_eq!(layout.spans[0].lines, 2);
         assert_eq!(layout.spans[1].lines, 1, "末行无换行单独计入尾片");
         assert_eq!((layout.spans[1].start, layout.spans[1].end), (4, 8));
+    }
+
+    #[test]
+    fn splits_layout_by_parts_with_remainder_on_first_parts() {
+        let dir = TempDir::new();
+        let path = dir.0.join("rows.txt");
+        fs::write(&path, b"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n").unwrap();
+
+        let layout = split_layout_by_parts(&path, 3).unwrap();
+        assert_eq!(layout.file_size, 20);
+        assert_eq!(
+            layout
+                .spans
+                .iter()
+                .map(|span| span.lines)
+                .collect::<Vec<_>>(),
+            vec![4, 3, 3],
+            "总行数÷份数取整，余数进前几片（方案 §5.15）"
+        );
+        assert_eq!(
+            layout
+                .spans
+                .iter()
+                .map(|span| span.len())
+                .collect::<Vec<_>>(),
+            vec![8, 6, 6]
+        );
+        assert_eq!(
+            layout.spans.iter().map(|span| span.end).collect::<Vec<_>>(),
+            vec![8, 14, 20]
+        );
+    }
+
+    #[test]
+    fn part_layout_caps_at_line_count_and_keeps_unterminated_tail() {
+        let dir = TempDir::new();
+        let capped = dir.0.join("capped.txt");
+        fs::write(&capped, b"a\nb\nc\n").unwrap();
+        let layout = split_layout_by_parts(&capped, 5).unwrap();
+        assert_eq!(layout.spans.len(), 3, "份数超行数时每片 1 行，不产生空片");
+
+        let tail = dir.0.join("tail.txt");
+        fs::write(&tail, b"a\nb\nc").unwrap();
+        let layout = split_layout_by_parts(&tail, 2).unwrap();
+        assert_eq!(
+            layout
+                .spans
+                .iter()
+                .map(|span| span.lines)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!((layout.spans[1].start, layout.spans[1].end), (4, 5));
+    }
+
+    #[test]
+    fn part_layout_rejects_zero_parts() {
+        let dir = TempDir::new();
+        let path = dir.0.join("rows.txt");
+        fs::write(&path, b"a\nb\n").unwrap();
+        assert!(split_layout_by_parts(&path, 0).is_err());
     }
 }

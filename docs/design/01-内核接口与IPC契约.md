@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.8（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.9（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -123,6 +123,9 @@ pub trait RngSource: Send + Sync { fn fill(&self, buf: &mut [u8]); }
 // 输入输出全走参数与返回值；同类函数不再接受任何环境依赖
 pub fn detect_encoding(data: &[u8]) -> EncodingVerdict;                 // §5.2 四级流水线
 pub fn plan_csv_split(input: PlanCsvSplitInput) -> PlanDocument;        // §5.3 表头策略
+pub fn plan_f01(input: PlanF01Input) -> PlanDocument;                  // §5.1 按字节分片
+pub fn plan_f02(input: PlanF02Input) -> PlanDocument;                  // §5.15 按行数分片
+pub fn plan_f03(input: PlanF03Input) -> PlanDocument;                  // §5.15 按份数分片
 pub fn plan_regex_rename(input: PlanRenameInput) -> PlanDocument;       // §5.5
 ```
 
@@ -308,7 +311,7 @@ interface PlanEntry {
   target?: string;           // 无目标动作（如删除→隔离）可省
   action: "rename" | "move" | "copy" | "archive" | "extract" | "create-dir"
         | "transcode" | "edit-content" | "delete" | "split";
-                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01）；追加式枚举，只增不改
+                             // extract=解压产物（C10）、create-dir=建目录（F11）、split=文本分片（F01/F02/F03）；追加式枚举，只增不改
   relation?: PlanRelation;   // 1:N / N:1 分组（拆分/合并/压缩解压），见下方语义
   reason: string;            // 预览面板展示（§6.4）
   conflict?: ConflictInfo;   // §5.13 三类冲突，预览期全部暴露；默认处置=跳过（不变量 7）
@@ -454,3 +457,4 @@ interface JournalEntry {
 | v1.6 | 2026-10-30 | §4.4.1 `CleanupOutcome` 追加可选字段 `removedLogRecords`（C17a 操作日志随保留期清理，ADR-0013；只增不改）。 |
 | v1.7 | 2026-10-30 | §8 追加 reverse 推导规则：copy 新建目标逆为产物进隔离目录（reverse=Quarantine）、copy 覆盖与 write_atomic 逆为 dataRef 备份还原、新建产物 forward 的 `dataRef` 省略（对齐既定契约字面）；`copy`/`edit-content` 纳入通用执行器，回滚统一走共享 `execute_reverse`。 |
 | v1.8 | 2026-10-30 | §5 追加 `split` 动作与可选 `range{start,end}`（F01 1:N 分片，追加式）；§8 明确 split 新建分片 reverse=Quarantine、覆盖按 copy 流程备份还原；split 的 `expected.size` 为分片输出长度（algorithm="byte-range"）。决策见 [ADR-0015](../adr/0015-F01分片计划与撤销语义.md)。 |
+| v1.9 | 2026-10-30 | §5 `split` 动作说明扩展至 F02（按行数，`params.linesPerPart`）与 F03（按份数，`params.parts`，行数预扫描配额）；无新增动作/字段，撤销与复核规则不变（ADR-0015 §5）。 |

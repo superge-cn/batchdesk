@@ -581,3 +581,83 @@ fn f02_plan_apply_and_undo_split_every_n_lines() {
         "undo quarantines part 3"
     );
 }
+
+#[test]
+fn f03_plan_apply_and_undo_split_by_part_count() {
+    let dir = TempDir::new();
+    let source = dir.0.join("ten.txt");
+    let parts = dir.0.join("parts");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    let body: String = (1..=10).map(|line| format!("{line:02}\n")).collect();
+    fs::write(&source, body.as_bytes()).unwrap();
+
+    let plan = batchdesk(&[
+        "f03",
+        "--file",
+        path_text(&source),
+        "--parts",
+        "3",
+        "--output-dir",
+        path_text(&parts),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f03 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f03");
+    assert_eq!(document["params"]["parts"], 3);
+    assert_eq!(document["entries"].as_array().unwrap().len(), 3);
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f03 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(
+        fs::read(parts.join("ten.1.txt")).unwrap(),
+        b"01\n02\n03\n04\n",
+        "10 行分 3 份，余数进前几片（方案 §5.15）"
+    );
+    assert_eq!(fs::read(parts.join("ten.2.txt")).unwrap(), b"05\n06\n07\n");
+    assert_eq!(fs::read(parts.join("ten.3.txt")).unwrap(), b"08\n09\n10\n");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f03 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 3);
+    assert!(!parts.join("ten.1.txt").exists(), "undo quarantines part 1");
+}
