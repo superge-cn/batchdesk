@@ -368,6 +368,26 @@ impl TargetEncoding {
             Self::Gb18030 => None,
         }
     }
+
+    /// 同一目标编码但关闭 BOM 的写法（F04 合并逐文件转码时使用，BOM 只写一次）。
+    pub const fn without_bom(self) -> Self {
+        match self {
+            Self::Utf8 { .. } => Self::Utf8 { bom: false },
+            Self::Gb18030 => Self::Gb18030,
+            Self::Utf16Le { .. } => Self::Utf16Le { bom: false },
+            Self::Utf16Be { .. } => Self::Utf16Be { bom: false },
+        }
+    }
+
+    /// 目标编码开启 BOM 时应在合并产物最前面写入的字节（F04）。
+    pub const fn bom_prefix(self) -> Option<&'static [u8]> {
+        match self {
+            Self::Utf8 { bom: true } => Some(&[0xEF, 0xBB, 0xBF]),
+            Self::Utf16Le { bom: true } => Some(&[0xFF, 0xFE]),
+            Self::Utf16Be { bom: true } => Some(&[0xFE, 0xFF]),
+            _ => None,
+        }
+    }
 }
 
 /// 解码遇非法字节的策略（§5.2：替换/中止/换候选，默认替换并计数上报）。

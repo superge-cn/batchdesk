@@ -661,3 +661,171 @@ fn f03_plan_apply_and_undo_split_by_part_count() {
     assert_eq!(undo_report["reverted"], 3);
     assert!(!parts.join("ten.1.txt").exists(), "undo quarantines part 1");
 }
+
+#[test]
+fn f04_plan_apply_and_undo_merge_with_encoding_unification() {
+    let dir = TempDir::new();
+    let first = dir.0.join("first.txt");
+    let second = dir.0.join("second.txt");
+    let output = dir.0.join("merged.txt");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    // first 为 ASCII（GB18030 兼容），second 为 GB18030 的「中」；统一转 UTF-8 后按序拼接。
+    fs::write(&first, b"A\n").unwrap();
+    fs::write(&second, [0xD6, 0xD0, 0x0A]).unwrap();
+
+    let plan = batchdesk(&[
+        "f04",
+        "--file",
+        path_text(&first),
+        "--file",
+        path_text(&second),
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--source",
+        "gb18030",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f04 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f04");
+    assert_eq!(document["params"]["fileCount"], 2);
+    assert_eq!(
+        document["entries"].as_array().unwrap().len(),
+        1,
+        "N:1 汇总为一条条目"
+    );
+    assert_eq!(document["entries"][0]["action"], "merge");
+    assert_eq!(
+        document["entries"][0]["merge"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f04 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    assert_eq!(report["report"]["entries"][0]["status"], "ok");
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        "A\n中\n".as_bytes(),
+        "输入按给定顺序拼接，且统一转码到目标编码"
+    );
+    assert!(first.exists());
+    assert!(second.exists());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "f04 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(undo_report["reverted"], 1);
+    assert!(
+        !output.exists(),
+        "undo moves the merged output into quarantine"
+    );
+}
+
+#[test]
+fn f04_detects_encodings_and_writes_one_bom() {
+    let dir = TempDir::new();
+    let first = dir.0.join("first.txt");
+    let second = dir.0.join("second.txt");
+    let output = dir.0.join("merged.txt");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&first, "第一行\n").unwrap();
+    fs::write(&second, "第二行\n").unwrap();
+
+    let plan = batchdesk(&[
+        "f04",
+        "--file",
+        path_text(&first),
+        "--file",
+        path_text(&second),
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8-bom",
+        "--sample-window",
+        "64",
+        "--sample-blocks",
+        "0",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f04 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(
+        document["entries"][0]["merge"]["targetEncoding"],
+        "utf-8-bom"
+    );
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "f04 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read(&output).unwrap(),
+        b"\xEF\xBB\xBF\xE7\xAC\xAC\xE4\xB8\x80\xE8\xA1\x8C\n\xE7\xAC\xAC\xE4\xBA\x8C\xE8\xA1\x8C\n",
+        "BOM 只在合并产物开头出现一次"
+    );
+}

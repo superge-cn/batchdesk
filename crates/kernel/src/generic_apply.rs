@@ -17,6 +17,7 @@ use crate::apply::{
     ApplyStatus, OnConflict,
 };
 use crate::conflict::sequence_target;
+use crate::encoding::{transcode, InvalidSequencePolicy, TargetEncoding};
 use crate::error::KernelError;
 use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind};
 use crate::journal::{FsOp, JournalStore};
@@ -68,7 +69,8 @@ pub fn apply_generic_plan(
             | PlanAction::Delete
             | PlanAction::Copy
             | PlanAction::EditContent
-            | PlanAction::Split => {}
+            | PlanAction::Split
+            | PlanAction::Merge => {}
             other => {
                 return Err(KernelError::invalid_params(format!(
                     "{} entries need a dedicated executor",
@@ -87,7 +89,11 @@ pub fn apply_generic_plan(
                     "edit-content entries edit in place and must not have a target",
                 ))
             }
-            PlanAction::Rename | PlanAction::Move | PlanAction::Copy | PlanAction::Split
+            PlanAction::Rename
+            | PlanAction::Move
+            | PlanAction::Copy
+            | PlanAction::Split
+            | PlanAction::Merge
                 if entry.target.is_none() =>
             {
                 return Err(KernelError::invalid_params(format!(
@@ -105,6 +111,29 @@ pub fn apply_generic_plan(
                 if range.start >= range.end {
                     return Err(KernelError::invalid_params(
                         "split byte range must be non-empty",
+                    ));
+                }
+            }
+            PlanAction::Merge if entry.merge.is_none() => {
+                return Err(KernelError::invalid_params(
+                    "merge entries require a merge payload",
+                ))
+            }
+            PlanAction::Merge => {
+                let merge = entry.merge.as_ref().expect("checked above");
+                if merge.sources.is_empty() {
+                    return Err(KernelError::invalid_params(
+                        "merge payload requires at least one source",
+                    ));
+                }
+                if TargetEncoding::parse(&merge.target_encoding).is_none() {
+                    return Err(KernelError::invalid_params(
+                        "merge targetEncoding is not a supported encoding",
+                    ));
+                }
+                if InvalidSequencePolicy::parse(&merge.invalid).is_none() {
+                    return Err(KernelError::invalid_params(
+                        "merge invalid policy is not supported",
                     ));
                 }
             }
@@ -174,7 +203,7 @@ pub fn apply_generic_plan(
                 continue;
             }
         };
-        if let Some(error) = protected_hit(context, entry, &normalized) {
+        if let Some(error) = protected_path_hit(context, &entry.source, &normalized) {
             reports.push(skipped_entry(entry.entry_id.clone(), error));
             continue;
         }
@@ -255,6 +284,12 @@ pub fn apply_generic_plan(
                 }
             }
         }
+        if entry.action == PlanAction::Merge {
+            if let Some(error) = merge_source_mismatch(context, entry) {
+                reports.push(skipped_entry(entry.entry_id.clone(), error));
+                continue;
+            }
+        }
 
         let decision = match &entry.target {
             Some(target) => match resolve_target(entry, target, options, context) {
@@ -277,7 +312,11 @@ pub fn apply_generic_plan(
         };
         if matches!(
             entry.action,
-            PlanAction::Rename | PlanAction::Move | PlanAction::Copy | PlanAction::Split
+            PlanAction::Rename
+                | PlanAction::Move
+                | PlanAction::Copy
+                | PlanAction::Split
+                | PlanAction::Merge
         ) {
             if let Some(error) = protected_target_hit(context, &target) {
                 reports.push(skipped_entry(entry.entry_id.clone(), error));
@@ -573,6 +612,79 @@ fn perform(
                     reverse,
                 })
             }
+            PlanAction::Merge => {
+                let target = target.expect("validated: merge requires a target");
+                let merge = entry.merge.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("merge entries require a payload")
+                })?;
+                let target_encoding =
+                    TargetEncoding::parse(&merge.target_encoding).ok_or_else(|| {
+                        KernelError::invalid_params("unsupported merge target encoding")
+                    })?;
+                let invalid = InvalidSequencePolicy::parse(&merge.invalid).ok_or_else(|| {
+                    KernelError::invalid_params("unsupported merge invalid-sequence policy")
+                })?;
+                // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
+                let backup = if overwrite {
+                    Some(context.fs.backup_to_quarantine(target)?)
+                } else {
+                    None
+                };
+                // BOM 只在合并产物最前面写一次；各输入自身 BOM 由 transcode 剥离。
+                let mut merged = Vec::new();
+                if let Some(prefix) = target_encoding.bom_prefix() {
+                    merged.extend_from_slice(prefix);
+                }
+                for source in &merge.sources {
+                    let encoding = source.encoding.ok_or_else(|| {
+                        KernelError::new(
+                            "E3001",
+                            format!(
+                                "source encoding requires manual confirmation: {}",
+                                source.path
+                            ),
+                            None,
+                            false,
+                        )
+                    })?;
+                    let data = context.fs.read_bytes(&source.path)?;
+                    if data.len() as u64 != source.size {
+                        return Err(KernelError::new(
+                            "E2010",
+                            format!("source size changed since plan preview: {}", source.path),
+                            None,
+                            false,
+                        ));
+                    }
+                    let transcoded =
+                        transcode(&data, encoding, target_encoding.without_bom(), invalid)?;
+                    merged.extend_from_slice(&transcoded.bytes);
+                }
+                context.fs.write_atomic(target, &merged)?;
+                let final_path = target.to_string();
+                let reverse = match backup {
+                    Some(backup) => FsOp::WriteAtomic {
+                        path: final_path.clone(),
+                        data_ref: Some(backup),
+                    },
+                    None => FsOp::Quarantine {
+                        from: final_path.clone(),
+                        to: context
+                            .fs
+                            .quarantine_target_path(&file_name_of(&final_path))?,
+                    },
+                };
+                Ok(Performed {
+                    skipped: false,
+                    replaced: overwrite,
+                    final_path: final_path.clone(),
+                    forward: FsOp::WriteAtomic {
+                        path: final_path,
+                        data_ref: None,
+                    },
+                    reverse,
+                })
+            }
             PlanAction::EditContent => {
                 // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。
                 let backup = context.fs.backup_to_quarantine(&entry.source)?;
@@ -683,15 +795,15 @@ fn fingerprint_mismatch(
     }
 }
 
-fn protected_hit(
+fn protected_path_hit(
     context: &GenericApplyContext<'_>,
-    entry: &crate::plan::PlanEntry,
+    path: &str,
     normalized: &str,
 ) -> Option<KernelError> {
     if context.protected_dirs.is_empty() {
         return None;
     }
-    let canonical = context.fs.canonicalize(&entry.source).ok();
+    let canonical = context.fs.canonicalize(path).ok();
     protected_by(
         normalized,
         canonical.as_deref(),
@@ -706,6 +818,50 @@ fn protected_hit(
             false,
         )
     })
+}
+
+/// F04：合并的全部输入都要在执行期复核（大小、普通文件、占位、保护目录）。
+fn merge_source_mismatch(
+    context: &GenericApplyContext<'_>,
+    entry: &crate::plan::PlanEntry,
+) -> Option<KernelError> {
+    let merge = entry.merge.as_ref()?;
+    for source in &merge.sources {
+        let normalized = match try_normalize(&source.path) {
+            Ok(normalized) => normalized,
+            Err(error) => return Some(error),
+        };
+        if let Some(error) = protected_path_hit(context, &source.path, &normalized) {
+            return Some(error);
+        }
+        let stat = match context.fs.stat(&source.path) {
+            Ok(stat) => stat,
+            Err(error) => return Some(error),
+        };
+        if stat.kind != EntryKind::File {
+            return Some(KernelError::invalid_params(format!(
+                "merge expects a file source: {}",
+                source.path
+            )));
+        }
+        if stat.attrs.placeholder {
+            return Some(KernelError::new(
+                "E2006",
+                "placeholder file skipped",
+                None,
+                true,
+            ));
+        }
+        if stat.size != source.size {
+            return Some(KernelError::new(
+                "E2010",
+                "source size changed since plan preview",
+                None,
+                false,
+            ));
+        }
+    }
+    None
 }
 
 fn protected_target_hit(context: &GenericApplyContext<'_>, target: &str) -> Option<KernelError> {
@@ -785,9 +941,10 @@ fn mark_entry_error(reports: &mut [ApplyEntryReport], index: usize, error: Kerne
 mod tests {
     use super::*;
     use crate::apply::{ApplyOptions, OnConflict};
+    use crate::encoding::{SourceEncoding, TargetEncoding};
     use crate::fs::{DirEntryInfo, EntryAttrs, PathOutcome, ScanFilter, StatInfo};
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
-    use crate::plan::{PlanEntry, PlanExpected, PlanStats};
+    use crate::plan::{PlanEntry, PlanExpected, PlanMerge, PlanMergeSource, PlanStats};
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
     use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
     use std::collections::{BTreeMap, HashMap};
@@ -1140,6 +1297,7 @@ mod tests {
             blocked: None,
             expected: None,
             range: None,
+            merge: None,
         }
     }
 
@@ -1291,6 +1449,228 @@ mod tests {
         assert!(!fs.exists("/out/big.1.txt"), "undo quarantines the part");
         assert!(!fs.exists("/out/big.2.txt"), "undo quarantines the part");
         assert!(fs.exists("/data/big.txt"), "split keeps the source");
+    }
+
+    #[test]
+    fn merge_transcodes_inputs_in_order_and_undo_removes_the_output() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.txt", b"A\n");
+        let gb_bytes = encoding_rs::GB18030.encode("中\n").0.to_vec();
+        fs.write_file("/data/b.txt", &gb_bytes);
+        let plan = plan(vec![merge_entry(
+            "e1",
+            "/out/all.txt",
+            TargetEncoding::Utf8 { bom: false },
+            vec![
+                ("/data/a.txt", SourceEncoding::Utf8, 2),
+                (
+                    "/data/b.txt",
+                    SourceEncoding::Gb18030,
+                    gb_bytes.len() as u64,
+                ),
+            ],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(fs.read_file("/out/all.txt"), "A\n中\n".as_bytes());
+        assert_eq!(journal.entries.len(), 1);
+        assert!(matches!(
+            &journal.entries[0].forward,
+            FsOp::WriteAtomic { path, data_ref: None } if path == "/out/all.txt"
+        ));
+        assert!(matches!(
+            &journal.entries[0].reverse,
+            FsOp::Quarantine { from, .. } if from == "/out/all.txt"
+        ));
+
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert!(!fs.exists("/out/all.txt"));
+        assert!(fs.exists("/data/a.txt"));
+        assert!(fs.exists("/data/b.txt"));
+    }
+
+    #[test]
+    fn merge_writes_the_bom_only_once() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.txt", b"A\n");
+        fs.write_file("/data/b.txt", b"B\n");
+        let plan = plan(vec![merge_entry(
+            "e1",
+            "/out/all.txt",
+            TargetEncoding::Utf8 { bom: true },
+            vec![
+                ("/data/a.txt", SourceEncoding::Utf8, 2),
+                ("/data/b.txt", SourceEncoding::Utf8, 2),
+            ],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        let bytes = fs.read_file("/out/all.txt");
+        assert_eq!(bytes, b"\xEF\xBB\xBFA\nB\n");
+        assert_eq!(
+            bytes
+                .windows(3)
+                .filter(|window| *window == [0xEF, 0xBB, 0xBF])
+                .count(),
+            1,
+            "BOM must appear exactly once at the start"
+        );
+    }
+
+    #[test]
+    fn merge_skips_when_a_source_size_changed_since_plan() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.txt", b"A\n");
+        fs.write_file("/data/b.txt", b"BB\n");
+        let plan = plan(vec![merge_entry(
+            "e1",
+            "/out/all.txt",
+            TargetEncoding::Utf8 { bom: false },
+            vec![
+                ("/data/a.txt", SourceEncoding::Utf8, 2),
+                // 计划期记录 4 字节，执行期实际 3 字节。
+                ("/data/b.txt", SourceEncoding::Utf8, 4),
+            ],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2010"
+        );
+        assert!(!fs.exists("/out/all.txt"));
+        assert!(journal.entries.is_empty());
+    }
+
+    #[test]
+    fn merge_does_not_overwrite_an_existing_target_by_default() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.txt", b"A\n");
+        fs.write_file("/out/all.txt", b"old");
+        let plan = plan(vec![merge_entry(
+            "e1",
+            "/out/all.txt",
+            TargetEncoding::Utf8 { bom: false },
+            vec![("/data/a.txt", SourceEncoding::Utf8, 2)],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E2007"
+        );
+        assert_eq!(fs.read_file("/out/all.txt"), b"old".to_vec());
+        assert!(journal.entries.is_empty());
+    }
+
+    #[test]
+    fn merge_rejects_an_ambiguous_source_encoding() {
+        let fs = TestFs::default();
+        fs.write_file("/data/a.txt", b"A\n");
+        let base = plan(vec![merge_entry(
+            "e1",
+            "/out/all.txt",
+            TargetEncoding::Utf8 { bom: false },
+            vec![("/data/a.txt", SourceEncoding::Utf8, 2)],
+        )]);
+        let mut entry = base.entries.into_iter().next().unwrap();
+        entry.merge = Some(PlanMerge {
+            sources: vec![PlanMergeSource {
+                path: "/data/a.txt".to_string(),
+                encoding: None,
+                size: 2,
+            }],
+            target_encoding: "utf-8".to_string(),
+            invalid: "replace-and-count".to_string(),
+        });
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan(vec![entry]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E3001"
+        );
+        assert!(!fs.exists("/out/all.txt"));
+    }
+
+    fn merge_entry(
+        entry_id: &str,
+        target: &str,
+        target_encoding: TargetEncoding,
+        sources: Vec<(&str, SourceEncoding, u64)>,
+    ) -> PlanEntry {
+        let merge_sources: Vec<PlanMergeSource> = sources
+            .iter()
+            .map(|(path, encoding, size)| PlanMergeSource {
+                path: (*path).to_string(),
+                encoding: Some(*encoding),
+                size: *size,
+            })
+            .collect();
+        PlanEntry {
+            entry_id: entry_id.to_string(),
+            source: merge_sources[0].path.clone(),
+            target: Some(target.to_string()),
+            action: PlanAction::Merge,
+            relation: None,
+            reason: "merge sources".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: Some(PlanExpected {
+                size: merge_sources[0].size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+            range: None,
+            merge: Some(PlanMerge {
+                sources: merge_sources,
+                target_encoding: target_encoding.as_str().to_string(),
+                invalid: "replace-and-count".to_string(),
+            }),
+        }
     }
 
     #[test]

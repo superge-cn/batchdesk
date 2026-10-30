@@ -946,6 +946,7 @@ mod tests {
             blocked: None,
             expected: None,
             range: None,
+            merge: None,
         }
     }
 

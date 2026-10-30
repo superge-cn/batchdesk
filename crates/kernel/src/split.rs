@@ -601,6 +601,7 @@ fn build_split_document(
                     start: span.start,
                     end: span.end,
                 }),
+                merge: None,
             });
         }
     }

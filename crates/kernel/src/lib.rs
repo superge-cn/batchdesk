@@ -15,6 +15,7 @@ pub mod fs;
 pub mod generic_apply;
 pub mod journal;
 pub mod license;
+pub mod merge;
 pub mod path;
 pub mod plan;
 pub mod preflight;

@@ -101,6 +101,8 @@ pub enum PlanAction {
     Delete,
     /// F01 文本分片产物（1:N，每个分片一条 entry；方案 §5.1、设计 01 §5）。
     Split,
+    /// F04 TXT 合并产物（N:1，一条 entry 汇总全部输入；方案 §5.15）。
+    Merge,
 }
 
 impl PlanAction {
@@ -116,6 +118,7 @@ impl PlanAction {
             Self::EditContent => "edit-content",
             Self::Delete => "delete",
             Self::Split => "split",
+            Self::Merge => "merge",
         }
     }
 }
@@ -199,6 +202,28 @@ pub struct PlanRange {
     pub end: u64,
 }
 
+/// F04 合并的单个输入（按顺序追加；`size` 用于 plan→apply 期间的变化复核）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanMergeSource {
+    pub path: String,
+    /// 检测或用户确认的源编码；`None` 表示需人工确认（计划条目按 E3001 阻断）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+}
+
+/// F04 合并的载荷（仅 `merge` 动作使用）：按序拼接的输入＋目标编码与非法序列策略。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanMerge {
+    pub sources: Vec<PlanMergeSource>,
+    /// 目标编码（`TargetEncoding::as_str` 的稳定字符串，含 BOM 策略）。
+    pub target_encoding: String,
+    /// 非法序列策略（`InvalidSequencePolicy::as_str`）。
+    pub invalid: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanEntry {
@@ -221,6 +246,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：分片产物的源字节区间（仅 `split` 动作使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<PlanRange>,
+    /// 追加式可选字段：合并的输入清单与编码策略（仅 `merge` 动作使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<PlanMerge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,6 +416,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                     hash: member.full_hash.as_deref().map(hex_encode),
                 }),
                 range: None,
+                merge: None,
             });
         }
     }
@@ -598,6 +627,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
                 hash: None,
             }),
             range: None,
+            merge: None,
         });
     }
 
