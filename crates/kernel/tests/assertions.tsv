@@ -17,11 +17,11 @@ T05	asserted	plan_f01 对空文件返回 0 条目＋empty-file 警告	—
 T06	asserted	plan_f01 产出 no-newline-hard-cut 警告；分片数=ceil(size/target) 且全部标注硬切	—
 T07	asserted	无表头按列序号对齐：T07 首列数字、4 行×3 列；plan_f06 payload.hasHeader=false、union 为空、positionalColumns=3，并发出 no-header-positional 告警；CLI f06 人类输出含 warning no-header-positional（apply_flow）	—
 T08	asserted	表头规范化与重复保留：' 部门 '→'部门'、'金额 '→'金额'；'姓名'按出现序号保留为两个键；plan_f06 union 保留重复列名、positionalColumns=4，并发出 header-normalized 与 duplicate-column-names 告警；CLI f06 输出含两条 warning（apply_flow）	—
-R01	pending	—	长路径分级已在 preflight；语料为路径串样本，缺 plan 级断言入口
-R02	pending	—	大小写折叠比较已在 conflict；语料为映射表样本，缺 plan 级断言入口
-R03	pending	—	Windows 保留名判定已在 conflict；缺语料驱动断言
-R04	pending	—	结尾空格/点判定已在 conflict；缺语料驱动断言
-R06	pending	—	前缀归一由 try_normalize 实现；缺语料驱动断言
+R01	asserted	plan_f12 计划级分级：200 无长路径告警；259 发 long-path-caution 且条目不跳过；260 在 LongPathsEnabled=false 时 resolution=skip 并发 long-path-disabled，true 时正常条目	—
+R02	asserted	样本映射表经 scan_conflicts：CaseInsensitive 下第二条目标判 case-only，CaseSensitive 下无冲突；F12 规则入口不接受显式映射，批内 case-only 分支由 conflict 单测覆盖	—
+R03	asserted	样本 6 条保留名映射逐条经 plan_f12 产出 E1002 blocked，reason 含 reserved-name	—
+R04	asserted	样本 3 条逐条经 plan_f12：整名尾部空格与结尾点两条 blocked trailing-dot-space；首部空格不在 §5.13 拦截清单、不阻断	—
+R06	asserted	样本普通/扩展写法经 try_normalize 归一为同一路径；plan_f12 中扩展源与普通现存项不互判 existing-target	—
 E03	pending	—	预检 E2002 需文件权限事实采集与执行层接线
 Z01	pending	—	ZIP 执行器未建（C10）
 Z02	pending	—	ZIP 执行器未建（C10，越界条目 E3006）

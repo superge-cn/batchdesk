@@ -3300,6 +3300,7 @@ fn run_f12(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        long_path_supported: platform::preflight::long_path_supported(),
         rule: PlanF12Rule {
             prefix,
             suffix,

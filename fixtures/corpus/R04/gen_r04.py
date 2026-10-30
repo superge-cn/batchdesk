@@ -17,9 +17,9 @@ HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE / "out"
 MAP_FILE = OUT_DIR / "rename_map.csv"
 
-# 目标名：词干尾部空格 / 词干尾部点 / 扩展名前的空格
+# 目标名：名字尾部空格 / 名字尾部点 / 名字首部空格
 MAP_ROWS: tuple[tuple[str, str, str], ...] = (
-    ("s1.txt", "年度报表 .txt", "词干尾部带空格"),
+    ("s1.txt", "年度报表.txt ", "名字尾部带空格"),
     ("s2.txt", "年度报表.", "名字尾部带点"),
     ("s3.txt", " 年度报表.txt", "名字首部带空格（与尾部同属易被裁剪类）"),
 )
@@ -39,8 +39,7 @@ def verify(text: str) -> None:
     leading_hits = 0
     for row in rows:
         src, target, _note = row.split(",", 2)
-        stem = target.rsplit(".", 1)[0] if target.count(".") else target
-        if target.endswith(".") or stem.endswith(" "):
+        if target.endswith(".") or target.endswith(" "):
             trailing_hits += 1
         if target.startswith(" "):
             leading_hits += 1

@@ -83,6 +83,8 @@ pub struct PlanF12Input {
     pub existing_targets: Vec<String>,
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
+    /// 壳层探测到的系统长路径支持开关（方案 §5.13）；计划层不读注册表。
+    pub long_path_supported: bool,
     pub rule: PlanF12Rule,
 }
 
@@ -115,6 +117,8 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
     let mut mappings = Vec::new();
     let mut blocked_items = Vec::new();
     let mut no_change = Vec::new();
+    let mut long_path_caution = Vec::new();
+    let mut long_path_skips = Vec::new();
 
     for item in &input.items {
         let source_key = conflict_key(&item.path, input.case_sense);
@@ -160,6 +164,28 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
                 entries.len(),
             ));
             continue;
+        }
+        match crate::preflight::path_length_level(&target, input.long_path_supported).0 {
+            crate::preflight::PreflightLevel::Pass => {}
+            crate::preflight::PreflightLevel::Warn => {
+                long_path_caution.push(target.clone());
+            }
+            crate::preflight::PreflightLevel::Block => {
+                let mut entry = plain_entry(
+                    &input.plan_id,
+                    item,
+                    &target,
+                    entries.len(),
+                    format!(
+                        "target path exceeds {} characters and long-path support is disabled",
+                        crate::preflight::PATH_WARN_MAX_CHARS
+                    ),
+                );
+                entry.resolution = Some(PlanResolution::Skip);
+                entries.push(entry);
+                long_path_skips.push(target.clone());
+                continue;
+            }
         }
         mappings.push(Mapping {
             source: item.path.clone(),
@@ -267,6 +293,30 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             risk_level: RiskLevel::Safe,
         });
     }
+    if !long_path_caution.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "long-path-caution".to_string(),
+            suggestion: Some(format!(
+                "target paths are in the {}-{} character caution range: {}",
+                crate::preflight::PATH_SAFE_MAX_CHARS + 1,
+                crate::preflight::PATH_WARN_MAX_CHARS,
+                long_path_caution.join(", ")
+            )),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    if !long_path_skips.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "long-path-disabled".to_string(),
+            suggestion: Some(format!(
+                "target paths exceed {} characters and long-path support is disabled; \
+                 enable LongPathsEnabled or shorten the target path: {}",
+                crate::preflight::PATH_WARN_MAX_CHARS,
+                long_path_skips.join(", ")
+            )),
+            risk_level: RiskLevel::Danger,
+        });
+    }
     if entries.iter().any(|entry| entry.blocked.is_some()) {
         warnings.push(PlanWarning {
             kind: "invalid-target-names".to_string(),
@@ -317,6 +367,10 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
         PlanParamValue::Number(valid.len() as u64),
     );
     params.insert("twoPhase".to_string(), PlanParamValue::Bool(two_phase));
+    params.insert(
+        "longPathSupported".to_string(),
+        PlanParamValue::Bool(input.long_path_supported),
+    );
 
     let stats = PlanStats {
         total: entries.len(),
@@ -571,6 +625,7 @@ mod tests {
             existing_targets: Vec::new(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
+            long_path_supported: true,
             rule,
         }
     }
@@ -779,5 +834,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ext, "a.xtxt");
+    }
+
+    fn long_path_case(chars: usize) -> (PlanF12Item, PlanF12Rule) {
+        let name_len = chars - "/data/".len();
+        let target_name = format!("{}.txt", "a".repeat(name_len - 4));
+        (
+            PlanF12Item {
+                path: "/data/x.txt".to_string(),
+                name: "x.txt".to_string(),
+            },
+            PlanF12Rule {
+                prefix: None,
+                suffix: None,
+                find: Some("x.txt".to_string()),
+                replace: target_name,
+                scope: RenameScope::Full,
+            },
+        )
+    }
+
+    #[test]
+    fn long_path_tiers_warn_and_skip_by_support() {
+        let (item200, rule200) = long_path_case(200);
+        let plan = plan_f12(input(vec![item200], rule200)).unwrap();
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind.starts_with("long-path")));
+        assert_eq!(plan.entries[0].resolution, None);
+        assert_eq!(
+            plan.entries[0].target.as_deref().unwrap().chars().count(),
+            200
+        );
+
+        let (item259, rule259) = long_path_case(259);
+        let plan = plan_f12(input(vec![item259], rule259)).unwrap();
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "long-path-caution"));
+        assert_eq!(plan.entries[0].resolution, None);
+
+        let (item260, rule260) = long_path_case(260);
+        let plan = plan_f12(PlanF12Input {
+            long_path_supported: false,
+            ..input(vec![item260.clone()], rule260.clone())
+        })
+        .unwrap();
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "long-path-disabled"));
+        assert_eq!(plan.entries[0].resolution, Some(PlanResolution::Skip));
+        assert_eq!(
+            plan.params["longPathSupported"],
+            PlanParamValue::Bool(false)
+        );
+
+        let plan = plan_f12(PlanF12Input {
+            long_path_supported: true,
+            ..input(vec![item260], rule260)
+        })
+        .unwrap();
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "long-path-disabled"));
+        assert_eq!(plan.entries[0].resolution, None);
+        assert_eq!(plan.params["longPathSupported"], PlanParamValue::Bool(true));
     }
 }

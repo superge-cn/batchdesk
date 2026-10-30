@@ -289,6 +289,7 @@ mod tests {
             pair("/src/b", "/out/bad:name.txt"),
             pair("/src/c", "/out/trailing."),
             pair("/src/d", "/out/"),
+            pair("/src/e", "/out/trailing "),
         ];
         let scan = scan_conflicts(&entries, &existing(&[]), CaseSense::Sensitive);
         let kinds = |index: usize| -> Vec<String> {
@@ -301,6 +302,7 @@ mod tests {
         assert!(kinds(1).contains(&"invalid-char".to_string()));
         assert!(kinds(2).contains(&"trailing-dot-space".to_string()));
         assert!(kinds(3).contains(&"empty-name".to_string()));
+        assert!(kinds(4).contains(&"trailing-dot-space".to_string()));
         let suggestion = scan.warnings[&1][0].suggestion.clone().unwrap();
         assert!(suggestion.contains("bad_name"));
     }

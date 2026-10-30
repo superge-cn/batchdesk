@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use kernel::conflict::{scan_conflicts, ConflictKind};
 use kernel::csv::{
     plan_f05, CsvRecord, CsvRecordScanner, CsvSplitAccumulator, CsvSplitBasis, CsvSplitLayout,
     Delimiter, PlanF05File, PlanF05Input,
@@ -23,7 +24,11 @@ use kernel::encoding::{
     TargetEncoding,
 };
 use kernel::fs::CaseSense;
-use kernel::plan::{plan_c01, PlanC01File, PlanC01Input, PlanDocument, PlanParamValue};
+use kernel::path::{normalize, try_normalize};
+use kernel::plan::{
+    plan_c01, PlanC01File, PlanC01Input, PlanDocument, PlanParamValue, PlanResolution,
+};
+use kernel::rename::{plan_f12, PlanF12Input, PlanF12Item, PlanF12Rule, RenameScope};
 use kernel::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator, SplitLayout};
 
 /// 台账：`assertions.tsv` 是"哪条语料断言到什么程度"的唯一登记处。
@@ -45,6 +50,74 @@ fn sample(corpus: &str, file: &str) -> Vec<u8> {
              python fixtures/corpus/verify_corpus.py --rebuild --hashes 生成样本"
         )
     })
+}
+
+fn sample_text(corpus: &str, file: &str) -> String {
+    String::from_utf8(sample(corpus, file)).expect("语料样本应为 UTF-8")
+}
+
+fn csv_fields(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                current.push('"');
+                chars.next();
+            }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => fields.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    fields.push(current);
+    fields
+}
+
+fn csv_rows(corpus: &str, file: &str) -> Vec<Vec<String>> {
+    sample_text(corpus, file)
+        .lines()
+        .skip(1)
+        .map(|line| line.trim_end_matches('\r'))
+        .filter(|line| !line.trim().is_empty())
+        .map(csv_fields)
+        .collect()
+}
+
+fn split_parent(path: &str) -> (&str, &str) {
+    match path.rfind(['/', '\\']) {
+        Some(index) => (&path[..=index], &path[index + 1..]),
+        None => ("", path),
+    }
+}
+
+fn rename_plan_for_row(
+    source_path: &str,
+    source_name: &str,
+    target_name: &str,
+    long_path_supported: bool,
+) -> PlanDocument {
+    plan_f12(PlanF12Input {
+        plan_id: PLAN_ID.to_string(),
+        items: vec![PlanF12Item {
+            path: source_path.to_string(),
+            name: source_name.to_string(),
+        }],
+        existing_targets: vec![source_path.to_string()],
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        long_path_supported,
+        rule: PlanF12Rule {
+            prefix: None,
+            suffix: None,
+            find: Some(source_name.to_string()),
+            replace: target_name.to_string(),
+            scope: RenameScope::Full,
+        },
+    })
+    .expect("plan_f12 生成计划")
 }
 
 fn c01_input(corpus: &str, sample: &[u8]) -> PlanC01Input {
@@ -562,6 +635,180 @@ fn k08_utf16_bom_sample_detects_and_transcodes_clean() {
     assert!(output.had_bom_input);
     let text = String::from_utf8(output.bytes).expect("输出必须是合法 UTF-8");
     assert_utf8_lines(&text, 6, 4);
+}
+
+#[test]
+fn r01_long_path_samples_follow_path_length_tiers() {
+    let rows = csv_rows("R01", "paths.csv");
+    assert_eq!(rows.len(), 3, "R01 应提供三档边界路径");
+
+    for row in rows {
+        let path = &row[1];
+        let char_len: usize = row[2].parse().expect("char_len 应为整数");
+        assert_eq!(path.chars().count(), char_len, "样本长度与台账一致");
+
+        let (parent, file_name) = split_parent(path);
+        let source = format!("{parent}src.txt");
+        let plan = rename_plan_for_row(&source, "src.txt", file_name, false);
+        assert_eq!(plan.entries.len(), 1);
+        assert_eq!(plan.entries[0].target.as_deref(), Some(path.as_str()));
+
+        match char_len {
+            200 => {
+                assert!(!plan
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.kind.starts_with("long-path")));
+                assert_eq!(plan.entries[0].resolution, None);
+            }
+            259 => {
+                assert!(plan
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.kind == "long-path-caution"));
+                assert_eq!(plan.entries[0].resolution, None);
+            }
+            260 => {
+                assert!(plan
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.kind == "long-path-disabled"));
+                assert_eq!(plan.entries[0].resolution, Some(PlanResolution::Skip));
+
+                let enabled = rename_plan_for_row(&source, "src.txt", file_name, true);
+                assert!(!enabled
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.kind == "long-path-disabled"));
+                assert_eq!(enabled.entries[0].resolution, None);
+            }
+            other => panic!("R01 出现未预期长度档：{other}"),
+        }
+    }
+}
+
+#[test]
+fn r02_case_only_targets_conflict_only_on_case_insensitive_hosts() {
+    let rows = csv_rows("R02", "rename_map.csv");
+    assert_eq!(rows.len(), 2);
+    let entries: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| {
+            (
+                format!("/corpus/R02/{}", row[0]),
+                format!("/corpus/R02/{}", row[1]),
+            )
+        })
+        .collect();
+    assert_ne!(entries[0].1, entries[1].1, "样本目标名应不同");
+    assert_eq!(
+        entries[0].1.to_lowercase(),
+        entries[1].1.to_lowercase(),
+        "样本目标名应仅大小写不同"
+    );
+
+    let insensitive = scan_conflicts(&entries, &BTreeSet::new(), CaseSense::CaseInsensitive);
+    assert_eq!(
+        insensitive.conflicts.get(&1),
+        Some(&ConflictKind::CaseOnly),
+        "大小写不敏感卷上第二条目标应判 case-only"
+    );
+
+    let sensitive = scan_conflicts(&entries, &BTreeSet::new(), CaseSense::Sensitive);
+    assert!(
+        sensitive.conflicts.is_empty(),
+        "大小写敏感卷上两个目标应视为不同名"
+    );
+}
+
+#[test]
+fn r03_reserved_names_are_blocked_in_preview() {
+    let rows = csv_rows("R03", "rename_map.csv");
+    assert_eq!(rows.len(), 6);
+    for row in rows {
+        let source = &row[0];
+        let target = &row[1];
+        let plan = rename_plan_for_row(&format!("/corpus/R03/{source}"), source, target, true);
+        let blocked = plan.entries[0]
+            .blocked
+            .as_ref()
+            .unwrap_or_else(|| panic!("保留名应被阻断：{target}"));
+        assert_eq!(blocked.code, "E1002");
+        assert!(
+            blocked.reason.contains("reserved-name"),
+            "{target}: {}",
+            blocked.reason
+        );
+    }
+}
+
+#[test]
+fn r04_trailing_space_and_dot_targets_are_blocked_in_preview() {
+    let rows = csv_rows("R04", "rename_map.csv");
+    assert_eq!(rows.len(), 3);
+    let mut blocked = 0;
+    for row in &rows {
+        let source = &row[0];
+        let target = &row[1];
+        let plan = rename_plan_for_row(&format!("/corpus/R04/{source}"), source, target, true);
+        if target.ends_with(' ') || target.ends_with('.') {
+            let entry = plan.entries[0]
+                .blocked
+                .as_ref()
+                .unwrap_or_else(|| panic!("尾部空格/点应被阻断：{target:?}"));
+            assert!(
+                entry.reason.contains("trailing-dot-space"),
+                "{target:?}: {}",
+                entry.reason
+            );
+            blocked += 1;
+        } else {
+            // §5.13 只拦截整名结尾空格/点；"首部空格"不在拦截清单。
+            assert!(
+                plan.entries[0].blocked.is_none(),
+                "仅整名尾部空格/点进入拦截清单：{target:?}"
+            );
+        }
+    }
+    assert_eq!(blocked, 2, "样本应覆盖尾部空格与结尾点两条");
+}
+
+#[test]
+fn r06_extended_and_plain_paths_normalize_to_the_same_value() {
+    let rows = csv_rows("R06", "paths.csv");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][1], "plain");
+    assert_eq!(rows[1][1], "extended");
+    let plain = &rows[0][2];
+    let extended = &rows[1][2];
+
+    assert_eq!(normalize(plain), normalize(extended));
+    assert!(!normalize(extended).starts_with(r"\\?\"));
+    assert_eq!(try_normalize(extended).unwrap(), normalize(plain));
+
+    let (_parent, file_name) = split_parent(extended);
+    let plan = plan_f12(PlanF12Input {
+        plan_id: PLAN_ID.to_string(),
+        items: vec![PlanF12Item {
+            path: extended.clone(),
+            name: file_name.to_string(),
+        }],
+        existing_targets: vec![plain.clone()],
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        long_path_supported: true,
+        rule: PlanF12Rule {
+            prefix: Some("new_".to_string()),
+            suffix: None,
+            find: None,
+            replace: String::new(),
+            scope: RenameScope::Stem,
+        },
+    })
+    .expect("plan_f12 生成计划");
+    let entry = &plan.entries[0];
+    assert!(entry.conflict.is_none(), "扩展/普通写法不应互判重");
+    assert!(entry.blocked.is_none());
 }
 
 fn is_corpus_id(name: &str) -> bool {
