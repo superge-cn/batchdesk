@@ -146,11 +146,12 @@ jobs:
           # 从零生成两次并比较逐字节结果；同时校验 manifest 登记的冻结哈希。
           # 人工跟踪的 4 条（R05/E01/E02/E04）本就无脚本，由 check_scope.py 显式确认。
           python fixtures/corpus/verify_corpus.py --rebuild --hashes
-      - name: 单元测试 + 语料断言（K01–K08 已覆盖）
+      - name: 单元测试 + 语料断言（K01–K08＋T01–T08＋R01–R04/R06 已覆盖）
         shell: bash
         run: |
-          # 单元测试 + 已接入的语料断言（crates/kernel/tests/corpus.rs，K01–K08）；
-          # 其余自动化条目在 assertions.tsv 标 pending，尚未进入断言。
+          # 单元测试 + 已接入的语料断言（crates/kernel/tests/corpus.rs，
+          # K01–K08＋T01–T08＋R01–R04/R06）；其余自动化条目（E03、Z01、Z02）
+          # 在 assertions.tsv 标 pending，尚未进入断言。
           # 目标口径（harness 全量覆盖后）：fixtures/ 全量中的「自动化」子集
           # （方案 §4.11.2a④：移植代码不豁免）；通过率分母不含人工项。
           #
