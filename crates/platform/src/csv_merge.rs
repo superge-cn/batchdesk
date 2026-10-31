@@ -171,11 +171,18 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
+            // Windows 的时钟分辨率较粗，并行测试可能取到同一时间戳；进程内序号 + PID
+            // 保证路径唯一（同 config_store 修复）。
+            static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("batchdesk-csv-merge-{nanos}"));
+            let path = std::env::temp_dir().join(format!(
+                "batchdesk-csv-merge-{}-{nanos}-{sequence}",
+                std::process::id()
+            ));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
