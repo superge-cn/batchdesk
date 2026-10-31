@@ -413,6 +413,7 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
         csv_merge: None,
         csv_extract: None,
         csv_rows: None,
+        csv_dedup: None,
     }];
     let stats = PlanStats {
         total: 1,
@@ -539,6 +540,7 @@ pub fn plan_c10_compress(input: PlanC10CompressInput) -> Result<PlanDocument, Ke
         csv_merge: None,
         csv_extract: None,
         csv_rows: None,
+        csv_dedup: None,
     }];
     let stats = PlanStats {
         total: 1,

@@ -109,6 +109,8 @@ pub enum PlanAction {
     CsvRows,
     /// F10 目录清单产物（1:1，每个根目录一条 entry；方案 §5.15）。
     Listing,
+    /// C11 CSV 去重产物（1:1，每个输入一条 entry）。
+    CsvDedup,
 }
 
 impl PlanAction {
@@ -128,6 +130,7 @@ impl PlanAction {
             Self::CsvExtract => "csv-extract",
             Self::CsvRows => "csv-rows",
             Self::Listing => "listing",
+            Self::CsvDedup => "csv-dedup",
         }
     }
 }
@@ -193,6 +196,37 @@ pub struct PlanBlocked {
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvDedupColumn {
+    pub index: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvDedup {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    pub delimiter: String,
+    pub has_header: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    pub column_count: u64,
+    /// `"row"`（整行）或 `"columns"`（指定列拼键）。
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_columns: Vec<PlanCsvDedupColumn>,
+    pub target_encoding: String,
+    pub invalid: String,
+    pub data_rows: u64,
+    pub unique_rows: u64,
+    pub duplicate_rows: u64,
+    pub dirty_rows: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +446,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：CSV 抽取数量行的窗口与源结构（仅 F08 的 `csv-rows` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_rows: Option<PlanCsvRows>,
+    /// 追加式可选字段：C11 CSV 去重的键选择与源结构（仅 `csv-dedup` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_dedup: Option<PlanCsvDedup>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -584,6 +621,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 csv_merge: None,
                 csv_extract: None,
                 csv_rows: None,
+                csv_dedup: None,
             });
         }
     }
@@ -799,6 +837,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             csv_merge: None,
             csv_extract: None,
             csv_rows: None,
+            csv_dedup: None,
         });
     }
 

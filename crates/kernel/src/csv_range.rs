@@ -238,6 +238,7 @@ pub fn plan_f09(input: PlanF09Input) -> Result<PlanDocument, KernelError> {
                 invalid: input.invalid.as_str().to_string(),
                 dirty_rows: file.dirty_rows,
             }),
+            csv_dedup: None,
         });
     }
 

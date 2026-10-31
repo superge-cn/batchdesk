@@ -12,6 +12,7 @@ pub mod config;
 pub mod conflict;
 pub mod create_dirs;
 pub mod csv;
+pub mod csv_dedup;
 pub mod csv_extract;
 pub mod csv_merge;
 pub mod csv_range;

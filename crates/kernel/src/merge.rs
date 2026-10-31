@@ -149,6 +149,7 @@ pub fn plan_f04(input: PlanF04Input) -> Result<PlanDocument, KernelError> {
         csv_merge: None,
         csv_extract: None,
         csv_rows: None,
+        csv_dedup: None,
     };
     let entries = vec![entry];
 

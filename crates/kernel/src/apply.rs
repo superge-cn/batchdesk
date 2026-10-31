@@ -953,6 +953,7 @@ mod tests {
             csv_merge: None,
             csv_extract: None,
             csv_rows: None,
+            csv_dedup: None,
         }
     }
 

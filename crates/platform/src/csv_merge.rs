@@ -50,6 +50,31 @@ pub fn csv_merge_inspect(
     path: &Path,
     options: CsvMergeScanOptions,
 ) -> io::Result<CsvMergeInspection> {
+    inspect_with_records(path, options).map(|(inspection, _)| inspection)
+}
+
+/// C11 CSV 去重的输入检查结果：F06 检查结果＋解码后的全部记录（方案 §5.15）。
+pub struct CsvDedupInspection {
+    pub inspection: CsvMergeInspection,
+    /// 解码后的全部记录；有表头时首行为表头，编码未确认时为空。
+    pub records: Vec<Vec<String>>,
+}
+
+pub fn csv_dedup_inspect(
+    path: &Path,
+    options: CsvMergeScanOptions,
+) -> io::Result<CsvDedupInspection> {
+    let (inspection, records) = inspect_with_records(path, options)?;
+    Ok(CsvDedupInspection {
+        inspection,
+        records,
+    })
+}
+
+fn inspect_with_records(
+    path: &Path,
+    options: CsvMergeScanOptions,
+) -> io::Result<(CsvMergeInspection, Vec<Vec<String>>)> {
     let sampled = sample_bytes(
         path,
         SampleSpec {
@@ -72,17 +97,20 @@ pub fn csv_merge_inspect(
     };
 
     let Some(encoding) = source_encoding else {
-        return Ok(CsvMergeInspection {
-            file_size: sampled.file_size,
-            source_encoding: None,
-            delimiter,
-            delimiter_detected,
-            has_header: options.has_header,
-            columns: Vec::new(),
-            column_count: 0,
-            data_rows: 0,
-            dirty_rows: 0,
-        });
+        return Ok((
+            CsvMergeInspection {
+                file_size: sampled.file_size,
+                source_encoding: None,
+                delimiter,
+                delimiter_detected,
+                has_header: options.has_header,
+                columns: Vec::new(),
+                column_count: 0,
+                data_rows: 0,
+                dirty_rows: 0,
+            },
+            Vec::new(),
+        ));
     };
 
     let data = std::fs::read(fs_path(path))?;
@@ -117,17 +145,20 @@ pub fn csv_merge_inspect(
         .filter(|row| row.len() as u64 != column_count)
         .count() as u64;
 
-    Ok(CsvMergeInspection {
-        file_size: sampled.file_size,
-        source_encoding: Some(encoding),
-        delimiter,
-        delimiter_detected,
-        has_header: options.has_header,
-        columns,
-        column_count,
-        data_rows: rows.len() as u64,
-        dirty_rows,
-    })
+    Ok((
+        CsvMergeInspection {
+            file_size: sampled.file_size,
+            source_encoding: Some(encoding),
+            delimiter,
+            delimiter_detected,
+            has_header: options.has_header,
+            columns,
+            column_count,
+            data_rows: rows.len() as u64,
+            dirty_rows,
+        },
+        records,
+    ))
 }
 
 #[cfg(test)]
@@ -180,6 +211,24 @@ mod tests {
         assert_eq!(inspection.dirty_rows, 1);
         assert_eq!(inspection.delimiter, Delimiter::Comma);
         assert!(inspection.delimiter_detected);
+    }
+
+    #[test]
+    fn dedup_inspect_returns_all_records_including_header() {
+        let dir = TempDir::new();
+        let path = dir.0.join("data.csv");
+        fs::write(&path, b"id,name\n1,A\n1,A\n2,B\n").unwrap();
+        let inspected = csv_dedup_inspect(&path, options()).unwrap();
+        assert_eq!(inspected.inspection.data_rows, 3);
+        assert_eq!(
+            inspected.records,
+            vec![
+                vec!["id".to_string(), "name".to_string()],
+                vec!["1".to_string(), "A".to_string()],
+                vec!["1".to_string(), "A".to_string()],
+                vec!["2".to_string(), "B".to_string()],
+            ]
+        );
     }
 
     #[test]

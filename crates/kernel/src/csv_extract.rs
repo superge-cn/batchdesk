@@ -201,6 +201,7 @@ pub fn plan_f07(input: PlanF07Input) -> Result<PlanDocument, KernelError> {
                 dirty_rows: file.dirty_rows,
             }),
             csv_rows: None,
+            csv_dedup: None,
         });
     }
 

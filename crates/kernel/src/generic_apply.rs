@@ -20,6 +20,7 @@ use crate::apply::{
 };
 use crate::conflict::sequence_target;
 use crate::csv::Delimiter;
+use crate::csv_dedup::{dedup_records, render_records};
 use crate::csv_merge::{column_keys, normalized_columns, parse_records, write_record};
 use crate::csv_rows::{select_row_window, RowWindow};
 use crate::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
@@ -30,8 +31,8 @@ use crate::license::{Capability, LicenseService};
 use crate::listing::{DirectoryLister, ListingOptions};
 use crate::path::{is_under, protected_by, try_normalize, ProtectedDir};
 use crate::plan::{
-    PlanAction, PlanCsvExtract, PlanCsvMerge, PlanCsvRows, PlanDocument, PlanParamValue,
-    PlanResolution,
+    PlanAction, PlanCsvDedup, PlanCsvExtract, PlanCsvMerge, PlanCsvRows, PlanDocument,
+    PlanParamValue, PlanResolution,
 };
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
@@ -96,6 +97,7 @@ pub fn apply_generic_plan(
             | PlanAction::Merge
             | PlanAction::CsvExtract
             | PlanAction::CsvRows
+            | PlanAction::CsvDedup
             | PlanAction::Listing
             | PlanAction::CreateDir => {}
             other => {
@@ -206,6 +208,12 @@ pub fn apply_generic_plan(
                     KernelError::invalid_params("csv-rows entries require a csvRows payload")
                 })?;
                 validate_csv_rows(payload)?;
+            }
+            PlanAction::CsvDedup => {
+                let payload = entry.csv_dedup.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-dedup entries require a csvDedup payload")
+                })?;
+                validate_csv_dedup(payload)?;
             }
             _ => {}
         }
@@ -908,6 +916,13 @@ fn perform(
                 })?;
                 perform_csv_rows(context, &entry.source, target, overwrite, payload)
             }
+            PlanAction::CsvDedup => {
+                let target = target.expect("validated: csv-dedup requires a target");
+                let payload = entry.csv_dedup.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-dedup entries require a csvDedup payload")
+                })?;
+                perform_csv_dedup(context, &entry.source, target, overwrite, payload)
+            }
             PlanAction::Listing => {
                 let target = target.expect("validated: listing requires a target");
                 perform_listing(context, plan, entry, target, overwrite)
@@ -1293,6 +1308,43 @@ fn validate_csv_extract(payload: &PlanCsvExtract) -> Result<(), KernelError> {
     Ok(())
 }
 
+fn validate_csv_dedup(payload: &PlanCsvDedup) -> Result<(), KernelError> {
+    if TargetEncoding::parse(&payload.target_encoding).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-dedup targetEncoding is not a supported encoding",
+        ));
+    }
+    if InvalidSequencePolicy::parse(&payload.invalid).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-dedup invalid policy is not supported",
+        ));
+    }
+    if Delimiter::parse(&payload.delimiter).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-dedup delimiter is not supported",
+        ));
+    }
+    match payload.key.as_str() {
+        "row" => {}
+        "columns" if !payload.key_columns.is_empty() => {}
+        _ => {
+            return Err(KernelError::invalid_params(
+                "csv-dedup key/columns selection is invalid",
+            ))
+        }
+    }
+    if payload
+        .key_columns
+        .iter()
+        .any(|column| column.index >= payload.column_count)
+    {
+        return Err(KernelError::invalid_params(
+            "csv-dedup key column index is out of range",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_csv_rows(payload: &PlanCsvRows) -> Result<(), KernelError> {
     if payload.encoding.is_none() {
         return Err(KernelError::new(
@@ -1633,6 +1685,96 @@ fn perform_csv_range(
 }
 
 /// F08：解码后按前 N / 后 N 选择数据行，表头与行内容原样输出。
+fn perform_csv_dedup(
+    context: &GenericApplyContext<'_>,
+    source: &str,
+    target: &str,
+    overwrite: bool,
+    payload: &PlanCsvDedup,
+) -> Result<Performed, KernelError> {
+    let encoding = payload.encoding.ok_or_else(|| {
+        KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        )
+    })?;
+    let target_encoding = TargetEncoding::parse(&payload.target_encoding)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvDedup target encoding"))?;
+    let invalid = InvalidSequencePolicy::parse(&payload.invalid).ok_or_else(|| {
+        KernelError::invalid_params("unsupported csvDedup invalid-sequence policy")
+    })?;
+    let delimiter = Delimiter::parse(&payload.delimiter)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvDedup delimiter"))?;
+    let backup = if overwrite {
+        Some(context.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+    let data = context.fs.read_bytes(source)?;
+    let decoded = transcode(
+        &data,
+        encoding,
+        TargetEncoding::Utf8 { bom: false },
+        invalid,
+    )?;
+    let records = parse_records(&decoded.bytes, delimiter.as_byte());
+    let header = if payload.has_header {
+        let Some((header, _)) = records.split_first() else {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        };
+        if normalized_columns(header) != payload.columns {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+        Some(header)
+    } else {
+        None
+    };
+    let (unique, _) = dedup_records(&records, payload.has_header, &payload.key_columns);
+    let output = render_records(header, &unique, delimiter.as_byte());
+    let transcoded = transcode(
+        output.as_bytes(),
+        SourceEncoding::Utf8,
+        target_encoding,
+        invalid,
+    )?;
+    context.fs.write_atomic(target, &transcoded.bytes)?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: context
+                .fs
+                .quarantine_target_path(&file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
+}
+
 fn perform_csv_rows(
     context: &GenericApplyContext<'_>,
     source: &str,
@@ -2413,6 +2555,7 @@ mod tests {
             csv_merge: None,
             csv_extract: None,
             csv_rows: None,
+            csv_dedup: None,
         }
     }
 
@@ -3044,6 +3187,7 @@ mod tests {
                 dirty_rows: 0,
             }),
             csv_rows: None,
+            csv_dedup: None,
         }
     }
 
@@ -3291,6 +3435,7 @@ mod tests {
                 invalid: "replace-and-count".to_string(),
                 dirty_rows: 0,
             }),
+            csv_dedup: None,
         }
     }
 
@@ -3346,6 +3491,7 @@ mod tests {
                 invalid: "replace-and-count".to_string(),
                 dirty_rows: 0,
             }),
+            csv_dedup: None,
         }
     }
 
@@ -3390,6 +3536,7 @@ mod tests {
             }),
             csv_extract: None,
             csv_rows: None,
+            csv_dedup: None,
         }
     }
 
@@ -3432,6 +3579,7 @@ mod tests {
             csv_merge: None,
             csv_extract: None,
             csv_rows: None,
+            csv_dedup: None,
         }
     }
 

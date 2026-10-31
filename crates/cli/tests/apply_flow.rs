@@ -2827,3 +2827,215 @@ fn f07_missing_column_blocks_with_e3004() {
     assert_eq!(document["entries"][0]["blocked"]["code"], "E3004");
     assert!(!output.exists());
 }
+
+#[test]
+fn c11_full_row_dedup_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("a-dedup.csv");
+    fs::write(&source, b"id,name\n1,A\n1,A\n2,B\n1,C\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c11",
+        "--file",
+        path_text(&source),
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c11 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c11");
+    let payload = &document["entries"][0]["csvDedup"];
+    assert_eq!(payload["key"], "row");
+    assert_eq!(payload["dataRows"], 4);
+    assert_eq!(payload["uniqueRows"], 3);
+    assert_eq!(payload["duplicateRows"], 1);
+    assert_eq!(document["stats"]["warning"], 1);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c11 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"id,name\n1,A\n2,B\n1,C\n");
+    assert_eq!(fs::read(&source).unwrap(), b"id,name\n1,A\n1,A\n2,B\n1,C\n");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "c11 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn c11_key_column_dedup_keeps_first_occurrence() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("a-dedup.csv");
+    fs::write(&source, b"id,name\n1,A\n1,A\n1,C\n2,B\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c11",
+        "--file",
+        path_text(&source),
+        "--output",
+        path_text(&output),
+        "--key-column",
+        "id",
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c11 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let payload = &document["entries"][0]["csvDedup"];
+    assert_eq!(payload["key"], "columns");
+    assert_eq!(payload["keyColumns"][0]["index"], 0);
+    assert_eq!(payload["keyColumns"][0]["name"], "id");
+    assert_eq!(payload["uniqueRows"], 2);
+    assert_eq!(payload["duplicateRows"], 2);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c11 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"id,name\n1,A\n2,B\n");
+}
+
+#[test]
+fn c11_existing_target_is_skipped_and_missing_key_column_blocks() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let output = dir.0.join("a-dedup.csv");
+    fs::write(&source, b"id,name\n1,A\n1,A\n").unwrap();
+    fs::write(&output, b"occupied\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c11",
+        "--file",
+        path_text(&source),
+        "--output",
+        path_text(&output),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(
+        document["entries"][0]["conflict"]["kind"],
+        "existing-target"
+    );
+    assert_eq!(document["entries"][0]["resolution"], "skip");
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let missing = batchdesk(&[
+        "c11",
+        "--file",
+        path_text(&source),
+        "--output",
+        path_text(&dir.0.join("other.csv")),
+        "--key-column",
+        "missing",
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(missing.status.success());
+    let missing_document: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(missing_document["entries"][0]["blocked"]["code"], "E3004");
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c11 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"occupied\n");
+}
