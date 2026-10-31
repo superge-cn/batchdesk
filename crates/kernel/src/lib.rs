@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod binary;
 pub mod config;
 pub mod conflict;
 pub mod create_dirs;
@@ -21,6 +22,7 @@ pub mod fs;
 pub mod generic_apply;
 pub mod journal;
 pub mod license;
+pub mod line_endings;
 pub mod listing;
 pub mod merge;
 pub mod path;

@@ -81,6 +81,10 @@ pub enum CaseSense {
 /// The quarantine restore is expressed as `rename(quarantine_path, original,
 /// ConflictPolicy::Skip)` so the frozen `FsOp::Rename` journal reverse can be
 /// replayed without another operation variant.
+/// 流式改写的读写回调（C02 专用）；适配层提供源/目标文件句柄。
+pub type RewriteCallback<'a> =
+    dyn FnMut(&mut dyn std::io::Read, &mut dyn std::io::Write) -> Result<(), KernelError> + 'a;
+
 pub trait FsAdapter: Send + Sync {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError>;
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError>;
@@ -114,6 +118,23 @@ pub trait FsAdapter: Send + Sync {
         Err(KernelError::new(
             "E5001",
             "streaming atomic write is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+    /// 以流式读写回调原地重写文件（临时文件＋原子改名）；C02 换行转换专用。
+    ///
+    /// 适配层负责打开源文件与临时文件、调用回调、flush 后原子改名；回调返回
+    /// 错误时清理临时文件并原样返回。源文件在改名成功前保持不变。
+    /// 适配层不支持时返回 E5001。
+    fn rewrite_atomic_with(
+        &self,
+        _path: &str,
+        _rewrite: &mut RewriteCallback<'_>,
+    ) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "streaming atomic rewrite is not supported by this adapter",
             None,
             false,
         ))

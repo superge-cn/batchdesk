@@ -12,6 +12,8 @@
 //! 与 edit-content 先经 `FsAdapter::backup_to_quarantine` 备份原内容，逆是
 //! `WriteAtomic{dataRef}` 备份还原。回滚统一走 `apply::execute_reverse`。
 
+use std::io::{Read, Write};
+
 use crate::apply::{
     execute_reverse, ApplyEntryReport, ApplyOptions, ApplyOutcome, ApplyReport, ApplyState,
     ApplyStatus, OnConflict,
@@ -36,6 +38,16 @@ use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 /// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节。
 pub type ContentEditor<'a> = &'a dyn Fn(&[u8]) -> Result<Vec<u8>, KernelError>;
 
+/// 流式内容重写端口：读取源流、写入目标流；C02 等大文件改写使用。
+pub trait ContentRewriter: Send + Sync {
+    fn rewrite(
+        &self,
+        entry: &crate::plan::PlanEntry,
+        input: &mut dyn Read,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError>;
+}
+
 pub struct GenericApplyContext<'a> {
     pub fs: &'a dyn FsAdapter,
     pub license: &'a dyn LicenseService,
@@ -46,8 +58,10 @@ pub struct GenericApplyContext<'a> {
     pub case_sense: CaseSense,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
-    /// `edit-content` 条目的内容变换函数（如转码/换行/替换）；其他动作为 None。
+    /// `edit-content` 条目的内容变换函数（如转码）；其他动作为 None。
     pub content_editor: Option<ContentEditor<'a>>,
+    /// 流式内容重写端口（C02 换行转换）；设置时优先于 `content_editor`。
+    pub content_rewriter: Option<&'a dyn ContentRewriter>,
     /// F10 目录清单的流式遍历/写出端口；其他动作为 None。
     pub directory_lister: Option<&'a dyn DirectoryLister>,
 }
@@ -201,9 +215,10 @@ pub fn apply_generic_plan(
         .iter()
         .any(|entry| entry.action == PlanAction::EditContent)
         && context.content_editor.is_none()
+        && context.content_rewriter.is_none()
     {
         return Err(KernelError::invalid_params(
-            "edit-content entries require a content editor on the apply context",
+            "edit-content entries require a content editor or rewriter on the apply context",
         ));
     }
     let overwrite_requested = options.on_conflict == OnConflict::Overwrite
@@ -918,14 +933,22 @@ fn perform(
                 })
             }
             PlanAction::EditContent => {
-                // 就地改写：备份 → 读取 → 注入的变换函数 → 原子写回。
+                // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
                 let backup = context.fs.backup_to_quarantine(&entry.source)?;
-                let data = context.fs.read_bytes(&entry.source)?;
-                let editor = context
-                    .content_editor
-                    .expect("validated: edit-content requires an editor");
-                let edited = editor(&data)?;
-                context.fs.write_atomic(&entry.source, &edited)?;
+                if let Some(rewriter) = context.content_rewriter {
+                    context
+                        .fs
+                        .rewrite_atomic_with(&entry.source, &mut |reader, writer| {
+                            rewriter.rewrite(entry, reader, writer)
+                        })?;
+                } else {
+                    let data = context.fs.read_bytes(&entry.source)?;
+                    let editor = context
+                        .content_editor
+                        .expect("validated: edit-content requires an editor");
+                    let edited = editor(&data)?;
+                    context.fs.write_atomic(&entry.source, &edited)?;
+                }
                 let forward = FsOp::WriteAtomic {
                     path: entry.source.clone(),
                     data_ref: Some(backup),
@@ -2420,6 +2443,7 @@ mod tests {
             progress: None,
             cancel: None,
             content_editor: None,
+            content_rewriter: None,
             directory_lister: None,
         }
     }

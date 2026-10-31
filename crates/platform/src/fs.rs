@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use kernel::error::KernelError;
 use kernel::fs::{
     CaseSense, ConflictPolicy, DirEntryInfo, EntryAttrs, EntryKind, FsAdapter, PathOutcome,
-    PathOutcomeKind, ScanFilter, StatInfo,
+    PathOutcomeKind, RewriteCallback, ScanFilter, StatInfo,
 };
 
 pub struct CliFsAdapter {
@@ -161,6 +161,51 @@ impl FsAdapter for CliFsAdapter {
             return Err(io_error(&error, &temp));
         }
         drop(file);
+        #[cfg(windows)]
+        if target.exists() {
+            fs::remove_file(&target).map_err(|error| io_error(&error, &target))?;
+        }
+        fs::rename(&temp, &target).map_err(|error| {
+            let _ = fs::remove_file(&temp);
+            io_error(&error, &target)
+        })
+    }
+
+    fn rewrite_atomic_with(
+        &self,
+        path: &str,
+        rewrite: &mut RewriteCallback<'_>,
+    ) -> Result<(), KernelError> {
+        let target = fs_path(Path::new(path));
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| {
+                KernelError::new("E1003", "target has no parent directory", None, false)
+            })?;
+        fs::create_dir_all(parent).map_err(|error| io_error(&error, parent))?;
+        let temp = parent.join(format!(
+            ".batchdesk-rewrite-{}-{}",
+            std::process::id(),
+            self.next_id()
+        ));
+        let mut reader = fs::File::open(fs_path(Path::new(path)))
+            .map_err(|error| io_error(&error, Path::new(path)))?;
+        let mut file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        if let Err(error) = rewrite(&mut reader, &mut file) {
+            drop(file);
+            drop(reader);
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
+        if let Err(error) = file.flush() {
+            drop(file);
+            drop(reader);
+            let _ = fs::remove_file(&temp);
+            return Err(io_error(&error, &temp));
+        }
+        drop(file);
+        drop(reader);
         #[cfg(windows)]
         if target.exists() {
             fs::remove_file(&target).map_err(|error| io_error(&error, &target))?;
@@ -948,18 +993,26 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
 
     struct TempDir(PathBuf);
 
     impl TempDir {
         fn new() -> Self {
+            // 并行测试可能在同一时钟刻度取到相同纳秒；PID＋进程内序号保证唯一。
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("batchdesk-fs-{nanos}"));
+            let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "batchdesk-fs-{}-{nanos}-{sequence}",
+                std::process::id()
+            ));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -969,6 +1022,40 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn rewrite_atomic_with_replaces_the_file_and_preserves_it_on_error() {
+        let dir = TempDir::new();
+        let path = dir.0.join("a.txt");
+        fs::write(&path, b"a\r\nb\n").unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        adapter
+            .rewrite_atomic_with(path.to_str().unwrap(), &mut |reader, writer| {
+                let mut data = Vec::new();
+                reader.read_to_end(&mut data).map_err(|error| {
+                    KernelError::new("E5001", "read failed", Some(error.to_string()), false)
+                })?;
+                let upper: Vec<u8> = data.iter().map(|byte| byte.to_ascii_uppercase()).collect();
+                writer.write_all(&upper).map_err(|error| {
+                    KernelError::new("E3005", "write failed", Some(error.to_string()), false)
+                })
+            })
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"A\r\nB\n");
+
+        let error = adapter
+            .rewrite_atomic_with(path.to_str().unwrap(), &mut |_reader, _writer| {
+                Err(KernelError::new("E3005", "boom", None, false))
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "E3005");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"A\r\nB\n",
+            "failed rewrite must keep the original file"
+        );
     }
 
     #[test]

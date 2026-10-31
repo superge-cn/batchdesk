@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.21（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.22（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -143,6 +143,7 @@ pub fn plan_f02(input: PlanF02Input) -> PlanDocument;                  // §5.15
 pub fn plan_f03(input: PlanF03Input) -> PlanDocument;                  // §5.15 按份数分片
 pub fn plan_f04(input: PlanF04Input) -> PlanDocument;                  // §5.15 TXT 合并（N:1）
 pub fn plan_f13(input: PlanF13Input) -> PlanDocument;                  // §5.5 正则重命名（复用重命名核心）
+pub fn plan_c02(input: PlanC02Input) -> PlanDocument;                  // §5.15 换行符转换（流式重写）
 ```
 
 约定：`plan_*` 一律纯函数、绝不落盘（不变量 2）；`apply` 由执行编排层按 `PlanDocument` 驱动 FsAdapter 完成，并逐条写 Journal（§7.8）。
@@ -449,6 +450,7 @@ interface ApplyReport {
 | 杀软敏感 → 批次内节流（每 N 项微暂停） | **已定值（来源：用户确认 2026-10-27；已收编基线 §9.1——11.6-10，历史收编于方案 v1.7 R72）**：批次项数与微暂停时长以 §9.1 的杀软防护节流行准，参数可配置 | 已定值（契约先行，基线已收编） |
 
 - `PlanDocument` 可序列化落盘为草稿，但**生成过程绝不落盘**（不变量 2）；`planId` 是 apply、撤销、日志三方共同的关联键。
+- **C02 换行转换（v1.22）**：`plan_c02` 每个输入一条 `edit-content` 条目，计划 `params` 快照 `target/structure/platformPrior/source`；执行经 `ContentRewriter`＋`FsAdapter::rewrite_atomic_with` 流式读写（临时文件＋原子改名，备份与 Journal reverse 同 edit-content）；CSV 只转换引号外记录终止符，文本转换全部换行；二进制魔数、UTF-16 源、编码未确认均 blocked E3001；目标换行必须显式给出。决策见 [ADR-0027](../adr/0027-C02-换行转换流式重写与CSV引号保护.md)。
 - **F13 正则重命名（v1.21）**：`plan_f13` 复用 `rename::plan_rename` 的冲突扫描、长路径分级与两阶段编排；正则用 `regex` crate（有限自动机、线性时间、无回溯爆炸），替换模板支持 `$1`/`${name}`/`$$`，计划期校验缺失捕获组并返回 E1002；空 `pattern` 拒绝；无匹配转 `no-change` 警告且不产条目；非法目标名/冲突/长路径与 F12 同规则。决策见 [ADR-0026](../adr/0026-F13-正则重命名引擎与捕获组替换.md)。
 - **F12 长路径分级（v1.20）**：`PlanF12Input.longPathSupported` 由壳层探测（`platform::preflight::long_path_supported`）后传入，kernel 保持纯函数；目标完整路径按方案 §5.13 三级判定——≤200 正常、200–259 发 `long-path-caution` 且条目照常执行、≥260 且未开启长路径支持时该条目 `resolution="skip"` 并发 `long-path-disabled`（提示开启方法或缩短目标路径），≥260 且已开启时正常执行。计划 `params.longPathSupported` 记录探测快照；apply 对 `resolution="skip"` 条目零副作用。
 - **1:N / N:1 分组语义**（`relation`）：F01–F03/F05/C10 解压＝1:N（N 条 entry 共享 `groupId`，`role="output"`，`source` 相同）；C10 压缩＝N:1（N 条 entry 共享 `groupId`，`role="source"`，`target` 相同）；**F04 合并为单条 `merge` entry（N:1 的输入清单记录在 `entry.merge.sources`），F06 CSV 合并为单条 `merge` entry（输入清单在 `entry.csvMerge.files`），F07 CSV 抽取为每个输入一条 `csv-extract` entry（1:1），F08 CSV 抽取数量行为每个输入一条 `csv-rows` entry（1:1），F09 位置区间为每个输入一条 `csv-rows` entry（1:1），F10 目录清单为每个根目录一条 `listing` entry（1:1），均不设 `relation`**（ADR-0016/ADR-0018/ADR-0019/ADR-0020：单条 `write_atomic` 保证产物原子性，撤销只需一条 Journal reverse）。Journal 仍按条目逐条记录；组回滚＝组内条目按 Journal 逆序逐条 `reverse`，无需组级操作；`stats.total` 按条目计数。
@@ -548,3 +550,4 @@ interface JournalEntry {
 | v1.19 | 2026-10-31 | §3.1 追加 `plan_f12`；§8 明确 F12 循环/大小写改名的两阶段 rename 由多条 `Rename` 条目组成，撤销按 Journal 逆序恢复。决策见 [ADR-0024](../adr/0024-F12-批量重命名与两阶段计划.md)。 |
 | v1.20 | 2026-10-31 | §5.1 落地 F12 计划级长路径分级：`PlanF12Input.longPathSupported` 由壳层探测传入，分级复用 `preflight::path_length_level`；200–259 发 `long-path-caution`，≥260 未开启时长路径条目 `resolution=skip`＋`long-path-disabled` 警告，已开启时正常执行；计划 `params.longPathSupported` 记录快照。决策见 [ADR-0025](../adr/0025-F12计划级长路径分级与重命名族语料断言.md)。 |
 | v1.21 | 2026-10-31 | §3.1 将占位 `plan_regex_rename`/`PlanRenameInput` 落为 `plan_f13`/`PlanF13Input`；§5.1 追加 F13 正则规则：`regex` 引擎、`$1`/`${name}`/`$$` 替换、缺失捕获组计划期 E1002、空 pattern 拒绝、无匹配 no-change；冲突/长路径/两阶段复用 F12 核心。决策见 [ADR-0026](../adr/0026-F13-正则重命名引擎与捕获组替换.md)。 |
+| v1.22 | 2026-10-31 | §3.1 追加 `plan_c02`；§5.1 落地 C02 换行转换：`edit-content`＋params 快照 target/structure/platformPrior/source；新增 `ContentRewriter` 端口与 `FsAdapter::rewrite_atomic_with` 流式重写；CSV 引号内换行保留、二进制魔数/UTF-16/编码未确认 blocked E3001。决策见 [ADR-0027](../adr/0027-C02-换行转换流式重写与CSV引号保护.md)。 |

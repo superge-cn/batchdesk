@@ -25,9 +25,14 @@ use kernel::encoding::{
     detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
 };
 use kernel::fs::FsAdapter;
-use kernel::generic_apply::{apply_generic_plan, ContentEditor, GenericApplyContext};
+use kernel::generic_apply::{
+    apply_generic_plan, ContentEditor, ContentRewriter, GenericApplyContext,
+};
 use kernel::journal::JournalStore;
 use kernel::license::AlwaysAllowLicense;
+use kernel::line_endings::{
+    plan_c02, LineEnding, LineEndingRewriter, LineEndingStructureMode, PlanC02File, PlanC02Input,
+};
 use kernel::listing::{plan_f10, ListingOptions, PlanF10File, PlanF10Input};
 use kernel::merge::{plan_f04, PlanF04File, PlanF04Input};
 use kernel::plan::{
@@ -61,6 +66,10 @@ const USAGE: &str = "usage:
   batchdesk c01 --file <path>... --target <encoding>
                 --sample-window <bytes> --sample-blocks <n>
                 [--source <encoding>] [--invalid replace-and-count|abort]
+                [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c02 --file <path>... --to crlf|lf|cr --sample-bytes <bytes>
+                [--structure auto|text|csv] [--source <encoding>]
                 [--platform-prior chinese-windows|other]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
@@ -134,6 +143,17 @@ c09 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --protected-dir DIR     repeatable S02 protected directory (default none)
   --json                  machine-readable output
+
+c02 options:
+  --file PATH             repeatable source text/CSV file (regular files only)
+  --to crlf|lf|cr         target line ending (required; no default)
+  --structure MODE        auto | text | csv (default auto; .csv/.tsv = csv)
+  --source ENC            optional source encoding override
+  --sample-bytes BYTES    head window for encoding detection (explicit; §5.2)
+  --platform-prior PRIOR  chinese-windows | other (default: other)
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --protected-dir DIR     repeatable protected directory
+  --json                  machine-readable plan output
 
 c01 options:
   --file PATH             repeatable source file (regular files only)
@@ -294,7 +314,8 @@ f09 options:
 
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
-  entries transcode in place (backup in quarantine, undo restores from the Journal);
+  entries transcode in place; c02 entries stream a line-ending rewrite (both keep a
+  quarantine backup and undo restores from the Journal);
   f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   f04 entries merge sources in order into one output with a single BOM;
   f05 entries write CSV parts on record boundaries, repeating the header by default;
@@ -381,6 +402,9 @@ fn main() {
     }
     if args[1] == "f13" {
         std::process::exit(run_f13(&args));
+    }
+    if args[1] == "c02" {
+        std::process::exit(run_c02(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -610,12 +634,13 @@ fn run_apply(args: &[String]) -> i32 {
             json,
         )
     } else {
-        // 通用执行器：c01 等 rename/move/copy/delete/edit-content 计划。
+        // 通用执行器：c01/c02/f 系列 rename/move/copy/delete/edit-content 计划。
+        let is_c02 = plan.kind == kernel::line_endings::C02_KIND;
         let has_edit_content = plan
             .entries
             .iter()
             .any(|entry| entry.action == kernel::plan::PlanAction::EditContent);
-        let encoding = match has_edit_content {
+        let encoding = match has_edit_content && !is_c02 {
             true => match generic_plan_encoding(&plan) {
                 Ok(encoding) => Some(encoding),
                 Err(error) => return print_kernel_error(&error),
@@ -634,7 +659,18 @@ fn run_apply(args: &[String]) -> i32 {
             };
             transcode(data, source, target, invalid).map(|result| result.bytes)
         };
-        let content_editor = has_edit_content.then_some(&editor as ContentEditor<'_>);
+        let content_editor = (has_edit_content && !is_c02).then_some(&editor as ContentEditor<'_>);
+        let rewriter = if is_c02 {
+            match c02_rewriter_from_plan(&plan) {
+                Ok(rewriter) => Some(rewriter),
+                Err(error) => return print_kernel_error(&error),
+            }
+        } else {
+            None
+        };
+        let content_rewriter = rewriter
+            .as_ref()
+            .map(|rewriter| rewriter as &dyn ContentRewriter);
         let lister = FsDirectoryLister;
         let mut generic = GenericApplyContext {
             fs: &adapter,
@@ -647,6 +683,7 @@ fn run_apply(args: &[String]) -> i32 {
             progress: None,
             cancel: None,
             content_editor,
+            content_rewriter,
             directory_lister: Some(&lister),
         };
         run_generic_or_specific(
@@ -729,6 +766,31 @@ fn generic_plan_encoding(
         _ => None,
     };
     Ok((target, invalid, prior, source))
+}
+
+fn c02_rewriter_from_plan(
+    plan: &PlanDocument,
+) -> Result<LineEndingRewriter, kernel::error::KernelError> {
+    let string_param = |name: &str| -> Result<&str, kernel::error::KernelError> {
+        match plan.params.get(name) {
+            Some(kernel::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
+            _ => Err(kernel::error::KernelError::missing_param(format!(
+                "plan param {name} is required"
+            ))),
+        }
+    };
+    let target = LineEnding::parse(string_param("target")?).ok_or_else(|| {
+        kernel::error::KernelError::invalid_params(
+            "plan param target is not a supported line ending",
+        )
+    })?;
+    let structure =
+        LineEndingStructureMode::parse(string_param("structure")?).ok_or_else(|| {
+            kernel::error::KernelError::invalid_params(
+                "plan param structure is not a supported structure mode",
+            )
+        })?;
+    Ok(LineEndingRewriter::new(target, structure))
 }
 
 fn run_c01(args: &[String]) -> i32 {
@@ -955,6 +1017,168 @@ impl SplitMode {
             SplitMode::Lines => "--lines",
             SplitMode::Parts => "--parts",
         }
+    }
+}
+
+fn run_c02(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut target = None;
+    let mut structure = LineEndingStructureMode::Auto;
+    let mut source = None;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_bytes = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--to" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --to requires crlf|lf|cr");
+                };
+                let Some(parsed) = LineEnding::parse(value) else {
+                    return input_error(format!("E1002: unknown line ending: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--structure" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --structure requires auto|text|csv");
+                };
+                let Some(parsed) = LineEndingStructureMode::parse(value) else {
+                    return input_error(format!("E1002: unknown structure mode: {value}"));
+                };
+                structure = parsed;
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires bytes");
+                };
+                match value.parse::<usize>() {
+                    Ok(bytes) if bytes > 0 => sample_bytes = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c02 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: c02 requires at least one --file");
+    }
+    let Some(target) = target else {
+        return input_error("E1001: c02 requires --to crlf|lf|cr");
+    };
+    let Some(sample_bytes) = sample_bytes else {
+        return input_error("E1001: c02 requires --sample-bytes <bytes>");
+    };
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+
+    let mut plan_files = Vec::with_capacity(files.len());
+    for file in &files {
+        let absolute = make_absolute(file);
+        let resolved = structure.resolve(&absolute.to_string_lossy());
+        let inspect =
+            match platform::line_endings::inspect_line_endings(&absolute, resolved, sample_bytes) {
+                Ok(inspect) => inspect,
+                Err(error) => {
+                    eprintln!("{}: {}", error.code, error.message);
+                    return 2;
+                }
+            };
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanC02File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: inspect.file_size,
+            sample: inspect.sample,
+            counts: inspect.counts,
+            structure: resolved,
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c02"));
+    let planned = plan_c02(PlanC02Input {
+        plan_id,
+        target,
+        structure,
+        files: plan_files,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        confirmed_source: source,
+        prior,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
     }
 }
 

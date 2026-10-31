@@ -24,6 +24,10 @@ use kernel::encoding::{
     TargetEncoding,
 };
 use kernel::fs::CaseSense;
+use kernel::line_endings::{
+    plan_c02, LineEnding, LineEndingCounts, LineEndingStructure, LineEndingStructureMode,
+    PlanC02File, PlanC02Input,
+};
 use kernel::path::{normalize, try_normalize};
 use kernel::plan::{
     plan_c01, PlanC01File, PlanC01Input, PlanDocument, PlanParamValue, PlanResolution,
@@ -809,6 +813,32 @@ fn r06_extended_and_plain_paths_normalize_to_the_same_value() {
     let entry = &plan.entries[0];
     assert!(entry.conflict.is_none(), "扩展/普通写法不应互判重");
     assert!(entry.blocked.is_none());
+}
+
+#[test]
+fn k06_binary_magic_is_rejected_by_c02_plan() {
+    let data = sample("K06", "photo.txt");
+    let plan = plan_c02(PlanC02Input {
+        plan_id: PLAN_ID.to_string(),
+        target: LineEnding::Lf,
+        structure: LineEndingStructureMode::Text,
+        files: vec![PlanC02File {
+            path: "/corpus/K06/photo.txt".to_string(),
+            canonical_path: None,
+            file_size: data.len() as u64,
+            sample: data,
+            counts: LineEndingCounts::default(),
+            structure: LineEndingStructure::Text,
+        }],
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        confirmed_source: None,
+        prior: PlatformPrior::Other,
+    })
+    .expect("plan_c02 生成计划");
+    let blocked = plan.entries[0].blocked.as_ref().expect("二进制应被阻断");
+    assert_eq!(blocked.code, "E3001");
+    assert!(blocked.reason.contains("binary file signature"));
 }
 
 fn is_corpus_id(name: &str) -> bool {

@@ -6,7 +6,7 @@ K02	asserted	detect 判定 UTF-8 高置信，不误判为 GBK	—
 K03	asserted	BOM 优先命中 UTF-8；显式目标 utf-8-bom 时输出首字节为 BOM	—
 K04	partial	不静默采用：needs_manual=true，plan_c01 产出 blocked E3001	T 要求走 chardetng 统计判定；当前含 NUL 的样本在严格 UTF-8 分支即因控制字符降级
 K05	partial	默认 UTF-8 且给出"纯 ASCII/过短"提示（note 非空）	confidence 仍为 High；低置信候选预览（§5.2 置信度策略）未接
-K06	partial	不进入文本管道：needs_manual=true，plan_c01 产出 blocked E3001	魔数探测（方案 §5.14）未实现，现以控制字符/解码错误兜底
+K06	asserted	魔数探测：plan_c02 对 PNG 样本产出 blocked E3001（binary file signature）；plan_c01 仍以控制字符/解码错误兜底	—
 K07	partial	疑似混合编码不被修复：needs_manual=true，plan_c01 产出 blocked E3001	缺"疑似混合编码"专项提示文案
 K08	partial	detect 判定 UTF-16LE+BOM；转码 UTF-8 替换计数 0、6 行	分片后每片写 BOM 属 F05 输出策略，未实现
 T01	asserted	未闭合引号：扫描器 tail 保留为末条记录且 unclosed_quote=true；plan_f05 产出 unclosed-quote 警告；物理行数多于解析记录数（吞行按末条记录处理）	—
