@@ -336,6 +336,7 @@ pub fn plan_c11(input: PlanC11Input) -> Result<PlanDocument, KernelError> {
             csv_extract: None,
             csv_rows: None,
             csv_dedup: Some(payload),
+            csv_filter: None,
         });
     }
     if duplicate_total == 0 {

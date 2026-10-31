@@ -20,6 +20,7 @@ use kernel::create_dirs::{
 use kernel::csv::{plan_f05, CsvSplitBasis, Delimiter, PlanF05File, PlanF05Input};
 use kernel::csv_dedup::{plan_c11, PlanC11File, PlanC11Input};
 use kernel::csv_extract::{plan_f07, ColumnPick, PlanF07File, PlanF07Input};
+use kernel::csv_filter::{plan_c12, FilterOp, PlanC12File, PlanC12Input};
 use kernel::csv_merge::{parse_records, plan_f06, PlanF06File, PlanF06Input};
 use kernel::csv_range::{plan_f09, PlanF09File, PlanF09Input};
 use kernel::csv_rows::{plan_f08, PlanF08File, PlanF08Input, RowWindow};
@@ -98,6 +99,13 @@ const USAGE: &str = "usage:
                 [--source <encoding>] [--platform-prior chinese-windows|other]
                 [--sample-blocks <n>] [--plan-id ULID]
                 [--protected-dir <dir>]... [--json]
+  batchdesk c12 --file <path>... (--output <file> | --output-dir <dir>)
+                --column <name> | --column-index <n> --op <operator> --value <v>
+                --target <encoding> --sample-bytes <bytes>
+                [--mode keep|drop] [--no-header] [--delimiter ,|;|tab||]
+                [--invalid <policy>] [--source <encoding>]
+                [--platform-prior chinese-windows|other] [--sample-blocks <n>]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f02 --file <path>... --lines N --output-dir <dir>
@@ -468,6 +476,9 @@ fn main() {
     }
     if args[1] == "c11" {
         std::process::exit(run_c11(&args));
+    }
+    if args[1] == "c12" {
+        std::process::exit(run_c12(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -1993,6 +2004,350 @@ fn run_c11(args: &[String]) -> i32 {
         protected_dirs,
         case_sense,
         key: keys,
+        files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_c12(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut output = None;
+    let mut output_dir = None;
+    let mut column = None;
+    let mut column_index = None;
+    let mut op = None;
+    let mut value = None;
+    let mut mode_keep = true;
+    let mut target = None;
+    let mut source = None;
+    let mut delimiter = None;
+    let mut invalid = InvalidSequencePolicy::ReplaceAndCount;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_window = None;
+    let mut sample_blocks = 0usize;
+    let mut has_header = true;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--column" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --column requires a header name");
+                };
+                column = Some(value.clone());
+            }
+            "--column-index" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --column-index requires a 1-based index");
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => column_index = Some(parsed),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --column-index must be a positive integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--op" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --op requires an operator");
+                };
+                let Some(parsed) = FilterOp::parse(value) else {
+                    return input_error(format!(
+                        "E1002: --op must be one of contains not-contains eq ne gt ge lt le: {value}"
+                    ));
+                };
+                op = Some(parsed);
+            }
+            "--value" => {
+                index += 1;
+                let Some(raw) = args.get(index) else {
+                    return input_error("E1001: --value requires a comparison value");
+                };
+                value = Some(raw.clone());
+            }
+            "--mode" => {
+                index += 1;
+                let Some(raw) = args.get(index) else {
+                    return input_error("E1001: --mode requires keep|drop");
+                };
+                match raw.as_str() {
+                    "keep" => mode_keep = true,
+                    "drop" => mode_keep = false,
+                    other => {
+                        return input_error(format!("E1002: --mode must be keep or drop: {other}"))
+                    }
+                }
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target requires an encoding");
+                };
+                let Some(parsed) = TargetEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown target encoding: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires a value");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--invalid" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --invalid requires a policy");
+                };
+                let Some(parsed) = InvalidSequencePolicy::parse(value) else {
+                    return input_error(format!("E1002: unknown invalid-sequence policy: {value}"));
+                };
+                invalid = parsed;
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires a window size");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => sample_window = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--sample-blocks" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-blocks requires a count");
+                };
+                match value.parse::<usize>() {
+                    Ok(blocks) => sample_blocks = blocks,
+                    Err(_) => {
+                        return input_error(format!(
+                            "E1002: --sample-blocks must be a non-negative integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--no-header" => has_header = false,
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c12 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: c12 requires at least one --file <path>");
+    }
+    if (column.is_some()) == (column_index.is_some()) {
+        return input_error("E1001: c12 requires exactly one of --column or --column-index");
+    }
+    let Some(op) = op else {
+        return input_error("E1001: c12 requires --op <operator>");
+    };
+    let Some(value) = value else {
+        return input_error("E1001: c12 requires --value <v>");
+    };
+    let condition_column = match (column, column_index) {
+        (Some(name), _) => ColumnPick::Name(name),
+        (_, Some(index)) => ColumnPick::Index(index),
+        _ => unreachable!("validated: exactly one condition column source"),
+    };
+    let Some(target) = target else {
+        return input_error("E1001: c12 requires --target <encoding>");
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: c12 requires --sample-bytes <n> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    if output.is_some() && output_dir.is_some() {
+        return input_error("E1001: use either --output or --output-dir, not both");
+    }
+    let targets: Vec<PathBuf> = match (output, output_dir) {
+        (Some(output), None) => {
+            if files.len() != 1 {
+                return input_error("E1002: --output requires exactly one --file");
+            }
+            vec![make_absolute(&output)]
+        }
+        (None, Some(dir)) => {
+            let dir = make_absolute(&dir);
+            files
+                .iter()
+                .map(|path| {
+                    let name = path
+                        .file_name()
+                        .map(|value| value.to_os_string())
+                        .unwrap_or_else(|| "output.csv".into());
+                    dir.join(name)
+                })
+                .collect()
+        }
+        _ => return input_error("E1001: c12 requires --output <file> or --output-dir <dir>"),
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    for (path, target) in files.iter().zip(targets.iter()) {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: c12 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let inspection = match csv_dedup_inspect(
+            &absolute,
+            CsvMergeScanOptions {
+                delimiter,
+                has_header,
+                sample_window_bytes: sample_window,
+                sample_blocks,
+                platform_prior: prior,
+                source_encoding: source,
+            },
+        ) {
+            Ok(inspection) => inspection,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot inspect CSV for filtering ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanC12File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            output: target.to_string_lossy().into_owned(),
+            file_size: inspection.inspection.file_size,
+            source_encoding: inspection.inspection.source_encoding,
+            delimiter: inspection.inspection.delimiter,
+            has_header,
+            columns: inspection.inspection.columns,
+            column_count: inspection.inspection.column_count,
+            dirty_rows: inspection.inspection.dirty_rows,
+            records: inspection.records,
+            target_occupied: target.exists(),
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c12"));
+    let planned = plan_c12(PlanC12Input {
+        plan_id,
+        target,
+        invalid,
+        protected_dirs,
+        case_sense,
+        mode_keep,
+        condition_column,
+        condition_op: op,
+        condition_value: value,
         files: plan_files,
     });
     match planned {

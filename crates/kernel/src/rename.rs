@@ -525,6 +525,7 @@ fn plain_entry(
         csv_extract: None,
         csv_rows: None,
         csv_dedup: None,
+        csv_filter: None,
     }
 }
 

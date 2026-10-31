@@ -239,6 +239,7 @@ pub fn plan_f09(input: PlanF09Input) -> Result<PlanDocument, KernelError> {
                 dirty_rows: file.dirty_rows,
             }),
             csv_dedup: None,
+            csv_filter: None,
         });
     }
 

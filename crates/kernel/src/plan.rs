@@ -111,6 +111,8 @@ pub enum PlanAction {
     Listing,
     /// C11 CSV 去重产物（1:1，每个输入一条 entry）。
     CsvDedup,
+    /// C12 CSV 过滤产物（1:1，每个输入一条 entry）。
+    CsvFilter,
 }
 
 impl PlanAction {
@@ -131,6 +133,7 @@ impl PlanAction {
             Self::CsvRows => "csv-rows",
             Self::Listing => "listing",
             Self::CsvDedup => "csv-dedup",
+            Self::CsvFilter => "csv-filter",
         }
     }
 }
@@ -226,6 +229,47 @@ pub struct PlanCsvDedup {
     pub data_rows: u64,
     pub unique_rows: u64,
     pub duplicate_rows: u64,
+    pub dirty_rows: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvFilterColumn {
+    pub index: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvFilterCondition {
+    pub column: PlanCsvFilterColumn,
+    /// `contains` / `not-contains` / `eq` / `ne` / `gt` / `ge` / `lt` / `le`。
+    pub op: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvFilter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    pub delimiter: String,
+    pub has_header: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    pub column_count: u64,
+    pub condition: PlanCsvFilterCondition,
+    /// `"keep"`（保留匹配行）或 `"drop"`（剔除匹配行）。
+    pub mode: String,
+    pub target_encoding: String,
+    pub invalid: String,
+    pub data_rows: u64,
+    pub matched_rows: u64,
+    pub kept_rows: u64,
+    /// 数值比较中无法解析为数字的单元格计数（这些行不满足判定）。
+    pub non_numeric_cells: u64,
     pub dirty_rows: u64,
 }
 
@@ -449,6 +493,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：C11 CSV 去重的键选择与源结构（仅 `csv-dedup` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_dedup: Option<PlanCsvDedup>,
+    /// 追加式可选字段：C12 CSV 过滤的条件与源结构（仅 `csv-filter` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_filter: Option<PlanCsvFilter>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -622,6 +669,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 csv_extract: None,
                 csv_rows: None,
                 csv_dedup: None,
+                csv_filter: None,
             });
         }
     }
@@ -838,6 +886,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             csv_extract: None,
             csv_rows: None,
             csv_dedup: None,
+            csv_filter: None,
         });
     }
 

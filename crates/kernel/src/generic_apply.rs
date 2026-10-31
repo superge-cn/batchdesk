@@ -21,6 +21,7 @@ use crate::apply::{
 use crate::conflict::sequence_target;
 use crate::csv::Delimiter;
 use crate::csv_dedup::{dedup_records, render_records};
+use crate::csv_filter::{filter_records, render_records as render_filter_records, FilterOp};
 use crate::csv_merge::{column_keys, normalized_columns, parse_records, write_record};
 use crate::csv_rows::{select_row_window, RowWindow};
 use crate::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
@@ -31,8 +32,8 @@ use crate::license::{Capability, LicenseService};
 use crate::listing::{DirectoryLister, ListingOptions};
 use crate::path::{is_under, protected_by, try_normalize, ProtectedDir};
 use crate::plan::{
-    PlanAction, PlanCsvDedup, PlanCsvExtract, PlanCsvMerge, PlanCsvRows, PlanDocument,
-    PlanParamValue, PlanResolution,
+    PlanAction, PlanCsvDedup, PlanCsvExtract, PlanCsvFilter, PlanCsvMerge, PlanCsvRows,
+    PlanDocument, PlanParamValue, PlanResolution,
 };
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
@@ -98,6 +99,7 @@ pub fn apply_generic_plan(
             | PlanAction::CsvExtract
             | PlanAction::CsvRows
             | PlanAction::CsvDedup
+            | PlanAction::CsvFilter
             | PlanAction::Listing
             | PlanAction::CreateDir => {}
             other => {
@@ -214,6 +216,12 @@ pub fn apply_generic_plan(
                     KernelError::invalid_params("csv-dedup entries require a csvDedup payload")
                 })?;
                 validate_csv_dedup(payload)?;
+            }
+            PlanAction::CsvFilter => {
+                let payload = entry.csv_filter.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-filter entries require a csvFilter payload")
+                })?;
+                validate_csv_filter(payload)?;
             }
             _ => {}
         }
@@ -923,6 +931,13 @@ fn perform(
                 })?;
                 perform_csv_dedup(context, &entry.source, target, overwrite, payload)
             }
+            PlanAction::CsvFilter => {
+                let target = target.expect("validated: csv-filter requires a target");
+                let payload = entry.csv_filter.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-filter entries require a csvFilter payload")
+                })?;
+                perform_csv_filter(context, &entry.source, target, overwrite, payload)
+            }
             PlanAction::Listing => {
                 let target = target.expect("validated: listing requires a target");
                 perform_listing(context, plan, entry, target, overwrite)
@@ -1345,6 +1360,40 @@ fn validate_csv_dedup(payload: &PlanCsvDedup) -> Result<(), KernelError> {
     Ok(())
 }
 
+fn validate_csv_filter(payload: &PlanCsvFilter) -> Result<(), KernelError> {
+    if TargetEncoding::parse(&payload.target_encoding).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-filter targetEncoding is not a supported encoding",
+        ));
+    }
+    if InvalidSequencePolicy::parse(&payload.invalid).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-filter invalid policy is not supported",
+        ));
+    }
+    if Delimiter::parse(&payload.delimiter).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-filter delimiter is not supported",
+        ));
+    }
+    if FilterOp::parse(&payload.condition.op).is_none() {
+        return Err(KernelError::invalid_params(
+            "csv-filter condition operator is not supported",
+        ));
+    }
+    if !matches!(payload.mode.as_str(), "keep" | "drop") {
+        return Err(KernelError::invalid_params(
+            "csv-filter mode must be keep or drop",
+        ));
+    }
+    if payload.condition.column.index >= payload.column_count {
+        return Err(KernelError::invalid_params(
+            "csv-filter condition column index is out of range",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_csv_rows(payload: &PlanCsvRows) -> Result<(), KernelError> {
     if payload.encoding.is_none() {
         return Err(KernelError::new(
@@ -1658,6 +1707,111 @@ fn perform_csv_range(
     }
 
     let transcoded = transcode(&raw, encoding, target_encoding, invalid)?;
+    context.fs.write_atomic(target, &transcoded.bytes)?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: context
+                .fs
+                .quarantine_target_path(&file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
+}
+
+/// C12：解码后按条件求值并按 keep/drop 写出，表头与选中行原样输出。
+fn perform_csv_filter(
+    context: &GenericApplyContext<'_>,
+    source: &str,
+    target: &str,
+    overwrite: bool,
+    payload: &PlanCsvFilter,
+) -> Result<Performed, KernelError> {
+    let encoding = payload.encoding.ok_or_else(|| {
+        KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        )
+    })?;
+    let target_encoding = TargetEncoding::parse(&payload.target_encoding)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvFilter target encoding"))?;
+    let invalid = InvalidSequencePolicy::parse(&payload.invalid).ok_or_else(|| {
+        KernelError::invalid_params("unsupported csvFilter invalid-sequence policy")
+    })?;
+    let delimiter = Delimiter::parse(&payload.delimiter)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvFilter delimiter"))?;
+    let op = FilterOp::parse(&payload.condition.op)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvFilter operator"))?;
+    let mode_keep = match payload.mode.as_str() {
+        "keep" => true,
+        "drop" => false,
+        _ => return Err(KernelError::invalid_params("unsupported csvFilter mode")),
+    };
+    let backup = if overwrite {
+        Some(context.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+    let data = context.fs.read_bytes(source)?;
+    let decoded = transcode(
+        &data,
+        encoding,
+        TargetEncoding::Utf8 { bom: false },
+        invalid,
+    )?;
+    let records = parse_records(&decoded.bytes, delimiter.as_byte());
+    let header = if payload.has_header {
+        let Some((header, _)) = records.split_first() else {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        };
+        if normalized_columns(header) != payload.columns {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+        Some(header)
+    } else {
+        None
+    };
+    let (kept, _, _) = filter_records(
+        &records,
+        payload.has_header,
+        payload.condition.column.index as usize,
+        op,
+        &payload.condition.value,
+        mode_keep,
+    );
+    let output = render_filter_records(header, &kept, delimiter.as_byte());
+    let transcoded = transcode(
+        output.as_bytes(),
+        SourceEncoding::Utf8,
+        target_encoding,
+        invalid,
+    )?;
     context.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
@@ -2556,6 +2710,7 @@ mod tests {
             csv_extract: None,
             csv_rows: None,
             csv_dedup: None,
+            csv_filter: None,
         }
     }
 
@@ -3188,6 +3343,7 @@ mod tests {
             }),
             csv_rows: None,
             csv_dedup: None,
+            csv_filter: None,
         }
     }
 
@@ -3436,6 +3592,7 @@ mod tests {
                 dirty_rows: 0,
             }),
             csv_dedup: None,
+            csv_filter: None,
         }
     }
 
@@ -3492,6 +3649,7 @@ mod tests {
                 dirty_rows: 0,
             }),
             csv_dedup: None,
+            csv_filter: None,
         }
     }
 
@@ -3537,6 +3695,7 @@ mod tests {
             csv_extract: None,
             csv_rows: None,
             csv_dedup: None,
+            csv_filter: None,
         }
     }
 
@@ -3580,6 +3739,7 @@ mod tests {
             csv_extract: None,
             csv_rows: None,
             csv_dedup: None,
+            csv_filter: None,
         }
     }
 
