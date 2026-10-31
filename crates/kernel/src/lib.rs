@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod archive;
 pub mod binary;
 pub mod config;
 pub mod conflict;

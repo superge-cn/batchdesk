@@ -2490,6 +2490,160 @@ fn c03_blocks_binary_and_unclosed_csv() {
     assert_eq!(document["entries"][1]["blocked"]["code"], "E3004");
 }
 
+fn corpus_zip(fid: &str, file: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/corpus")
+        .join(fid)
+        .join("out")
+        .join(file)
+}
+
+#[test]
+fn c10_z01_gbk_name_extracts_and_undo_removes_the_product() {
+    let dir = TempDir::new();
+    let output = dir.0.join("out");
+    fs::create_dir_all(&output).unwrap();
+    let archive = corpus_zip("Z01", "gbk_name.zip");
+
+    let plan = batchdesk(&[
+        "c10",
+        "--extract",
+        path_text(&archive),
+        "--output-dir",
+        path_text(&output),
+        "--max-total-bytes",
+        "10000",
+        "--max-ratio",
+        "100",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c10 z01 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c10");
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "gbk-filename-fallback"));
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c10 z01 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let extracted = output.join("中文资料.txt");
+    assert!(extracted.exists());
+    assert_eq!(fs::read(&extracted).unwrap().len(), 77);
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!extracted.exists());
+}
+
+#[test]
+fn c10_z02_rejects_traversal_entries_but_extracts_the_safe_one() {
+    let dir = TempDir::new();
+    let output = dir.0.join("out");
+    fs::create_dir_all(&output).unwrap();
+    let archive = corpus_zip("Z02", "traversal.zip");
+
+    let plan = batchdesk(&[
+        "c10",
+        "--extract",
+        path_text(&archive),
+        "--output-dir",
+        path_text(&output),
+        "--max-total-bytes",
+        "10000",
+        "--max-ratio",
+        "100",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c10 z02 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "unsafe-entry-skipped"));
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c10 z02 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let safe = output.join("safe").join("ok.txt");
+    assert!(safe.exists());
+    assert_eq!(fs::read(&safe).unwrap().len(), 41);
+    assert!(!output.join("escape.txt").exists());
+    assert!(!dir.0.join("escape.txt").exists());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!safe.exists());
+    assert!(!output.join("safe").exists());
+}
+
 #[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();

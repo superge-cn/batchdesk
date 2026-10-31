@@ -10,6 +10,9 @@ use std::env;
 use std::path::PathBuf;
 
 use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome};
+use kernel::archive::{
+    apply_archive_plan, plan_c10, ArchiveApplyContext, ArchiveService, PlanC10Input, C10_KIND,
+};
 use kernel::create_dirs::{
     normalize_list_path, plan_f11, target_for_list_path, PlanF11Input, PlanF11Row,
 };
@@ -79,6 +82,9 @@ const USAGE: &str = "usage:
                 --sample-bytes <bytes> [--mode plain|regex]
                 [--csv-mode cell|text] [--delimiter ,|;|tab||]
                 [--source <encoding>] [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c10 --extract <zip> --output-dir <dir>
+                --max-total-bytes <bytes> --max-ratio <n>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
@@ -151,6 +157,15 @@ c09 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --protected-dir DIR     repeatable S02 protected directory (default none)
   --json                  machine-readable output
+
+c10 options:
+  --extract PATH          ZIP archive to extract (this slice is extraction-only)
+  --output-dir DIR        existing directory receiving extracted entries
+  --max-total-bytes N     explicit total uncompressed-size limit (required; no product default)
+  --max-ratio N           explicit uncompressed/compressed ratio limit (required; no product default)
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --protected-dir DIR     repeatable protected directory
+  --json                  machine-readable plan output
 
 c03 options:
   --file PATH             repeatable source text/CSV file (regular files only)
@@ -337,7 +352,8 @@ f09 options:
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place; c02/c03 entries rewrite content in place (all keep a
-  quarantine backup and undo restores from the Journal);
+  quarantine backup and undo restores from the Journal); c10 entries extract ZIP
+  entries under --output-dir and journal every file/directory for undo;
   f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   f04 entries merge sources in order into one output with a single BOM;
   f05 entries write CSV parts on record boundaries, repeating the header by default;
@@ -430,6 +446,9 @@ fn main() {
     }
     if args[1] == "c03" {
         std::process::exit(run_c03(&args));
+    }
+    if args[1] == "c10" {
+        std::process::exit(run_c10(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -642,7 +661,25 @@ fn run_apply(args: &[String]) -> i32 {
         }
     };
     let license = AlwaysAllowLicense;
-    if plan.kind == kernel::plan::C09_KIND {
+    if plan.kind == C10_KIND {
+        let service = platform::archive::ZipArchiveService;
+        let mut context = ArchiveApplyContext {
+            fs: &adapter,
+            license: &license,
+            journal: &mut journal,
+            archive: &service,
+            task_id: new_ulid(&format!("apply:{}", plan.plan_id)),
+            now_rfc3339: now_rfc3339(),
+            protected_dirs,
+            case_sense: adapter.case_sensitivity(),
+            progress: None,
+            cancel: None,
+        };
+        run_generic_or_specific(
+            apply_archive_plan(&plan, &ApplyOptions::default(), &mut context),
+            json,
+        )
+    } else if plan.kind == kernel::plan::C09_KIND {
         let mut context = ApplyContext {
             fs: &adapter,
             license: &license,
@@ -1431,6 +1468,144 @@ fn run_c03(args: &[String]) -> i32 {
         confirmed_source: source,
         prior,
         delimiter,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_c10(args: &[String]) -> i32 {
+    let mut archive = None;
+    let mut output_dir = None;
+    let mut max_total_bytes = None;
+    let mut max_ratio = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--extract" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --extract requires a ZIP path");
+                };
+                archive = Some(PathBuf::from(value));
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a directory");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--max-total-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --max-total-bytes requires bytes");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => max_total_bytes = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --max-total-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--max-ratio" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --max-ratio requires a number");
+                };
+                match value.parse::<f64>() {
+                    Ok(ratio) if ratio.is_finite() && ratio > 0.0 => max_ratio = Some(ratio),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --max-ratio must be a positive finite number: {value}"
+                        ))
+                    }
+                }
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c10 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    let Some(archive) = archive else {
+        return input_error("E1001: c10 requires --extract <zip>");
+    };
+    let Some(output_dir) = output_dir else {
+        return input_error("E1001: c10 requires --output-dir <dir>");
+    };
+    let Some(max_total_bytes) = max_total_bytes else {
+        return input_error("E1001: c10 requires --max-total-bytes <bytes>");
+    };
+    let Some(max_ratio) = max_ratio else {
+        return input_error("E1001: c10 requires --max-ratio <n>");
+    };
+    let archive = make_absolute(&archive);
+    let output_dir = make_absolute(&output_dir);
+    if !archive.is_file() {
+        return input_error(format!(
+            "E1002: --extract must be a regular ZIP file: {}",
+            archive.display()
+        ));
+    }
+    if !output_dir.is_dir() {
+        return input_error(format!(
+            "E1002: --output-dir must be an existing directory: {}",
+            output_dir.display()
+        ));
+    }
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let service = platform::archive::ZipArchiveService;
+    let inspect = match service.inspect(&archive.to_string_lossy()) {
+        Ok(inspect) => inspect,
+        Err(error) => return print_kernel_error(&error),
+    };
+    let existing = platform::archive::existing_paths(&output_dir);
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c10"));
+    let planned = plan_c10(PlanC10Input {
+        plan_id,
+        archive: archive.to_string_lossy().into_owned(),
+        archive_size: inspect.archive_size,
+        entries: inspect.entries,
+        output_dir: output_dir.to_string_lossy().into_owned(),
+        max_total_bytes,
+        max_ratio,
+        existing_targets: existing,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
     });
     match planned {
         Ok(plan) => {

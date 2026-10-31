@@ -23,5 +23,5 @@ R03	asserted	样本 6 条保留名映射逐条经 plan_f12 产出 E1002 blocked�
 R04	asserted	样本 3 条逐条经 plan_f12：整名尾部空格与结尾点两条 blocked trailing-dot-space；首部空格不在 §5.13 拦截清单、不阻断	—
 R06	asserted	样本普通/扩展写法经 try_normalize 归一为同一路径；plan_f12 中扩展源与普通现存项不互判 existing-target	—
 E03	pending	—	预检 E2002 需文件权限事实采集与执行层接线
-Z01	pending	—	ZIP 执行器未建（C10）
-Z02	pending	—	ZIP 执行器未建（C10，越界条目 E3006）
+Z01	asserted	platform ZipArchiveService 对无 UTF-8 标志的 GBK 名回退 GB18030，解码为「中文资料.txt」且 gbk_fallback=true；CLI c10 解压产物 77 字节并可撤销	—
+Z02	asserted	platform inspect 列出 3 条；kernel plan_c10 跳过 ../ 与 safe/../../ 两条（unsafe-entry-skipped）；CLI c10 仅解压 safe/ok.txt（41 字节），越界文件不存在，undo 清理产物与空目录	—
