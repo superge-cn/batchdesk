@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.27（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.28（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -291,6 +291,7 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 
 - 终态顺序固定为 `task://state` → `task://done`；`task://done` 的 `summary.entries` 对撤销任务同样成立：成功恢复记 `ok`、失败记 `failed`，便于 `getTask`/UI 复用同一报告结构。
 - `ProgressEvent.done/total` 的阶段语义：`executing` 表示条目总量进度；`journaling`/`finalizing` 可上报阶段内计数。`TaskSummary.done/total` 只保留条目总量，不随后两阶段重置。
+- `message` 承载双层进度的条目层明细（C15，v1.28）：`executing` 阶段完成一条即上报该条目源路径；并发路径逐条完成上报，串行路径逐条上报（message 可空）。壳层合帧只合 `done/total` 频率，`message` 取窗口内最新值。
 
 ### 4.4 配置、日志、授权
 
@@ -445,6 +446,7 @@ interface PlanWarning {
 interface ApplyOptions {
   onConflict: "skip" | "sequence" | "overwrite" | "ask";  // §5.13 四策略；默认 skip，逐项 resolution 优先于全局
   overwriteConfirmed?: boolean;  // 任一条目将 overwrite 时必须 true（§7.11 危险级：二次确认、确认按钮不带默认焦点）
+  entryConcurrency?: number;     // 任务内条目级并发 1–16（方案 §5.12）；缺省 1＝串行；介质自适应自动档待补
 }
 interface ApplyReport {
   planId: string; taskId: string;
@@ -473,6 +475,7 @@ interface ApplyReport {
 | 杀软敏感 → 批次内节流（每 N 项微暂停） | **已定值（来源：用户确认 2026-10-27；已收编基线 §9.1——11.6-10，历史收编于方案 v1.7 R72）**：批次项数与微暂停时长以 §9.1 的杀软防护节流行准，参数可配置 | 已定值（契约先行，基线已收编） |
 
 - `PlanDocument` 可序列化落盘为草稿，但**生成过程绝不落盘**（不变量 2）；`planId` 是 apply、撤销、日志三方共同的关联键。
+- **C15 任务内条目级并发（v1.28）**：`ApplyOptions.entryConcurrency`（1–16，缺省 1＝串行，行为与历史版本一致）；通用执行器对 1:1 独立条目类（copy/edit-content/csv-dedup/csv-filter/csv-extract/csv-rows/delete）按计划序收块（块大小＝并发上限、规范化源/目标资源键不相交），块内并发执行、按计划序 join 与 Journal 记账（撤销按 seq 逆序语义不变）；rename/move/split/merge/csv-merge/listing/create-dir 始终串行；取消＝停止派发＋在途块收尾＋既有回滚；Journal 写失败先收完块再中止（成功条目必须进 Journal）。执行期限额：单任务条目上限 20 万（超出 E3007，方案 §5.12）、并发越界 E1002。报告按计划序落槽（回滚定位依赖位置对齐）。介质自适应默认值、C09/C10 专用执行器并发、运行中调参、致命错误自动暂停为已知缺口（ADR-0033）。
 - **C12 CSV 过滤（v1.27）**：`plan_c12` 每个输入一条 `csv-filter` entry（1:1）；单条件 `contains`/`not-contains`/数值比较（eq/ne/gt/ge/lt/le，f64 解析、比较值计划期 E1002），`mode="keep"|"drop"` 显式选向；非数值单元格对一切数值算子不满足判定并计 `nonNumericCells` 发 Caution 告警，零匹配发 `no-matching-rows` Safe 警告；表头单独保留不参与判定；编码未确认 E3001、源/目标保护 E2009、列缺失/越界 E3004、重复输出目标 E1002；执行期整文件解码→逐行求值→按目标编码一次 `write_atomic`，apply 复核源大小与表头（E2010），撤销同 §8。单条件/整文件内存为已知缺口（ADR-0032）。
 - **C11 CSV 去重（v1.26）**：`plan_c11` 每个输入一条 `csv-dedup` entry（1:1）；`key="row"` 整行判重或 `key="columns"` 按 `keyColumns`（名称经规范化表头解析，序号 1-based 越界 E3004）拼键，哈希集合判重、保留首次出现；表头单独保留，脏行只计数告警不修正；重复行发 `duplicates-removed` Caution 警告、零重复发 `no-duplicates` Safe 警告；编码未确认 E3001、源/目标位于保护目录 E2009、重复输出目标 E1002；执行期整文件解码→判重→按目标编码一次 `write_atomic`，apply 复核源大小与表头（E2010），撤销与覆盖备份同 §8 通用规则。整文件读入内存为已知缺口（ADR-0031）。
 - **C10 ZIP 压缩（v1.25）**：`plan_c10_compress` 每个输出一条 `archive` summary entry（N:1），`params.sources` 保存源清单、`compression` 记录 store/deflate；输出等于源或位于源目录内 blocked E1002，目标保护 E2009，目标已存在 skip；执行期 `ArchiveService::compress`（UTF-8 名、目录递归、符号链接跳过）产出 ZIP 字节后一次 `write_atomic`，Journal forward=`WriteAtomic{None}`、reverse=`Quarantine`。内存 O(输出)；GBK 名写入/密码/时间戳等为后续缺口（ADR-0030）。
@@ -584,3 +587,4 @@ interface JournalEntry {
 | v1.24 | 2026-10-31 | §3.1 追加 `plan_c10`；§5.1 落地 C10 ZIP 解压 summary entry、GBK 名回退、路径穿越拒绝、E3007 限额与逐文件 Journal；E3xxx 增补 E3007。决策见 [ADR-0029](../adr/0029-C10解压安全边界与GBK名回退.md)。 |
 | v1.26 | 2026-10-31 | §3.1 追加 `csv-dedup` 动作与 `plan_c11`；§3 追加 `csvDedup` 载荷（key="row"/"columns"、keyColumns、uniqueRows/duplicateRows/dirtyRows）；§5.1 落地 C11 CSV 去重：哈希集合判重保留首次出现、表头单独保留、脏行告警、编码未确认 E3001、保护目录 E2009、重复输出目标 E1002；执行期一次 `write_atomic`，撤销与覆盖备份同 §8。决策见 [ADR-0031](../adr/0031-C11-CSV去重内存判重与键序列化.md)。 |
 | v1.27 | 2026-10-31 | §3.1 追加 `csv-filter` 动作与 `plan_c12`；§3 追加 `csvFilter` 载荷（condition{column,op,value}、mode、matchedRows/keptRows/nonNumericCells）；§5.1 落地 C12 CSV 过滤：contains/not-contains/数值比较、keep/drop 显式选向、非数值单元格保守不匹配＋告警、表头保留、E3001/E2009/E3004/E1002；执行期一次 `write_atomic`，撤销同 §8。决策见 [ADR-0032](../adr/0032-C12-CSV过滤判定器与类型解析.md)。 |
+| v1.28 | 2026-10-31 | `ApplyOptions` 追加 `entryConcurrency`（1–16，缺省 1＝串行；方案 §5.12）；通用执行器落地任务内条目级并发（分块有界池＋资源键不相交＋Journal 计划序记账）；执行期限额：单任务 20 万条目 E3007、并发越界 E1002；`ProgressEvent.message` 明确为双层进度的条目层明细。决策见 [ADR-0033](../adr/0033-C15任务内条目级并发分块有界池.md)。 |

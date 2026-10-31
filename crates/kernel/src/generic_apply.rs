@@ -38,7 +38,7 @@ use crate::plan::{
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
 /// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节。
-pub type ContentEditor<'a> = &'a dyn Fn(&[u8]) -> Result<Vec<u8>, KernelError>;
+pub type ContentEditor<'a> = &'a (dyn Fn(&[u8]) -> Result<Vec<u8>, KernelError> + Send + Sync);
 
 /// 流式内容重写端口：读取源流、写入目标流；C02 等大文件改写使用。
 pub trait ContentRewriter: Send + Sync {
@@ -81,6 +81,7 @@ pub fn apply_generic_plan(
     options: &ApplyOptions,
     context: &mut GenericApplyContext<'_>,
 ) -> Result<ApplyOutcome, KernelError> {
+    crate::apply::validate_apply_limits(plan, options)?;
     if plan.plan_id.trim().is_empty() {
         return Err(KernelError::missing_param("planId is required"));
     }
@@ -249,294 +250,82 @@ pub fn apply_generic_plan(
     }
 
     let total = plan.entries.len() as u64;
-    let mut reports = Vec::with_capacity(plan.entries.len());
-    let mut applied: Vec<(usize, u64, FsOp)> = Vec::new();
-    let mut failed = 0usize;
-    let mut cancelled = false;
-
     report_progress(context, ProgressPhase::Executing, 0, total, None);
-    for (index, entry) in plan.entries.iter().enumerate() {
-        report_progress(context, ProgressPhase::Executing, index as u64, total, None);
-        if is_cancelled(context) {
-            cancelled = true;
-            break;
-        }
-        if let Some(blocked) = &entry.blocked {
-            reports.push(skipped_entry(
-                entry.entry_id.clone(),
-                KernelError::new(
-                    blocked.code.clone(),
-                    blocked.reason.clone(),
-                    blocked.hint.clone(),
-                    false,
-                ),
-            ));
-            continue;
-        }
-        if entry.resolution == Some(PlanResolution::Skip) {
-            reports.push(ApplyEntryReport {
-                entry_id: entry.entry_id.clone(),
-                status: ApplyStatus::Skipped,
-                error: None,
-            });
-            continue;
-        }
 
-        if entry.action != PlanAction::CreateDir {
-            let normalized = match try_normalize(&entry.source) {
-                Ok(normalized) => normalized,
-                Err(error) => {
-                    failed += 1;
-                    reports.push(failed_entry(entry.entry_id.clone(), error));
-                    continue;
-                }
-            };
-            if let Some(error) = protected_path_hit(context, &entry.source, &normalized) {
-                reports.push(skipped_entry(entry.entry_id.clone(), error));
-                continue;
-            }
+    // 上下文拆解：工作线程只共享执行视图（设计 01 §5.1）；
+    // Journal、配额与进度记账留在主执行线程（`&mut` 借用不可跨线程）。
+    let mut exec = {
+        let GenericApplyContext {
+            fs,
+            license,
+            journal,
+            task_id,
+            now_rfc3339,
+            protected_dirs,
+            case_sense,
+            progress,
+            cancel,
+            content_editor,
+            content_rewriter,
+            directory_lister,
+        } = context;
+        ExecContext {
+            fs: *fs,
+            license: *license,
+            journal: *journal,
+            now_rfc3339: now_rfc3339.as_str(),
+            protected_dirs: protected_dirs.as_slice(),
+            case_sense: *case_sense,
+            progress: *progress,
+            cancel: *cancel,
+            task_id: task_id.as_str(),
+            content_editor: *content_editor,
+            content_rewriter: *content_rewriter,
+            directory_lister: *directory_lister,
         }
+    };
+    let view = WorkerView {
+        fs: exec.fs,
+        case_sense: exec.case_sense,
+        content_editor: exec.content_editor,
+        content_rewriter: exec.content_rewriter,
+        directory_lister: exec.directory_lister,
+    };
 
-        match context.license.capability(&plan.kind) {
-            Capability::Allow => {}
-            Capability::Deny { reason } => {
-                failed += 1;
-                reports.push(failed_entry(
-                    entry.entry_id.clone(),
-                    KernelError::new(
-                        "E4001",
-                        format!("operation not licensed: {reason}"),
-                        None,
-                        false,
-                    ),
-                ));
-                continue;
-            }
-            Capability::Quota { used, limit } => {
-                failed += 1;
-                reports.push(failed_entry(
-                    entry.entry_id.clone(),
-                    KernelError::new(
-                        "E4004",
-                        format!("license quota exhausted ({used}/{limit})"),
-                        None,
-                        false,
-                    ),
-                ));
-                continue;
-            }
-        }
-
-        if entry.action != PlanAction::CreateDir {
-            let stat = match context.fs.stat(&entry.source) {
-                Ok(stat) => stat,
-                Err(error) => {
-                    failed += 1;
-                    reports.push(failed_entry(entry.entry_id.clone(), error));
-                    continue;
-                }
-            };
-            if entry.action == PlanAction::Listing {
-                if stat.kind != EntryKind::Dir {
-                    failed += 1;
-                    reports.push(failed_entry(
-                        entry.entry_id.clone(),
-                        KernelError::invalid_params("listing expects a directory source"),
-                    ));
-                    continue;
-                }
-            } else if entry.action == PlanAction::Rename {
-                if !matches!(stat.kind, EntryKind::File | EntryKind::Dir) {
-                    failed += 1;
-                    reports.push(failed_entry(
-                        entry.entry_id.clone(),
-                        KernelError::invalid_params("rename expects a file or directory source"),
-                    ));
-                    continue;
-                }
-            } else if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
-                failed += 1;
-                reports.push(failed_entry(
-                    entry.entry_id.clone(),
-                    KernelError::invalid_params(format!(
-                        "{} expects a file source",
-                        entry.action.as_str()
-                    )),
-                ));
-                continue;
-            }
-            if stat.attrs.placeholder {
-                reports.push(skipped_entry(
-                    entry.entry_id.clone(),
-                    KernelError::new("E2006", "placeholder file skipped", None, true),
-                ));
-                continue;
-            }
-            if let Some(error) = fingerprint_mismatch(context, entry, stat.size) {
-                reports.push(skipped_entry(entry.entry_id.clone(), error));
-                continue;
-            }
-            if entry.action == PlanAction::Split {
-                if let Some(range) = entry.range {
-                    let required_end = entry
-                        .csv
-                        .as_ref()
-                        .and_then(|csv| csv.header)
-                        .map_or(range.end, |header| range.end.max(header.end));
-                    if required_end > stat.size {
-                        reports.push(skipped_entry(
-                            entry.entry_id.clone(),
-                            KernelError::new(
-                                "E2010",
-                                "source file shrank since plan preview; re-plan before applying",
-                                None,
-                                true,
-                            ),
-                        ));
-                        continue;
-                    }
-                }
-            }
-            if entry.action == PlanAction::Merge {
-                if let Some(error) = merge_source_mismatch(context, entry) {
-                    reports.push(skipped_entry(entry.entry_id.clone(), error));
-                    continue;
-                }
-            }
-        }
-
-        let decision = match &entry.target {
-            Some(target) => match resolve_target(entry, target, options, context) {
-                Ok(decision) => decision,
-                Err(error) => {
-                    failed += 1;
-                    reports.push(failed_entry(entry.entry_id.clone(), error));
-                    continue;
-                }
-            },
-            None => TargetDecision::Use(String::new()),
-        };
-        let (target, overwrite) = match decision {
-            TargetDecision::Use(target) => (target, false),
-            TargetDecision::Overwrite(target) => (target, true),
-            TargetDecision::Skip(error) => {
-                reports.push(skipped_entry(entry.entry_id.clone(), error));
-                continue;
-            }
-        };
-        if matches!(
-            entry.action,
-            PlanAction::Rename
-                | PlanAction::Move
-                | PlanAction::Copy
-                | PlanAction::Split
-                | PlanAction::Merge
-                | PlanAction::CsvExtract
-                | PlanAction::CsvRows
-                | PlanAction::Listing
-                | PlanAction::CreateDir
-        ) {
-            if let Some(error) = protected_target_hit(context, &target) {
-                reports.push(skipped_entry(entry.entry_id.clone(), error));
-                continue;
-            }
-        }
-
-        if let Err(error) = context.license.consume(&plan.kind, 1) {
-            failed += 1;
-            reports.push(failed_entry(entry.entry_id.clone(), error));
-            continue;
-        }
-
-        let target_param = match &entry.action {
-            PlanAction::EditContent => None,
-            _ => Some(target.as_str()),
-        };
-        let performed = match perform(context, plan, entry, target_param, overwrite) {
-            Ok(Ok(performed)) => performed,
-            Ok(Err(error)) => {
-                context.license.release(&plan.kind, 1);
-                failed += 1;
-                reports.push(failed_entry(entry.entry_id.clone(), error));
-                continue;
-            }
-            Err(error) => {
-                context.license.release(&plan.kind, 1);
-                return Err(error);
-            }
-        };
-
-        if performed.skipped {
-            context.license.release(&plan.kind, 1);
-            reports.push(skipped_entry(
-                entry.entry_id.clone(),
-                KernelError::new(
-                    "E2007",
-                    "target already exists; skipped by policy",
-                    None,
-                    false,
-                ),
-            ));
-            continue;
-        }
-
-        let forward = performed.forward;
-        let reverse = performed.reverse;
-        match context.journal.append_with_kind(
-            &plan.plan_id,
-            &entry.entry_id,
-            &context.now_rfc3339,
-            &plan.kind,
-            forward,
-            reverse.clone(),
-        ) {
-            Ok(journal_entry) => {
-                applied.push((index, journal_entry.seq, journal_entry.reverse));
-            }
-            Err(error) => {
-                context.license.release(&plan.kind, 1);
-                // 落盘成功但 Journal 失败：尽力回退本次动作后再报错。
-                if execute_reverse(context.fs, &reverse).is_ok() {
-                    failed += 1;
-                    reports.push(failed_entry(entry.entry_id.clone(), error));
-                    continue;
-                }
-                return Err(KernelError::internal(
-                    "journal write failed and the operation could not be reverted",
-                    format!("{}: {}", error.code, error.message),
-                ));
-            }
-        }
-        reports.push(ApplyEntryReport {
-            entry_id: entry.entry_id.clone(),
-            status: if overwrite || performed.replaced {
-                ApplyStatus::Overwritten
-            } else {
-                ApplyStatus::Ok
-            },
-            error: None,
-        });
-    }
+    let (mut reports, applied, failed, cancelled) = if options.entry_concurrency > 1 {
+        execute_pooled(
+            &mut exec,
+            &view,
+            plan,
+            options,
+            options.entry_concurrency,
+            total,
+        )?
+    } else {
+        execute_serial(&mut exec, &view, plan, options, total)?
+    };
 
     if cancelled {
-        report_progress(
-            context,
+        report_progress_to(
+            exec.progress,
+            exec.task_id,
             ProgressPhase::Journaling,
             0,
             applied.len() as u64,
             Some("rolling back applied entries"),
         );
         for (done, (index, seq, reverse)) in applied.iter().rev().enumerate() {
-            report_progress(
-                context,
+            report_progress_to(
+                exec.progress,
+                exec.task_id,
                 ProgressPhase::Journaling,
                 done as u64,
                 applied.len() as u64,
                 None,
             );
-            match execute_reverse(context.fs, reverse) {
+            match execute_reverse(exec.fs, reverse) {
                 Ok(()) => {
-                    let _ = context.journal.mark_reverted(&plan.plan_id, &[*seq]);
+                    let _ = exec.journal.mark_reverted(&plan.plan_id, &[*seq]);
                 }
                 Err(error) => {
                     mark_entry_error(&mut reports, *index, error);
@@ -558,20 +347,606 @@ pub fn apply_generic_plan(
         state,
         report: ApplyReport {
             plan_id: plan.plan_id.clone(),
-            task_id: context.task_id.clone(),
+            task_id: exec.task_id.to_string(),
             entries: reports,
             undone_by: None,
         },
     })
 }
 
+/// 执行期主线程侧的上下文切片：Journal/配额/进度记账专用字段（设计 01 §5.1）。
+/// 由 `GenericApplyContext` 拆解而来；工作线程只拿 `WorkerView`，两者无共享借用。
+struct ExecContext<'a> {
+    fs: &'a dyn FsAdapter,
+    license: &'a dyn LicenseService,
+    journal: &'a mut dyn JournalStore,
+    now_rfc3339: &'a str,
+    protected_dirs: &'a [ProtectedDir],
+    case_sense: CaseSense,
+    progress: Option<&'a dyn ProgressSink>,
+    cancel: Option<&'a dyn CancelToken>,
+    task_id: &'a str,
+    content_editor: Option<ContentEditor<'a>>,
+    content_rewriter: Option<&'a dyn ContentRewriter>,
+    directory_lister: Option<&'a dyn DirectoryLister>,
+}
+
+/// 单条预检结果：报告（跳过/失败）或放行执行。
+enum Prechecked {
+    Skipped(ApplyEntryReport),
+    Failed(ApplyEntryReport),
+    Proceed { target: String, overwrite: bool },
+}
+
+/// 并发分块的一个待执行条目。
+struct ChunkItem<'a> {
+    entry: &'a crate::plan::PlanEntry,
+    target: String,
+    overwrite: bool,
+    index: usize,
+}
+
+fn is_cancelled_token(cancel: Option<&dyn CancelToken>) -> bool {
+    cancel.map(|token| token.is_cancelled()).unwrap_or(false)
+}
+
+fn report_progress_to(
+    progress: Option<&dyn ProgressSink>,
+    task_id: &str,
+    phase: ProgressPhase,
+    done: u64,
+    total: u64,
+    message: Option<&str>,
+) {
+    if let Some(sink) = progress {
+        sink.report(crate::progress::ProgressEvent {
+            task_id: task_id.to_string(),
+            phase,
+            done,
+            total,
+            message: message.map(str::to_string),
+        });
+    }
+}
+
+fn edit_content_target_param<'a>(
+    entry: &'a crate::plan::PlanEntry,
+    target: &'a str,
+) -> Option<&'a str> {
+    if entry.action == PlanAction::EditContent {
+        None
+    } else {
+        Some(target)
+    }
+}
+
+/// 可并发派发的动作类：1:1 且条目间无顺序依赖（方案 §5.12 条目级并发）。
+/// rename/move/split/merge/csv-merge/listing/create-dir 保持串行（条目间有顺序或共享产物）。
+fn is_pool_eligible(action: &PlanAction) -> bool {
+    matches!(
+        action,
+        PlanAction::Copy
+            | PlanAction::EditContent
+            | PlanAction::CsvDedup
+            | PlanAction::CsvFilter
+            | PlanAction::CsvExtract
+            | PlanAction::CsvRows
+            | PlanAction::Delete
+    )
+}
+
+/// 条目占用的资源键（规范化后的源与目标）；键相交的条目不得同块并发。
+fn entry_resource_keys(
+    entry: &crate::plan::PlanEntry,
+    target: &str,
+) -> std::collections::BTreeSet<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    keys.insert(try_normalize(&entry.source).unwrap_or_else(|_| entry.source.clone()));
+    if !target.is_empty() {
+        keys.insert(try_normalize(target).unwrap_or_else(|_| target.to_string()));
+    }
+    keys
+}
+
+/// 执行前的逐条预检（与原串行路径逐字同语义）：
+/// blocked/skip 短路、源路径保护、授权能力、stat/占位/指纹、目标裁决与目标保护。
+fn precheck_entry(
+    exec: &ExecContext<'_>,
+    view: &WorkerView<'_>,
+    plan: &PlanDocument,
+    options: &ApplyOptions,
+    entry: &crate::plan::PlanEntry,
+) -> Prechecked {
+    if let Some(blocked) = &entry.blocked {
+        return Prechecked::Skipped(skipped_entry(
+            entry.entry_id.clone(),
+            KernelError::new(
+                blocked.code.clone(),
+                blocked.reason.clone(),
+                blocked.hint.clone(),
+                false,
+            ),
+        ));
+    }
+    if entry.resolution == Some(PlanResolution::Skip) {
+        return Prechecked::Skipped(ApplyEntryReport {
+            entry_id: entry.entry_id.clone(),
+            status: ApplyStatus::Skipped,
+            error: None,
+        });
+    }
+
+    if entry.action != PlanAction::CreateDir {
+        let normalized = match try_normalize(&entry.source) {
+            Ok(normalized) => normalized,
+            Err(error) => return Prechecked::Failed(failed_entry(entry.entry_id.clone(), error)),
+        };
+        if let Some(error) = protected_path_hit(
+            exec.fs,
+            exec.protected_dirs,
+            exec.case_sense,
+            &entry.source,
+            &normalized,
+        ) {
+            return Prechecked::Skipped(skipped_entry(entry.entry_id.clone(), error));
+        }
+    }
+
+    match exec.license.capability(&plan.kind) {
+        Capability::Allow => {}
+        Capability::Deny { reason } => {
+            return Prechecked::Failed(failed_entry(
+                entry.entry_id.clone(),
+                KernelError::new(
+                    "E4001",
+                    format!("operation not licensed: {reason}"),
+                    None,
+                    false,
+                ),
+            ));
+        }
+        Capability::Quota { used, limit } => {
+            return Prechecked::Failed(failed_entry(
+                entry.entry_id.clone(),
+                KernelError::new(
+                    "E4004",
+                    format!("license quota exhausted ({used}/{limit})"),
+                    None,
+                    false,
+                ),
+            ));
+        }
+    }
+
+    if entry.action != PlanAction::CreateDir {
+        let stat = match exec.fs.stat(&entry.source) {
+            Ok(stat) => stat,
+            Err(error) => return Prechecked::Failed(failed_entry(entry.entry_id.clone(), error)),
+        };
+        if entry.action == PlanAction::Listing {
+            if stat.kind != EntryKind::Dir {
+                return Prechecked::Failed(failed_entry(
+                    entry.entry_id.clone(),
+                    KernelError::invalid_params("listing expects a directory source"),
+                ));
+            }
+        } else if entry.action == PlanAction::Rename {
+            if !matches!(stat.kind, EntryKind::File | EntryKind::Dir) {
+                return Prechecked::Failed(failed_entry(
+                    entry.entry_id.clone(),
+                    KernelError::invalid_params("rename expects a file or directory source"),
+                ));
+            }
+        } else if entry.action != PlanAction::Delete && stat.kind != EntryKind::File {
+            return Prechecked::Failed(failed_entry(
+                entry.entry_id.clone(),
+                KernelError::invalid_params(format!(
+                    "{} expects a file source",
+                    entry.action.as_str()
+                )),
+            ));
+        }
+        if stat.attrs.placeholder {
+            return Prechecked::Skipped(skipped_entry(
+                entry.entry_id.clone(),
+                KernelError::new("E2006", "placeholder file skipped", None, true),
+            ));
+        }
+        if let Some(error) = fingerprint_mismatch(exec.fs, entry, stat.size) {
+            return Prechecked::Skipped(skipped_entry(entry.entry_id.clone(), error));
+        }
+        if entry.action == PlanAction::Split {
+            if let Some(range) = entry.range {
+                let required_end = entry
+                    .csv
+                    .as_ref()
+                    .and_then(|csv| csv.header)
+                    .map_or(range.end, |header| range.end.max(header.end));
+                if required_end > stat.size {
+                    return Prechecked::Skipped(skipped_entry(
+                        entry.entry_id.clone(),
+                        KernelError::new(
+                            "E2010",
+                            "source file shrank since plan preview; re-plan before applying",
+                            None,
+                            true,
+                        ),
+                    ));
+                }
+            }
+        }
+        if entry.action == PlanAction::Merge {
+            if let Some(error) =
+                merge_source_mismatch(view, exec.protected_dirs, exec.case_sense, entry)
+            {
+                return Prechecked::Skipped(skipped_entry(entry.entry_id.clone(), error));
+            }
+        }
+    }
+
+    let decision = match &entry.target {
+        Some(target) => match resolve_target(entry, target, options, exec.fs, exec.case_sense) {
+            Ok(decision) => decision,
+            Err(error) => return Prechecked::Failed(failed_entry(entry.entry_id.clone(), error)),
+        },
+        None => TargetDecision::Use(String::new()),
+    };
+    let (target, overwrite) = match decision {
+        TargetDecision::Use(target) => (target, false),
+        TargetDecision::Overwrite(target) => (target, true),
+        TargetDecision::Skip(error) => {
+            return Prechecked::Skipped(skipped_entry(entry.entry_id.clone(), error));
+        }
+    };
+    if matches!(
+        entry.action,
+        PlanAction::Rename
+            | PlanAction::Move
+            | PlanAction::Copy
+            | PlanAction::Split
+            | PlanAction::Merge
+            | PlanAction::CsvExtract
+            | PlanAction::CsvRows
+            | PlanAction::Listing
+            | PlanAction::CreateDir
+    ) {
+        if let Some(error) =
+            protected_target_hit(exec.fs, exec.protected_dirs, exec.case_sense, &target)
+        {
+            return Prechecked::Skipped(skipped_entry(entry.entry_id.clone(), error));
+        }
+    }
+    Prechecked::Proceed { target, overwrite }
+}
+
+/// 执行并记账（主线程调用；串行路径与并发回收共用）：
+/// perform 失败释放配额并计失败；Journal 写入失败尽力回退本次动作。
+#[allow(clippy::too_many_arguments)]
+fn settle_entry(
+    exec: &mut ExecContext<'_>,
+    plan: &PlanDocument,
+    entry: &crate::plan::PlanEntry,
+    index: usize,
+    overwrite: bool,
+    outcome: Result<Result<Performed, KernelError>, KernelError>,
+    applied: &mut Vec<(usize, u64, FsOp)>,
+    failed: &mut usize,
+) -> Result<ApplyEntryReport, KernelError> {
+    let performed = match outcome {
+        Ok(Ok(performed)) => performed,
+        Ok(Err(error)) => {
+            exec.license.release(&plan.kind, 1);
+            *failed += 1;
+            return Ok(failed_entry(entry.entry_id.clone(), error));
+        }
+        Err(error) => {
+            exec.license.release(&plan.kind, 1);
+            return Err(error);
+        }
+    };
+    if performed.skipped {
+        exec.license.release(&plan.kind, 1);
+        return Ok(skipped_entry(
+            entry.entry_id.clone(),
+            KernelError::new(
+                "E2007",
+                "target already exists; skipped by policy",
+                None,
+                false,
+            ),
+        ));
+    }
+    let forward = performed.forward;
+    let reverse = performed.reverse;
+    match exec.journal.append_with_kind(
+        &plan.plan_id,
+        &entry.entry_id,
+        exec.now_rfc3339,
+        &plan.kind,
+        forward,
+        reverse.clone(),
+    ) {
+        Ok(journal_entry) => {
+            applied.push((index, journal_entry.seq, journal_entry.reverse));
+        }
+        Err(error) => {
+            exec.license.release(&plan.kind, 1);
+            // 落盘成功但 Journal 失败：尽力回退本次动作后再报错。
+            if execute_reverse(exec.fs, &reverse).is_ok() {
+                *failed += 1;
+                return Ok(failed_entry(entry.entry_id.clone(), error));
+            }
+            return Err(KernelError::internal(
+                "journal write failed and the operation could not be reverted",
+                format!("{}: {}", error.code, error.message),
+            ));
+        }
+    }
+    Ok(ApplyEntryReport {
+        entry_id: entry.entry_id.clone(),
+        status: if overwrite || performed.replaced {
+            ApplyStatus::Overwritten
+        } else {
+            ApplyStatus::Ok
+        },
+        error: None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_serial(
+    exec: &mut ExecContext<'_>,
+    view: &WorkerView<'_>,
+    plan: &PlanDocument,
+    options: &ApplyOptions,
+    total: u64,
+) -> Result<Executed, KernelError> {
+    let mut reports = Vec::with_capacity(plan.entries.len());
+    let mut applied: Vec<(usize, u64, FsOp)> = Vec::new();
+    let mut failed = 0usize;
+    let mut cancelled = false;
+    for (index, entry) in plan.entries.iter().enumerate() {
+        report_progress_to(
+            exec.progress,
+            exec.task_id,
+            ProgressPhase::Executing,
+            index as u64,
+            total,
+            None,
+        );
+        if is_cancelled_token(exec.cancel) {
+            cancelled = true;
+            break;
+        }
+        match precheck_entry(exec, view, plan, options, entry) {
+            Prechecked::Skipped(report) => reports.push(report),
+            Prechecked::Failed(report) => {
+                failed += 1;
+                reports.push(report);
+            }
+            Prechecked::Proceed { target, overwrite } => {
+                if let Err(error) = exec.license.consume(&plan.kind, 1) {
+                    failed += 1;
+                    reports.push(failed_entry(entry.entry_id.clone(), error));
+                    continue;
+                }
+                let target_param = edit_content_target_param(entry, &target);
+                let outcome = perform(view, plan, entry, target_param, overwrite);
+                let report = settle_entry(
+                    exec,
+                    plan,
+                    entry,
+                    index,
+                    overwrite,
+                    outcome,
+                    &mut applied,
+                    &mut failed,
+                )?;
+                reports.push(report);
+                report_progress_to(
+                    exec.progress,
+                    exec.task_id,
+                    ProgressPhase::Executing,
+                    (index + 1) as u64,
+                    total,
+                    Some(&entry.source),
+                );
+            }
+        }
+    }
+    Ok((reports, applied, failed, cancelled))
+}
+
+/// 结算一个并发分块：块内有界并发执行（条目数 ≤ 并发上限），
+/// 按计划序 join 与记账；致命错误仍先收完块内结果再中止（成功条目必须进 Journal）。
+#[allow(clippy::too_many_arguments)]
+fn flush_chunk(
+    exec: &mut ExecContext<'_>,
+    view: &WorkerView<'_>,
+    plan: &PlanDocument,
+    chunk: Vec<ChunkItem<'_>>,
+    slots: &mut [Option<ApplyEntryReport>],
+    applied: &mut Vec<(usize, u64, FsOp)>,
+    failed: &mut usize,
+    completed: &mut u64,
+    total: u64,
+) -> Result<(), KernelError> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(chunk.len());
+        for item in &chunk {
+            let target_param = edit_content_target_param(item.entry, &item.target);
+            handles.push(
+                scope.spawn(move || perform(view, plan, item.entry, target_param, item.overwrite)),
+            );
+        }
+        let mut error: Option<KernelError> = None;
+        for (item, handle) in chunk.iter().zip(handles) {
+            let outcome = match handle.join() {
+                Ok(outcome) => outcome,
+                Err(_) => Err(KernelError::internal(
+                    "entry worker panicked",
+                    format!("entry {}", item.entry.entry_id),
+                )),
+            };
+            match settle_entry(
+                exec,
+                plan,
+                item.entry,
+                item.index,
+                item.overwrite,
+                outcome,
+                applied,
+                failed,
+            ) {
+                Ok(report) => {
+                    slots[item.index] = Some(report);
+                    *completed += 1;
+                    report_progress_to(
+                        exec.progress,
+                        exec.task_id,
+                        ProgressPhase::Executing,
+                        *completed,
+                        total,
+                        Some(&item.entry.source),
+                    );
+                }
+                Err(settle_error) => {
+                    if error.is_none() {
+                        error = Some(settle_error);
+                    }
+                }
+            }
+        }
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok(())
+    })
+}
+
+/// 条目级并发的执行路径（方案 §5.12）：任务内独立条目走有界工作池，
+/// 资源键相交或顺序敏感的条目先收块再串行执行；Journal 记账按计划序；
+/// 条目报告按计划序落槽（回滚定位依赖位置对齐）。
+#[allow(clippy::too_many_arguments)]
+fn execute_pooled(
+    exec: &mut ExecContext<'_>,
+    view: &WorkerView<'_>,
+    plan: &PlanDocument,
+    options: &ApplyOptions,
+    concurrency: usize,
+    total: u64,
+) -> Result<Executed, KernelError> {
+    let mut slots: Vec<Option<ApplyEntryReport>> = (0..plan.entries.len()).map(|_| None).collect();
+    let mut applied: Vec<(usize, u64, FsOp)> = Vec::new();
+    let mut failed = 0usize;
+    let mut cancelled = false;
+    let mut completed: u64 = 0;
+    let mut chunk: Vec<ChunkItem<'_>> = Vec::new();
+    let mut chunk_keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for (index, entry) in plan.entries.iter().enumerate() {
+        if is_cancelled_token(exec.cancel) {
+            cancelled = true;
+            break;
+        }
+        match precheck_entry(exec, view, plan, options, entry) {
+            Prechecked::Skipped(report) => slots[index] = Some(report),
+            Prechecked::Failed(report) => {
+                failed += 1;
+                slots[index] = Some(report);
+            }
+            Prechecked::Proceed { target, overwrite } => {
+                let eligible = is_pool_eligible(&entry.action);
+                let keys = entry_resource_keys(entry, &target);
+                if !eligible || !chunk_keys.is_disjoint(&keys) || chunk.len() >= concurrency {
+                    flush_chunk(
+                        exec,
+                        view,
+                        plan,
+                        std::mem::take(&mut chunk),
+                        &mut slots,
+                        &mut applied,
+                        &mut failed,
+                        &mut completed,
+                        total,
+                    )?;
+                    chunk_keys.clear();
+                    // 收块期间取消可能已生效：不再派发新条目。
+                    if is_cancelled_token(exec.cancel) {
+                        cancelled = true;
+                        break;
+                    }
+                }
+                if let Err(error) = exec.license.consume(&plan.kind, 1) {
+                    failed += 1;
+                    slots[index] = Some(failed_entry(entry.entry_id.clone(), error));
+                    continue;
+                }
+                if eligible {
+                    chunk_keys.extend(keys);
+                    chunk.push(ChunkItem {
+                        entry,
+                        target,
+                        overwrite,
+                        index,
+                    });
+                } else {
+                    let target_param = edit_content_target_param(entry, &target);
+                    let outcome = perform(view, plan, entry, target_param, overwrite);
+                    let report = settle_entry(
+                        exec,
+                        plan,
+                        entry,
+                        index,
+                        overwrite,
+                        outcome,
+                        &mut applied,
+                        &mut failed,
+                    )?;
+                    slots[index] = Some(report);
+                    completed += 1;
+                    report_progress_to(
+                        exec.progress,
+                        exec.task_id,
+                        ProgressPhase::Executing,
+                        completed,
+                        total,
+                        Some(&entry.source),
+                    );
+                }
+            }
+        }
+    }
+    flush_chunk(
+        exec,
+        view,
+        plan,
+        chunk,
+        &mut slots,
+        &mut applied,
+        &mut failed,
+        &mut completed,
+        total,
+    )?;
+    // 取消/中止时未处理条目不产报告（与串行路径一致）。
+    let reports = slots.into_iter().flatten().collect();
+    Ok((reports, applied, failed, cancelled))
+}
+
+/// 执行器产出：条目报告、已记账（计划序号, Journal seq, reverse）、失败数、是否取消。
+type Executed = (Vec<ApplyEntryReport>, Vec<(usize, u64, FsOp)>, usize, bool);
+
 fn resolve_target(
     entry: &crate::plan::PlanEntry,
     target: &str,
     options: &ApplyOptions,
-    context: &GenericApplyContext<'_>,
+    fs: &dyn FsAdapter,
+    case_sense: CaseSense,
 ) -> Result<TargetDecision, KernelError> {
-    let occupied = context.fs.stat(target).is_ok();
+    let occupied = fs.stat(target).is_ok();
     if !occupied {
         return Ok(TargetDecision::Use(target.to_string()));
     }
@@ -600,9 +975,7 @@ fn resolve_target(
             let mut taken = std::collections::BTreeSet::new();
             taken.insert(target.to_string());
             Ok(TargetDecision::Use(sequence_target(
-                target,
-                &taken,
-                context.case_sense,
+                target, &taken, case_sense,
             )))
         }
         OnConflict::Skip | OnConflict::Ask => Ok(TargetDecision::Skip(KernelError::new(
@@ -661,8 +1034,19 @@ fn listing_options(plan: &PlanDocument) -> Result<ListingOptions, KernelError> {
     })
 }
 
+/// 条目执行的工作视图：perform 家族实际使用的字段子集（设计 01 §5.1）。
+/// 并发路径把它交给工作线程共享（全部字段 `Send + Sync`）；
+/// Journal、配额与进度记账只留在主线程（`&mut` 借用不可跨线程）。
+struct WorkerView<'a> {
+    fs: &'a dyn FsAdapter,
+    case_sense: CaseSense,
+    content_editor: Option<ContentEditor<'a>>,
+    content_rewriter: Option<&'a dyn ContentRewriter>,
+    directory_lister: Option<&'a dyn DirectoryLister>,
+}
+
 fn perform_listing(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     plan: &PlanDocument,
     entry: &crate::plan::PlanEntry,
     target: &str,
@@ -670,13 +1054,13 @@ fn perform_listing(
 ) -> Result<Performed, KernelError> {
     let options = listing_options(plan)?;
     if let (Ok(root), Ok(target_path)) = (try_normalize(&entry.source), try_normalize(target)) {
-        if is_under(&target_path, &root, context.case_sense) {
+        if is_under(&target_path, &root, view.case_sense) {
             return Err(KernelError::invalid_params(
                 "listing target must be outside the listed root",
             ));
         }
     }
-    let lister = context.directory_lister.ok_or_else(|| {
+    let lister = view.directory_lister.ok_or_else(|| {
         KernelError::new(
             "E5001",
             "directory lister is not available for this apply context",
@@ -685,11 +1069,11 @@ fn perform_listing(
         )
     })?;
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
-    context.fs.write_atomic_with(target, &mut |out| {
+    view.fs.write_atomic_with(target, &mut |out| {
         lister
             .write_listing(&entry.source, &options, out)
             .map(|_| ())
@@ -702,9 +1086,7 @@ fn perform_listing(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -722,7 +1104,7 @@ fn perform_listing(
 /// copy 覆盖与 edit-content 先备份原内容（`dataRef`），copy 新建的逆是
 /// "产物进隔离目录"（reverse=`Quarantine`，路径由适配层预留）。
 fn perform(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     plan: &PlanDocument,
     entry: &crate::plan::PlanEntry,
     target: Option<&str>,
@@ -737,7 +1119,7 @@ fn perform(
         match entry.action {
             PlanAction::Rename => {
                 let target = target.expect("validated: rename requires a target");
-                let outcome = context.fs.rename(&entry.source, target, policy)?;
+                let outcome = view.fs.rename(&entry.source, target, policy)?;
                 to_performed(outcome, |final_path| FsOp::Rename {
                     from: entry.source.clone(),
                     to: final_path,
@@ -745,7 +1127,7 @@ fn perform(
             }
             PlanAction::Move => {
                 let target = target.expect("validated: move requires a target");
-                let outcome = context.fs.move_path(&entry.source, target, policy)?;
+                let outcome = view.fs.move_path(&entry.source, target, policy)?;
                 to_performed(outcome, |final_path| FsOp::Rename {
                     from: entry.source.clone(),
                     to: final_path,
@@ -755,11 +1137,11 @@ fn perform(
                 let target = target.expect("validated: copy requires a target");
                 // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
                 let backup = if overwrite {
-                    Some(context.fs.backup_to_quarantine(target)?)
+                    Some(view.fs.backup_to_quarantine(target)?)
                 } else {
                     None
                 };
-                let outcome = context.fs.copy(&entry.source, target, policy)?;
+                let outcome = view.fs.copy(&entry.source, target, policy)?;
                 let final_path = outcome.final_path.clone();
                 let reverse = match backup {
                     Some(backup) => FsOp::WriteAtomic {
@@ -768,9 +1150,7 @@ fn perform(
                     },
                     None => FsOp::Quarantine {
                         from: final_path.clone(),
-                        to: context
-                            .fs
-                            .quarantine_target_path(&file_name_of(&final_path))?,
+                        to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
                     },
                 };
                 Ok(Performed {
@@ -790,19 +1170,19 @@ fn perform(
                     .range
                     .ok_or_else(|| KernelError::invalid_params("split entries require a range"))?;
                 let backup = if overwrite {
-                    Some(context.fs.backup_to_quarantine(target)?)
+                    Some(view.fs.backup_to_quarantine(target)?)
                 } else {
                     None
                 };
                 let outcome = match entry.csv.as_ref().and_then(|csv| csv.header) {
                     // F05：表头区间 + 记录区间一次写成同一分片（CSV 记录边界已在计划期确定）。
-                    Some(header) => context.fs.copy_ranges_atomic(
+                    Some(header) => view.fs.copy_ranges_atomic(
                         &entry.source,
                         &[(header.start, header.end), (range.start, range.end)],
                         target,
                         policy,
                     )?,
-                    None => context.fs.copy_range_atomic(
+                    None => view.fs.copy_range_atomic(
                         &entry.source,
                         range.start,
                         range.end,
@@ -818,9 +1198,7 @@ fn perform(
                     },
                     None => FsOp::Quarantine {
                         from: final_path.clone(),
-                        to: context
-                            .fs
-                            .quarantine_target_path(&file_name_of(&final_path))?,
+                        to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
                     },
                 };
                 Ok(Performed {
@@ -837,7 +1215,7 @@ fn perform(
             PlanAction::Merge => {
                 let target = target.expect("validated: merge requires a target");
                 if let Some(csv_merge) = &entry.csv_merge {
-                    return perform_csv_merge(context, target, overwrite, csv_merge);
+                    return perform_csv_merge(view, target, overwrite, csv_merge);
                 }
                 let merge = entry.merge.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("merge entries require a payload")
@@ -851,7 +1229,7 @@ fn perform(
                 })?;
                 // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
                 let backup = if overwrite {
-                    Some(context.fs.backup_to_quarantine(target)?)
+                    Some(view.fs.backup_to_quarantine(target)?)
                 } else {
                     None
                 };
@@ -872,7 +1250,7 @@ fn perform(
                             false,
                         )
                     })?;
-                    let data = context.fs.read_bytes(&source.path)?;
+                    let data = view.fs.read_bytes(&source.path)?;
                     if data.len() as u64 != source.size {
                         return Err(KernelError::new(
                             "E2010",
@@ -885,7 +1263,7 @@ fn perform(
                         transcode(&data, encoding, target_encoding.without_bom(), invalid)?;
                     merged.extend_from_slice(&transcoded.bytes);
                 }
-                context.fs.write_atomic(target, &merged)?;
+                view.fs.write_atomic(target, &merged)?;
                 let final_path = target.to_string();
                 let reverse = match backup {
                     Some(backup) => FsOp::WriteAtomic {
@@ -894,9 +1272,7 @@ fn perform(
                     },
                     None => FsOp::Quarantine {
                         from: final_path.clone(),
-                        to: context
-                            .fs
-                            .quarantine_target_path(&file_name_of(&final_path))?,
+                        to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
                     },
                 };
                 Ok(Performed {
@@ -915,36 +1291,36 @@ fn perform(
                 let payload = entry.csv_extract.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-extract entries require a csvExtract payload")
                 })?;
-                perform_csv_extract(context, &entry.source, target, overwrite, payload)
+                perform_csv_extract(view, &entry.source, target, overwrite, payload)
             }
             PlanAction::CsvRows => {
                 let target = target.expect("validated: csv-rows requires a target");
                 let payload = entry.csv_rows.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-rows entries require a csvRows payload")
                 })?;
-                perform_csv_rows(context, &entry.source, target, overwrite, payload)
+                perform_csv_rows(view, &entry.source, target, overwrite, payload)
             }
             PlanAction::CsvDedup => {
                 let target = target.expect("validated: csv-dedup requires a target");
                 let payload = entry.csv_dedup.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-dedup entries require a csvDedup payload")
                 })?;
-                perform_csv_dedup(context, &entry.source, target, overwrite, payload)
+                perform_csv_dedup(view, &entry.source, target, overwrite, payload)
             }
             PlanAction::CsvFilter => {
                 let target = target.expect("validated: csv-filter requires a target");
                 let payload = entry.csv_filter.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-filter entries require a csvFilter payload")
                 })?;
-                perform_csv_filter(context, &entry.source, target, overwrite, payload)
+                perform_csv_filter(view, &entry.source, target, overwrite, payload)
             }
             PlanAction::Listing => {
                 let target = target.expect("validated: listing requires a target");
-                perform_listing(context, plan, entry, target, overwrite)
+                perform_listing(view, plan, entry, target, overwrite)
             }
             PlanAction::CreateDir => {
                 let target = target.expect("validated: create-dir requires a target");
-                context.fs.create_dir(target)?;
+                view.fs.create_dir(target)?;
                 let forward = FsOp::CreateDir {
                     path: target.to_string(),
                 };
@@ -964,20 +1340,19 @@ fn perform(
             }
             PlanAction::EditContent => {
                 // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
-                let backup = context.fs.backup_to_quarantine(&entry.source)?;
-                if let Some(rewriter) = context.content_rewriter {
-                    context
-                        .fs
+                let backup = view.fs.backup_to_quarantine(&entry.source)?;
+                if let Some(rewriter) = view.content_rewriter {
+                    view.fs
                         .rewrite_atomic_with(&entry.source, &mut |reader, writer| {
                             rewriter.rewrite(entry, reader, writer)
                         })?;
                 } else {
-                    let data = context.fs.read_bytes(&entry.source)?;
-                    let editor = context
+                    let data = view.fs.read_bytes(&entry.source)?;
+                    let editor = view
                         .content_editor
                         .expect("validated: edit-content requires an editor");
                     let edited = editor(&data)?;
-                    context.fs.write_atomic(&entry.source, &edited)?;
+                    view.fs.write_atomic(&entry.source, &edited)?;
                 }
                 let forward = FsOp::WriteAtomic {
                     path: entry.source.clone(),
@@ -998,7 +1373,7 @@ fn perform(
                 })
             }
             PlanAction::Delete => {
-                let quarantined = context.fs.remove_to_quarantine(&entry.source)?;
+                let quarantined = view.fs.remove_to_quarantine(&entry.source)?;
                 Ok(Performed {
                     skipped: false,
                     replaced: false,
@@ -1050,7 +1425,7 @@ fn file_name_of(path: &str) -> String {
 }
 
 fn fingerprint_mismatch(
-    context: &GenericApplyContext<'_>,
+    fs: &dyn FsAdapter,
     entry: &crate::plan::PlanEntry,
     size: u64,
 ) -> Option<KernelError> {
@@ -1068,7 +1443,7 @@ fn fingerprint_mismatch(
         ));
     }
     let hash = expected.hash.as_ref()?;
-    match context.fs.content_hash(&entry.source, &expected.algorithm) {
+    match fs.content_hash(&entry.source, &expected.algorithm) {
         Ok(Some(actual)) if &actual != hash => Some(KernelError::new(
             "E2010",
             "source content changed since plan preview",
@@ -1081,21 +1456,17 @@ fn fingerprint_mismatch(
 }
 
 fn protected_path_hit(
-    context: &GenericApplyContext<'_>,
+    fs: &dyn FsAdapter,
+    protected_dirs: &[ProtectedDir],
+    case_sense: CaseSense,
     path: &str,
     normalized: &str,
 ) -> Option<KernelError> {
-    if context.protected_dirs.is_empty() {
+    if protected_dirs.is_empty() {
         return None;
     }
-    let canonical = context.fs.canonicalize(path).ok();
-    protected_by(
-        normalized,
-        canonical.as_deref(),
-        &context.protected_dirs,
-        context.case_sense,
-    )
-    .map(|hit| {
+    let canonical = fs.canonicalize(path).ok();
+    protected_by(normalized, canonical.as_deref(), protected_dirs, case_sense).map(|hit| {
         KernelError::new(
             "E2009",
             format!("path is under protected directory {hit}"),
@@ -1107,7 +1478,9 @@ fn protected_path_hit(
 
 /// F04/F06：合并的全部输入都要在执行期复核（大小、普通文件、占位、保护目录）。
 fn merge_source_mismatch(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
+    protected_dirs: &[ProtectedDir],
+    case_sense: CaseSense,
     entry: &crate::plan::PlanEntry,
 ) -> Option<KernelError> {
     let sources: Vec<(&str, u64, Option<SourceEncoding>)> = if let Some(merge) = &entry.merge {
@@ -1130,7 +1503,9 @@ fn merge_source_mismatch(
             Ok(normalized) => normalized,
             Err(error) => return Some(error),
         };
-        if let Some(error) = protected_path_hit(context, path, &normalized) {
+        if let Some(error) =
+            protected_path_hit(view.fs, protected_dirs, case_sense, path, &normalized)
+        {
             return Some(error);
         }
         if entry.csv_merge.is_some() && encoding.is_none() {
@@ -1141,7 +1516,7 @@ fn merge_source_mismatch(
                 false,
             ));
         }
-        let stat = match context.fs.stat(path) {
+        let stat = match view.fs.stat(path) {
             Ok(stat) => stat,
             Err(error) => return Some(error),
         };
@@ -1484,7 +1859,7 @@ fn validate_csv_rows(payload: &PlanCsvRows) -> Result<(), KernelError> {
 
 /// F07：逐个文件解码后按已解析的列序号抽取，输出保留选择顺序与原行序。
 fn perform_csv_extract(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     source: &str,
     target: &str,
     overwrite: bool,
@@ -1507,11 +1882,11 @@ fn perform_csv_extract(
         .ok_or_else(|| KernelError::invalid_params("unsupported csvExtract delimiter"))?;
 
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
-    let data = context.fs.read_bytes(source)?;
+    let data = view.fs.read_bytes(source)?;
     let decoded = transcode(
         &data,
         encoding,
@@ -1569,7 +1944,7 @@ fn perform_csv_extract(
         target_encoding,
         invalid,
     )?;
-    context.fs.write_atomic(target, &transcoded.bytes)?;
+    view.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -1578,9 +1953,7 @@ fn perform_csv_extract(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -1597,7 +1970,7 @@ fn perform_csv_extract(
 
 /// F09：只读取表头与选中的字节区间，解码/转码后原子写出。
 fn perform_csv_range(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     source: &str,
     target: &str,
     overwrite: bool,
@@ -1667,16 +2040,14 @@ fn perform_csv_range(
     }
 
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
 
     let mut raw = Vec::new();
     if let Some(header) = payload.header_range {
-        let header_raw = context
-            .fs
-            .read_ranges(source, &[(header.start, header.end)])?;
+        let header_raw = view.fs.read_ranges(source, &[(header.start, header.end)])?;
         let decoded = transcode(
             &header_raw,
             encoding,
@@ -1703,11 +2074,11 @@ fn perform_csv_range(
         raw.extend_from_slice(&header_raw);
     }
     if let Some(data) = payload.data_range {
-        raw.extend_from_slice(&context.fs.read_ranges(source, &[(data.start, data.end)])?);
+        raw.extend_from_slice(&view.fs.read_ranges(source, &[(data.start, data.end)])?);
     }
 
     let transcoded = transcode(&raw, encoding, target_encoding, invalid)?;
-    context.fs.write_atomic(target, &transcoded.bytes)?;
+    view.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -1716,9 +2087,7 @@ fn perform_csv_range(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -1735,7 +2104,7 @@ fn perform_csv_range(
 
 /// C12：解码后按条件求值并按 keep/drop 写出，表头与选中行原样输出。
 fn perform_csv_filter(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     source: &str,
     target: &str,
     overwrite: bool,
@@ -1764,11 +2133,11 @@ fn perform_csv_filter(
         _ => return Err(KernelError::invalid_params("unsupported csvFilter mode")),
     };
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
-    let data = context.fs.read_bytes(source)?;
+    let data = view.fs.read_bytes(source)?;
     let decoded = transcode(
         &data,
         encoding,
@@ -1812,7 +2181,7 @@ fn perform_csv_filter(
         target_encoding,
         invalid,
     )?;
-    context.fs.write_atomic(target, &transcoded.bytes)?;
+    view.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -1821,9 +2190,7 @@ fn perform_csv_filter(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -1840,7 +2207,7 @@ fn perform_csv_filter(
 
 /// F08：解码后按前 N / 后 N 选择数据行，表头与行内容原样输出。
 fn perform_csv_dedup(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     source: &str,
     target: &str,
     overwrite: bool,
@@ -1862,11 +2229,11 @@ fn perform_csv_dedup(
     let delimiter = Delimiter::parse(&payload.delimiter)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvDedup delimiter"))?;
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
-    let data = context.fs.read_bytes(source)?;
+    let data = view.fs.read_bytes(source)?;
     let decoded = transcode(
         &data,
         encoding,
@@ -1903,7 +2270,7 @@ fn perform_csv_dedup(
         target_encoding,
         invalid,
     )?;
-    context.fs.write_atomic(target, &transcoded.bytes)?;
+    view.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -1912,9 +2279,7 @@ fn perform_csv_dedup(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -1930,7 +2295,7 @@ fn perform_csv_dedup(
 }
 
 fn perform_csv_rows(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     source: &str,
     target: &str,
     overwrite: bool,
@@ -1947,7 +2312,7 @@ fn perform_csv_rows(
     let window = RowWindow::parse(&payload.window)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows window"))?;
     if window == RowWindow::Range {
-        return perform_csv_range(context, source, target, overwrite, payload);
+        return perform_csv_range(view, source, target, overwrite, payload);
     }
     let target_encoding = TargetEncoding::parse(&payload.target_encoding)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows target encoding"))?;
@@ -1958,11 +2323,11 @@ fn perform_csv_rows(
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows delimiter"))?;
 
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
-    let data = context.fs.read_bytes(source)?;
+    let data = view.fs.read_bytes(source)?;
     let decoded = transcode(
         &data,
         encoding,
@@ -2008,7 +2373,7 @@ fn perform_csv_rows(
         target_encoding,
         invalid,
     )?;
-    context.fs.write_atomic(target, &transcoded.bytes)?;
+    view.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -2017,9 +2382,7 @@ fn perform_csv_rows(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -2035,7 +2398,7 @@ fn perform_csv_rows(
 }
 
 fn perform_csv_merge(
-    context: &GenericApplyContext<'_>,
+    view: &WorkerView<'_>,
     target: &str,
     overwrite: bool,
     payload: &PlanCsvMerge,
@@ -2048,7 +2411,7 @@ fn perform_csv_merge(
     let output_delimiter = Delimiter::parse(&payload.delimiter)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvMerge delimiter"))?;
     let backup = if overwrite {
-        Some(context.fs.backup_to_quarantine(target)?)
+        Some(view.fs.backup_to_quarantine(target)?)
     } else {
         None
     };
@@ -2083,7 +2446,7 @@ fn perform_csv_merge(
         let file_delimiter = Delimiter::parse(&file.delimiter).ok_or_else(|| {
             KernelError::invalid_params(format!("unsupported source delimiter for {}", file.path))
         })?;
-        let data = context.fs.read_bytes(&file.path)?;
+        let data = view.fs.read_bytes(&file.path)?;
         if data.len() as u64 != file.size {
             return Err(KernelError::new(
                 "E2010",
@@ -2172,7 +2535,7 @@ fn perform_csv_merge(
         target_encoding,
         invalid,
     )?;
-    context.fs.write_atomic(target, &encoded.bytes)?;
+    view.fs.write_atomic(target, &encoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -2181,9 +2544,7 @@ fn perform_csv_merge(
         },
         None => FsOp::Quarantine {
             from: final_path.clone(),
-            to: context
-                .fs
-                .quarantine_target_path(&file_name_of(&final_path))?,
+            to: view.fs.quarantine_target_path(&file_name_of(&final_path))?,
         },
     };
     Ok(Performed {
@@ -2198,20 +2559,25 @@ fn perform_csv_merge(
     })
 }
 
-fn protected_target_hit(context: &GenericApplyContext<'_>, target: &str) -> Option<KernelError> {
-    if context.protected_dirs.is_empty() {
+fn protected_target_hit(
+    fs: &dyn FsAdapter,
+    protected_dirs: &[ProtectedDir],
+    case_sense: CaseSense,
+    target: &str,
+) -> Option<KernelError> {
+    if protected_dirs.is_empty() {
         return None;
     }
     let normalized = match try_normalize(target) {
         Ok(normalized) => normalized,
         Err(error) => return Some(error),
     };
-    let canonical = context.fs.canonicalize(target).ok();
+    let canonical = fs.canonicalize(target).ok();
     protected_by(
         &normalized,
         canonical.as_deref(),
-        &context.protected_dirs,
-        context.case_sense,
+        protected_dirs,
+        case_sense,
     )
     .map(|hit| {
         KernelError::new(
@@ -2221,13 +2587,6 @@ fn protected_target_hit(context: &GenericApplyContext<'_>, target: &str) -> Opti
             false,
         )
     })
-}
-
-fn is_cancelled(context: &GenericApplyContext<'_>) -> bool {
-    context
-        .cancel
-        .map(CancelToken::is_cancelled)
-        .unwrap_or(false)
 }
 
 fn report_progress(
@@ -2274,7 +2633,7 @@ fn mark_entry_error(reports: &mut [ApplyEntryReport], index: usize, error: Kerne
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apply::{ApplyOptions, OnConflict};
+    use crate::apply::{ApplyOptions, OnConflict, MAX_ENTRY_CONCURRENCY, MAX_PLAN_ENTRIES};
     use crate::encoding::{SourceEncoding, TargetEncoding};
     use crate::fs::{DirEntryInfo, EntryAttrs, PathOutcome, ScanFilter, StatInfo};
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
@@ -3861,6 +4220,7 @@ mod tests {
         let options = ApplyOptions {
             on_conflict: OnConflict::Overwrite,
             overwrite_confirmed: true,
+            entry_concurrency: 1,
         };
         let outcome = apply_generic_plan(
             &plan(vec![action_entry(
@@ -4130,5 +4490,240 @@ mod tests {
         assert!(fs.exists("/data/b.txt"));
         assert!(!fs.exists("/data/a1.txt"));
         assert_eq!(journal.entries[0].status, JournalStatus::Reverted);
+    }
+
+    struct QuotaLicense {
+        remaining: std::sync::atomic::AtomicU32,
+    }
+
+    impl crate::license::LicenseService for QuotaLicense {
+        fn capability(&self, _op: &str) -> crate::license::Capability {
+            crate::license::Capability::Allow
+        }
+
+        fn consume(&self, _op: &str, n: u32) -> Result<(), KernelError> {
+            use std::sync::atomic::Ordering;
+            let mut current = self.remaining.load(Ordering::SeqCst);
+            loop {
+                if current < n {
+                    return Err(KernelError::new(
+                        "E4004",
+                        "license quota exhausted",
+                        None,
+                        false,
+                    ));
+                }
+                match self.remaining.compare_exchange(
+                    current,
+                    current - n,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => return Ok(()),
+                    Err(actual) => current = actual,
+                }
+            }
+        }
+
+        fn release(&self, _op: &str, n: u32) {
+            self.remaining
+                .fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn pooled_options(concurrency: usize) -> ApplyOptions {
+        ApplyOptions {
+            on_conflict: OnConflict::Skip,
+            overwrite_confirmed: false,
+            entry_concurrency: concurrency,
+        }
+    }
+
+    #[test]
+    fn pooled_apply_matches_serial_results_and_undo() {
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt", "/data/c.txt"]);
+        fs.write_file("/data/a.txt", b"aaa");
+        fs.write_file("/data/b.txt", b"bbb");
+        fs.write_file("/data/c.txt", b"ccc");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/data/a.txt", Some("/out/a.txt"), PlanAction::Copy),
+                action_entry("e2", "/data/b.txt", Some("/out/b.txt"), PlanAction::Copy),
+                action_entry("e3", "/data/c.txt", Some("/out/c.txt"), PlanAction::Copy),
+            ]),
+            &pooled_options(4),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(fs.read_file("/out/a.txt"), b"aaa");
+        assert_eq!(fs.read_file("/out/b.txt"), b"bbb");
+        assert_eq!(fs.read_file("/out/c.txt"), b"ccc");
+        assert_eq!(journal.entries.len(), 3);
+        assert!(journal
+            .entries
+            .iter()
+            .all(|entry| entry.status == JournalStatus::Applied));
+
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 3);
+        assert!(!fs.exists("/out/a.txt"));
+        assert!(!fs.exists("/out/b.txt"));
+        assert!(!fs.exists("/out/c.txt"));
+    }
+
+    #[test]
+    fn pooled_quota_is_enforced_deterministically() {
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt", "/data/c.txt", "/data/d.txt"]);
+        let license = QuotaLicense {
+            remaining: std::sync::atomic::AtomicU32::new(2),
+        };
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/data/a.txt", Some("/out/a.txt"), PlanAction::Copy),
+                action_entry("e2", "/data/b.txt", Some("/out/b.txt"), PlanAction::Copy),
+                action_entry("e3", "/data/c.txt", Some("/out/c.txt"), PlanAction::Copy),
+                action_entry("e4", "/data/d.txt", Some("/out/d.txt"), PlanAction::Copy),
+            ]),
+            &pooled_options(4),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::PartialFailed);
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(outcome.report.entries[1].status, ApplyStatus::Ok);
+        assert_eq!(outcome.report.entries[2].status, ApplyStatus::Failed);
+        assert_eq!(outcome.report.entries[3].status, ApplyStatus::Failed);
+        assert_eq!(
+            outcome.report.entries[2].error.as_ref().unwrap().code,
+            "E4004"
+        );
+        assert_eq!(journal.entries.len(), 2);
+    }
+
+    #[test]
+    fn pooled_same_source_edit_content_is_serialized() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.write_file("/data/a.txt", b"x");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        let editor = |data: &[u8]| {
+            let mut owned = data.to_vec();
+            owned.extend_from_slice(b"+");
+            Ok(owned)
+        };
+        ctx.content_editor = Some(&editor);
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/data/a.txt", None, PlanAction::EditContent),
+                action_entry("e2", "/data/a.txt", None, PlanAction::EditContent),
+            ]),
+            &pooled_options(4),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        // 同源条目资源键相交 → 拆块串行：第二次改写看到第一次的结果。
+        assert_eq!(fs.read_file("/data/a.txt"), b"x++");
+        assert_eq!(journal.entries.len(), 2);
+    }
+
+    #[test]
+    fn pooled_cancel_stops_dispatch_and_rolls_back() {
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt", "/data/c.txt", "/data/d.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let ports = Ports::default();
+        *ports.cancel_after.lock().unwrap() = Some(2);
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.progress = Some(&ports);
+        ctx.cancel = Some(&ports);
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/data/a.txt", Some("/out/a.txt"), PlanAction::Copy),
+                action_entry("e2", "/data/b.txt", Some("/out/b.txt"), PlanAction::Copy),
+                action_entry("e3", "/data/c.txt", Some("/out/c.txt"), PlanAction::Copy),
+                action_entry("e4", "/data/d.txt", Some("/out/d.txt"), PlanAction::Copy),
+            ]),
+            &pooled_options(2),
+            &mut ctx,
+        )
+        .unwrap();
+        // 块大小＝并发上限：首块两条完成后取消生效，e3/e4 不再派发。
+        assert_eq!(outcome.state, ApplyState::Cancelled);
+        assert_eq!(journal.entries.len(), 2);
+        assert!(fs.exists("/data/a.txt"));
+        assert!(fs.exists("/data/b.txt"));
+        assert!(fs.exists("/data/c.txt"));
+        assert!(fs.exists("/data/d.txt"));
+        assert!(!fs.exists("/out/a.txt"));
+        assert!(!fs.exists("/out/b.txt"));
+        assert!(!fs.exists("/out/c.txt"));
+        assert!(!fs.exists("/out/d.txt"));
+        assert!(journal
+            .entries
+            .iter()
+            .all(|entry| entry.status == JournalStatus::Reverted));
+    }
+
+    #[test]
+    fn entry_concurrency_out_of_range_is_rejected() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        for bad in [0usize, MAX_ENTRY_CONCURRENCY + 1] {
+            let mut journal = TestJournal::default();
+            let mut ctx = context(&fs, &mut journal, &license);
+            let error = apply_generic_plan(
+                &plan(vec![action_entry(
+                    "e1",
+                    "/data/a.txt",
+                    Some("/out/a.txt"),
+                    PlanAction::Copy,
+                )]),
+                &pooled_options(bad),
+                &mut ctx,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "E1002");
+        }
+    }
+
+    #[test]
+    fn plan_entry_count_limit_is_rejected() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        let entries = (0..=MAX_PLAN_ENTRIES)
+            .map(|i| {
+                let mut entry = action_entry(
+                    &format!("e-{i:06}"),
+                    "/data/a.txt",
+                    Some("/out/a.txt"),
+                    PlanAction::Copy,
+                );
+                entry.blocked = Some(crate::plan::PlanBlocked {
+                    code: "E1002".to_string(),
+                    reason: "test".to_string(),
+                    hint: None,
+                });
+                entry
+            })
+            .collect();
+        let error = apply_generic_plan(&plan(entries), &pooled_options(1), &mut ctx).unwrap_err();
+        assert_eq!(error.code, "E3007");
     }
 }

@@ -26,6 +26,12 @@ pub enum OnConflict {
     Ask,
 }
 
+/// 单任务条目上限（方案 §5.12：超出提示分批，避免内存失控）。
+pub const MAX_PLAN_ENTRIES: usize = 200_000;
+
+/// 条目级并发上限（方案 §5.12：用户可调范围 1–16）。
+pub const MAX_ENTRY_CONCURRENCY: usize = 16;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyOptions {
@@ -33,6 +39,38 @@ pub struct ApplyOptions {
     pub on_conflict: OnConflict,
     #[serde(default)]
     pub overwrite_confirmed: bool,
+    /// 任务内条目级并发（有界工作池，方案 §5.12）；1＝串行（缺省，行为不变）。
+    #[serde(default = "default_entry_concurrency")]
+    pub entry_concurrency: usize,
+}
+
+fn default_entry_concurrency() -> usize {
+    1
+}
+
+/// 方案 §5.12 的执行期限额：单任务条目上限与条目级并发可调范围。
+/// 计划生成不设上限，执行层统一复核（不信任壳层/入口门禁）。
+pub fn validate_apply_limits(
+    plan: &PlanDocument,
+    options: &ApplyOptions,
+) -> Result<(), KernelError> {
+    if plan.entries.len() > MAX_PLAN_ENTRIES {
+        return Err(KernelError::new(
+            "E3007",
+            "plan entry count exceeds the per-task limit; split the task",
+            Some(format!(
+                "plan has {} entries; limit is {MAX_PLAN_ENTRIES}",
+                plan.entries.len()
+            )),
+            false,
+        ));
+    }
+    if options.entry_concurrency == 0 || options.entry_concurrency > MAX_ENTRY_CONCURRENCY {
+        return Err(KernelError::invalid_params(format!(
+            "entryConcurrency must be between 1 and {MAX_ENTRY_CONCURRENCY}"
+        )));
+    }
+    Ok(())
 }
 
 impl Default for ApplyOptions {
@@ -40,6 +78,7 @@ impl Default for ApplyOptions {
         Self {
             on_conflict: OnConflict::Skip,
             overwrite_confirmed: false,
+            entry_concurrency: default_entry_concurrency(),
         }
     }
 }
@@ -124,9 +163,10 @@ pub struct ApplyContext<'a> {
 
 pub fn apply_plan(
     plan: &PlanDocument,
-    _options: &ApplyOptions,
+    options: &ApplyOptions,
     context: &mut ApplyContext<'_>,
 ) -> Result<ApplyOutcome, KernelError> {
+    validate_apply_limits(plan, options)?;
     if plan.kind.as_str() != C09 {
         return Err(KernelError::invalid_params(
             "only c09 plans are supported by this apply slice",

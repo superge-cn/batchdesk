@@ -581,6 +581,7 @@ pub fn apply_archive_plan(
     options: &ApplyOptions,
     context: &mut ArchiveApplyContext<'_>,
 ) -> Result<ApplyOutcome, KernelError> {
+    crate::apply::validate_apply_limits(plan, options)?;
     if plan.kind != C10_KIND {
         return Err(KernelError::invalid_params(
             "only c10 plans are supported by the archive executor",
