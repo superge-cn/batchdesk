@@ -208,8 +208,13 @@ impl LineEndingProcessor {
                     index += self.handle_quote(input, index, out)?;
                 }
                 _ => {
-                    write_out(out, &[byte])?;
-                    index += 1;
+                    let start = index;
+                    let mut end = index + 1;
+                    while end < input.len() && !self.is_special(input[end]) {
+                        end += 1;
+                    }
+                    write_out(out, &input[start..end])?;
+                    index = end;
                 }
             }
         }
@@ -250,6 +255,12 @@ impl LineEndingProcessor {
             write_out(out, b"\"")?;
         }
         Ok(1)
+    }
+
+    fn is_special(&self, byte: u8) -> bool {
+        byte == b'\r'
+            || byte == b'\n'
+            || (self.structure == LineEndingStructure::Csv && byte == b'"')
     }
 
     fn emit_newline(&mut self, kind: LineEnding, out: &mut dyn Write) -> Result<(), KernelError> {
