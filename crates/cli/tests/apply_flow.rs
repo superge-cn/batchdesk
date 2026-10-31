@@ -3271,3 +3271,186 @@ fn c12_blocks_missing_column_and_skips_occupied_target() {
     );
     assert_eq!(fs::read(&output).unwrap(), b"occupied\n");
 }
+
+#[test]
+fn c04_plain_replace_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let work = dir.0.join("docs");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("report-2024.txt"), b"a").unwrap();
+    fs::write(work.join("report-2023.txt"), b"b").unwrap();
+    fs::write(work.join("notes.txt"), b"c").unwrap();
+
+    let plan = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        "report",
+        "--replace",
+        "memo",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c04 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c04");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 2);
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c04 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(work.join("memo-2024.txt").exists());
+    assert!(work.join("memo-2023.txt").exists());
+    assert!(work.join("notes.txt").exists());
+    assert!(!work.join("report-2024.txt").exists());
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "c04 undo failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    assert!(work.join("report-2024.txt").exists());
+    assert!(!work.join("memo-2024.txt").exists());
+}
+
+#[test]
+fn c04_regex_capture_replace_and_no_match() {
+    let dir = TempDir::new();
+    let work = dir.0.join("logs");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("2024-05-server.log"), b"a").unwrap();
+
+    let plan = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        r"^(\d{4})-(\d{2})-(.*)\.log$",
+        "--replace",
+        "${2}_${1}_${3}.log",
+        "--mode",
+        "regex",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c04 regex plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c04");
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c04 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(work.join("05_2024_server.log").exists());
+}
+
+#[test]
+fn c04_invalid_regex_and_missing_capture_are_rejected() {
+    let dir = TempDir::new();
+    let work = dir.0.join("docs");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("a.txt"), b"a").unwrap();
+
+    let invalid = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        "([a",
+        "--mode",
+        "regex",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(!invalid.status.success());
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(stderr.contains("E1002"), "stderr: {stderr}");
+
+    let missing = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        r"^(\d+)-(.*)$",
+        "--replace",
+        "$9",
+        "--mode",
+        "regex",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(!missing.status.success());
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(stderr.contains("E1002"), "stderr: {stderr}");
+
+    let empty_find = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        "",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(!empty_find.status.success());
+}

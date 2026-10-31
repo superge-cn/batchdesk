@@ -28,6 +28,7 @@ pub mod license;
 pub mod line_endings;
 pub mod listing;
 pub mod merge;
+pub mod name_replace;
 pub mod path;
 pub mod plan;
 pub mod preflight;

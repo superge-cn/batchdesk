@@ -41,6 +41,7 @@ use kernel::line_endings::{
 };
 use kernel::listing::{plan_f10, ListingOptions, PlanF10File, PlanF10Input};
 use kernel::merge::{plan_f04, PlanF04File, PlanF04Input};
+use kernel::name_replace::{plan_c04, C04Mode, PlanC04Input, PlanC04Rule};
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
 };
@@ -105,6 +106,9 @@ const USAGE: &str = "usage:
                 [--mode keep|drop] [--no-header] [--delimiter ,|;|tab||]
                 [--invalid <policy>] [--source <encoding>]
                 [--platform-prior chinese-windows|other] [--sample-blocks <n>]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c04 --dir <dir> --find <text> [--replace <text>]
+                [--mode plain|regex] [--scope full|stem|ext]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
@@ -470,6 +474,9 @@ fn main() {
     }
     if args[1] == "c03" {
         std::process::exit(run_c03(&args));
+    }
+    if args[1] == "c04" {
+        std::process::exit(run_c04(&args));
     }
     if args[1] == "c10" {
         std::process::exit(run_c10(&args));
@@ -2349,6 +2356,166 @@ fn run_c12(args: &[String]) -> i32 {
         condition_op: op,
         condition_value: value,
         files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_c04(args: &[String]) -> i32 {
+    let mut dir = None;
+    let mut find = None;
+    let mut replace = None;
+    let mut mode = C04Mode::Plain;
+    let mut scope = RenameScope::Full;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --dir requires a directory");
+                };
+                dir = Some(PathBuf::from(value));
+            }
+            "--find" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --find requires text");
+                };
+                find = Some(value.clone());
+            }
+            "--replace" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --replace requires text");
+                };
+                replace = Some(value.clone());
+            }
+            "--mode" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --mode requires plain|regex");
+                };
+                let Some(parsed) = C04Mode::parse(value) else {
+                    return input_error(format!("E1002: unknown mode: {value}"));
+                };
+                mode = parsed;
+            }
+            "--scope" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --scope requires full|stem|ext");
+                };
+                let Some(parsed) = RenameScope::parse(value) else {
+                    return input_error(format!("E1002: unknown scope: {value}"));
+                };
+                scope = parsed;
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c04 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    let Some(dir) = dir else {
+        return input_error("E1001: c04 requires --dir <dir>");
+    };
+    let Some(find) = find else {
+        return input_error("E1001: c04 requires --find <text>");
+    };
+    let dir = make_absolute(&dir);
+    let metadata = match std::fs::metadata(&dir) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot read rename directory ({}): {error}",
+                dir.display()
+            );
+            return 2;
+        }
+    };
+    if !metadata.is_dir() {
+        return input_error("E1002: --dir must be a directory");
+    }
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot list rename directory ({}): {error}",
+                dir.display()
+            );
+            return 2;
+        }
+    };
+    let mut items = Vec::new();
+    let mut existing_targets = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        existing_targets.push(path.to_string_lossy().into_owned());
+        items.push(kernel::rename::PlanF12Item {
+            path: path.to_string_lossy().into_owned(),
+            name,
+        });
+    }
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c04"));
+    let planned = plan_c04(PlanC04Input {
+        plan_id,
+        items,
+        existing_targets,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        long_path_supported: platform::preflight::long_path_supported(),
+        rule: PlanC04Rule {
+            mode,
+            find,
+            replace: replace.unwrap_or_default(),
+            scope,
+        },
     });
     match planned {
         Ok(plan) => {
