@@ -32,6 +32,7 @@ pub mod progress;
 pub mod recipe;
 pub mod regex_rename;
 pub mod rename;
+pub mod replace_content;
 pub mod split;
 pub mod ui_state;
 

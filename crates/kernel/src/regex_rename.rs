@@ -95,7 +95,7 @@ pub fn apply_regex_rule(
     })
 }
 
-fn compile_regex(pattern: &str) -> Result<Regex, KernelError> {
+pub(crate) fn compile_regex(pattern: &str) -> Result<Regex, KernelError> {
     if pattern.is_empty() {
         return Err(KernelError::invalid_params(
             "regex pattern must not be empty",
@@ -114,7 +114,7 @@ enum CaptureRef<'a> {
 ///
 /// regex crate 对不存在的组展开为空串（可能静默删掉名字片段），因此计划期
 /// 先做引用校验；`$$` 与不构成引用的 `$` 按引擎语义视为字面量。
-fn validate_replacement(replacement: &str, regex: &Regex) -> Result<(), KernelError> {
+pub(crate) fn validate_replacement(replacement: &str, regex: &Regex) -> Result<(), KernelError> {
     let mut rest = replacement;
     while let Some(index) = rest.find('$') {
         rest = &rest[index..];

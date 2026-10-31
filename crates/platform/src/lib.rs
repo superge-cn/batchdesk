@@ -15,6 +15,7 @@ pub mod listing;
 pub mod oplog;
 pub mod preflight;
 pub mod protected;
+pub mod replace_content;
 pub mod retention;
 pub mod scan;
 pub mod text;

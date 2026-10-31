@@ -2263,6 +2263,234 @@ fn c02_blocks_binary_files_and_skips_already_target_files() {
 }
 
 #[test]
+fn c03_plain_replace_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.txt");
+    fs::write(&source, b"alpha beta alpha").unwrap();
+
+    let plan = batchdesk(&[
+        "c03",
+        "--file",
+        path_text(&source),
+        "--find",
+        "alpha",
+        "--replace",
+        "gamma",
+        "--sample-bytes",
+        "64",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c03 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c03");
+    assert!(document["entries"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("matches=2"));
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c03 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"gamma beta gamma");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert_eq!(fs::read(&source).unwrap(), b"alpha beta alpha");
+}
+
+#[test]
+fn c03_regex_capture_replace_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.txt");
+    fs::write(&source, b"a1 b2").unwrap();
+
+    let plan = batchdesk(&[
+        "c03",
+        "--file",
+        path_text(&source),
+        "--find",
+        r"([ab])(\d)",
+        "--replace",
+        "$2$1",
+        "--mode",
+        "regex",
+        "--sample-bytes",
+        "64",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c03 regex plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    assert_eq!(fs::read(&source).unwrap(), b"1a 2b");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert_eq!(fs::read(&source).unwrap(), b"a1 b2");
+}
+
+#[test]
+fn c03_csv_cell_mode_preserves_quoted_newlines() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let original = b"name,note\nA,\"x y\"\nB,\"line\r\nx y\"\n";
+    fs::write(&source, original).unwrap();
+
+    let plan = batchdesk(&[
+        "c03",
+        "--file",
+        path_text(&source),
+        "--find",
+        "x y",
+        "--replace",
+        "z",
+        "--csv-mode",
+        "cell",
+        "--delimiter",
+        ",",
+        "--sample-bytes",
+        "64",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c03 csv plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(document["entries"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("matches=2"));
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        b"name,note\nA,z\nB,\"line\r\nz\"\n"
+    );
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert_eq!(fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn c03_blocks_binary_and_unclosed_csv() {
+    let dir = TempDir::new();
+    let binary = dir.0.join("image.txt");
+    fs::write(&binary, b"\x89PNG\r\n\x1a\nrest").unwrap();
+    let broken = dir.0.join("broken.csv");
+    fs::write(&broken, b"a,\"b\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c03",
+        "--file",
+        path_text(&binary),
+        "--file",
+        path_text(&broken),
+        "--find",
+        "b",
+        "--replace",
+        "c",
+        "--delimiter",
+        ",",
+        "--sample-bytes",
+        "64",
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["blocked"]["code"], "E3001");
+    assert_eq!(document["entries"][1]["blocked"]["code"], "E3004");
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

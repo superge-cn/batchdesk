@@ -40,6 +40,9 @@ use kernel::plan::{
 };
 use kernel::regex_rename::{plan_f13, PlanF13Input, PlanF13Item, PlanF13Rule};
 use kernel::rename::{plan_f12, PlanF12Input, PlanF12Item, PlanF12Rule, RenameScope};
+use kernel::replace_content::{
+    plan_c03, CsvMode, PlanC03File, PlanC03Input, ReplaceMode, ReplaceRewriter,
+};
 use kernel::split::{
     plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input,
 };
@@ -71,6 +74,11 @@ const USAGE: &str = "usage:
   batchdesk c02 --file <path>... --to crlf|lf|cr --sample-bytes <bytes>
                 [--structure auto|text|csv] [--source <encoding>]
                 [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c03 --file <path>... --find <text> --replace <text>
+                --sample-bytes <bytes> [--mode plain|regex]
+                [--csv-mode cell|text] [--delimiter ,|;|tab||]
+                [--source <encoding>] [--platform-prior chinese-windows|other]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
@@ -143,6 +151,20 @@ c09 options:
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --protected-dir DIR     repeatable S02 protected directory (default none)
   --json                  machine-readable output
+
+c03 options:
+  --file PATH             repeatable source text/CSV file (regular files only)
+  --find TEXT             literal text or regular expression to find (required)
+  --replace TEXT          replacement text; regex mode supports $1/${name}, $$ for literal $
+  --sample-bytes BYTES    head window for encoding detection (explicit; §5.2)
+  --mode plain|regex      default plain; regex uses the Rust regex engine
+  --csv-mode cell|text    default cell; cell replaces inside parsed fields and preserves quotes
+  --delimiter D           , | ; | tab | pipe; omitted = sniff for CSV cell mode
+  --source ENC            optional source encoding override
+  --platform-prior PRIOR  chinese-windows | other (default: other)
+  --plan-id ULID          optional caller-supplied ULID; generated when omitted
+  --protected-dir DIR     repeatable protected directory
+  --json                  machine-readable plan output
 
 c02 options:
   --file PATH             repeatable source text/CSV file (regular files only)
@@ -314,7 +336,7 @@ f09 options:
 
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
-  entries transcode in place; c02 entries stream a line-ending rewrite (both keep a
+  entries transcode in place; c02/c03 entries rewrite content in place (all keep a
   quarantine backup and undo restores from the Journal);
   f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   f04 entries merge sources in order into one output with a single BOM;
@@ -405,6 +427,9 @@ fn main() {
     }
     if args[1] == "c02" {
         std::process::exit(run_c02(&args));
+    }
+    if args[1] == "c03" {
+        std::process::exit(run_c03(&args));
     }
     if args[1] == "undo" {
         std::process::exit(run_undo(&args));
@@ -634,13 +659,15 @@ fn run_apply(args: &[String]) -> i32 {
             json,
         )
     } else {
-        // 通用执行器：c01/c02/f 系列 rename/move/copy/delete/edit-content 计划。
+        // 通用执行器：c01/c02/c03/f 系列 rename/move/copy/delete/edit-content 计划。
         let is_c02 = plan.kind == kernel::line_endings::C02_KIND;
+        let is_c03 = plan.kind == kernel::replace_content::C03_KIND;
+        let streaming = is_c02 || is_c03;
         let has_edit_content = plan
             .entries
             .iter()
             .any(|entry| entry.action == kernel::plan::PlanAction::EditContent);
-        let encoding = match has_edit_content && !is_c02 {
+        let encoding = match has_edit_content && !streaming {
             true => match generic_plan_encoding(&plan) {
                 Ok(encoding) => Some(encoding),
                 Err(error) => return print_kernel_error(&error),
@@ -659,18 +686,22 @@ fn run_apply(args: &[String]) -> i32 {
             };
             transcode(data, source, target, invalid).map(|result| result.bytes)
         };
-        let content_editor = (has_edit_content && !is_c02).then_some(&editor as ContentEditor<'_>);
-        let rewriter = if is_c02 {
+        let content_editor =
+            (has_edit_content && !streaming).then_some(&editor as ContentEditor<'_>);
+        let rewriter: Option<Box<dyn ContentRewriter>> = if is_c02 {
             match c02_rewriter_from_plan(&plan) {
-                Ok(rewriter) => Some(rewriter),
+                Ok(rewriter) => Some(Box::new(rewriter)),
+                Err(error) => return print_kernel_error(&error),
+            }
+        } else if is_c03 {
+            match c03_rewriter_from_plan(&plan) {
+                Ok(rewriter) => Some(Box::new(rewriter)),
                 Err(error) => return print_kernel_error(&error),
             }
         } else {
             None
         };
-        let content_rewriter = rewriter
-            .as_ref()
-            .map(|rewriter| rewriter as &dyn ContentRewriter);
+        let content_rewriter = rewriter.as_deref();
         let lister = FsDirectoryLister;
         let mut generic = GenericApplyContext {
             fs: &adapter,
@@ -791,6 +822,40 @@ fn c02_rewriter_from_plan(
             )
         })?;
     Ok(LineEndingRewriter::new(target, structure))
+}
+
+fn c03_rewriter_from_plan(
+    plan: &PlanDocument,
+) -> Result<ReplaceRewriter, kernel::error::KernelError> {
+    let string_param = |name: &str| -> Result<&str, kernel::error::KernelError> {
+        match plan.params.get(name) {
+            Some(kernel::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
+            _ => Err(kernel::error::KernelError::missing_param(format!(
+                "plan param {name} is required"
+            ))),
+        }
+    };
+    let mode = ReplaceMode::parse(string_param("mode")?).ok_or_else(|| {
+        kernel::error::KernelError::invalid_params("plan param mode is not a supported mode")
+    })?;
+    let csv_mode = CsvMode::parse(string_param("csvMode")?).ok_or_else(|| {
+        kernel::error::KernelError::invalid_params("plan param csvMode is not a supported mode")
+    })?;
+    let delimiter = match string_param("delimiter")? {
+        "auto" => None,
+        value => Some(Delimiter::parse(value).ok_or_else(|| {
+            kernel::error::KernelError::invalid_params(
+                "plan param delimiter is not a supported delimiter",
+            )
+        })?),
+    };
+    Ok(ReplaceRewriter::new(
+        mode,
+        string_param("find")?.to_string(),
+        string_param("replace")?.to_string(),
+        csv_mode,
+        delimiter,
+    ))
 }
 
 fn run_c01(args: &[String]) -> i32 {
@@ -1168,6 +1233,204 @@ fn run_c02(args: &[String]) -> i32 {
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
         confirmed_source: source,
         prior,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_c03(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut find = None;
+    let mut replacement = None;
+    let mut mode = ReplaceMode::Plain;
+    let mut csv_mode = CsvMode::Cell;
+    let mut delimiter = None;
+    let mut source = None;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_bytes = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--find" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --find requires text");
+                };
+                find = Some(value.clone());
+            }
+            "--replace" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --replace requires text");
+                };
+                replacement = Some(value.clone());
+            }
+            "--mode" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --mode requires plain|regex");
+                };
+                let Some(parsed) = ReplaceMode::parse(value) else {
+                    return input_error(format!("E1002: unknown replace mode: {value}"));
+                };
+                mode = parsed;
+            }
+            "--csv-mode" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --csv-mode requires cell|text");
+                };
+                let Some(parsed) = CsvMode::parse(value) else {
+                    return input_error(format!("E1002: unknown CSV mode: {value}"));
+                };
+                csv_mode = parsed;
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires ,|;|tab|pipe");
+                };
+                let Some(parsed) = Delimiter::parse(value) else {
+                    return input_error(format!("E1002: unknown delimiter: {value}"));
+                };
+                delimiter = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires bytes");
+                };
+                match value.parse::<usize>() {
+                    Ok(bytes) if bytes > 0 => sample_bytes = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c03 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: c03 requires at least one --file");
+    }
+    let Some(find) = find else {
+        return input_error("E1001: c03 requires --find <text>");
+    };
+    let Some(replacement) = replacement else {
+        return input_error("E1001: c03 requires --replace <text>");
+    };
+    let Some(sample_bytes) = sample_bytes else {
+        return input_error("E1001: c03 requires --sample-bytes <bytes>");
+    };
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+
+    let mut plan_files = Vec::with_capacity(files.len());
+    for file in &files {
+        let absolute = make_absolute(file);
+        let inspect = match platform::replace_content::inspect_file(
+            &absolute,
+            mode,
+            &find,
+            &replacement,
+            csv_mode,
+            delimiter,
+            sample_bytes,
+        ) {
+            Ok(inspect) => inspect,
+            Err(error) => return print_kernel_error(&error),
+        };
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        plan_files.push(PlanC03File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: inspect.file_size,
+            sample: inspect.sample,
+            structure: inspect.structure,
+            inspect: inspect.inspect,
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c03"));
+    let planned = plan_c03(PlanC03Input {
+        plan_id,
+        mode,
+        find,
+        replacement,
+        csv_mode,
+        files: plan_files,
+        protected_dirs,
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        confirmed_source: source,
+        prior,
+        delimiter,
     });
     match planned {
         Ok(plan) => {
