@@ -27,7 +27,7 @@
 | 配置/模板/UiState（C37/B9） | kernel `config`/`recipe`/`ui_state` 类型与迁移、`platform::config_store` 损坏兜底/原子写/模板 CRUD；单测 25+12 项 | 设置 UI 与人工执行（TC-C37 8 条、TC-XCT-B9 8 条待跑）；Web OPFS |
 | 桌面 IPC/UI（C09） | 壳层队列/恢复/重试/合帧/审计测试 13 项；web `tsc --noEmit` + `vite build`；Tauri `cargo check`；浏览器 mock 流；WebView E2E（apply→undo、cleanup 演练、取消回滚） | Vitest/Playwright、i18n/虚拟滚动、任务列表 UI、S03 实机崩溃演练 |
 
-> **CI 口径**：当前 `cargo test --workspace` **487 项**（kernel 337 + 语料断言 22 + platform 97 + CLI 6 单测 + 51 集成）；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期及 C01/C02/C03/C04/C10/C11/C12 与 F01–F13 plan→apply→undo；壳层任务队列/中断恢复由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖（13 项），WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤执行生成 + 范围核对 + 哈希/幂等 + 已接入的 22 项断言（19 asserted／4 partial；E03 仍 pending）；TC v0.3 已展开 C37/B9 实例，但人工执行尚未开始，S01/S02 的 UI 用例亦未逐条执行；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；**CI 七 job 全绿（run 41215996018，2026-10-31，head 9ff4688，含 Windows 单元测试与 desktop/deny/SBOM）**。
+> **CI 口径**：当前 `cargo test --workspace` **487 项**（kernel 337 + 语料断言 22 + platform 97 + CLI 6 单测 + 51 集成）；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期及 C01/C02/C03/C04/C10/C11/C12 与 F01–F13 plan→apply→undo；壳层任务队列/中断恢复由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖（13 项），WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤执行生成 + 范围核对 + 哈希/幂等 + 已接入的 22 项断言（19 asserted／4 partial；E03 仍 pending）；TC v0.3 已展开 C37/B9 实例，但人工执行尚未开始，S01/S02 的 UI 用例亦未逐条执行；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；**CI 七 job 全绿（run 41223736108，2026-11-01，head 3a4ba79，含 Windows 单元测试与 desktop/deny/SBOM）**。
 
 ## 3. 执行流程
 
