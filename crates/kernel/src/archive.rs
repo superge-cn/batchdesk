@@ -48,6 +48,29 @@ impl ArchiveEntryKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveCompression {
+    Store,
+    Deflate,
+}
+
+impl ArchiveCompression {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Store => "store",
+            Self::Deflate => "deflate",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "store" | "stored" => Some(Self::Store),
+            "deflate" | "deflated" => Some(Self::Deflate),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ArchiveEntryInfo {
     pub index: u64,
@@ -76,6 +99,12 @@ pub trait ArchiveService: Send + Sync {
         index: u64,
         writer: &mut dyn Write,
     ) -> Result<(), KernelError>;
+    /// 将输入的源文件/目录打包为 ZIP 字节（UTF-8 文件名）。
+    fn compress(
+        &self,
+        sources: &[String],
+        compression: ArchiveCompression,
+    ) -> Result<Vec<u8>, KernelError>;
 }
 
 #[derive(Clone, Debug)]
@@ -404,6 +433,132 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct PlanC10CompressInput {
+    pub plan_id: String,
+    pub output: String,
+    pub sources: Vec<String>,
+    pub compression: ArchiveCompression,
+    pub target_exists: bool,
+    pub source_file_count: u64,
+    pub source_bytes: u64,
+    pub protected_dirs: Vec<ProtectedDir>,
+    pub case_sense: CaseSense,
+}
+
+pub fn plan_c10_compress(input: PlanC10CompressInput) -> Result<PlanDocument, KernelError> {
+    if input.plan_id.trim().is_empty() {
+        return Err(KernelError::missing_param("planId is required"));
+    }
+    if !is_ulid(&input.plan_id) {
+        return Err(KernelError::invalid_params(
+            "planId must be a 26-character ULID",
+        ));
+    }
+    if input.output.trim().is_empty() {
+        return Err(KernelError::missing_param("output path is required"));
+    }
+    if input.sources.is_empty() {
+        return Err(KernelError::missing_param(
+            "c10 compression requires at least one source",
+        ));
+    }
+    let mut blocked = None;
+    for source in &input.sources {
+        let same = crate::path::normalize(source) == crate::path::normalize(&input.output);
+        if same || is_under(&input.output, source, input.case_sense) {
+            blocked = Some(PlanBlocked {
+                code: "E1002".to_string(),
+                reason: "output must not be one of the sources or inside a source directory"
+                    .to_string(),
+                hint: Some("choose an output path outside the input tree".to_string()),
+            });
+            break;
+        }
+    }
+    if blocked.is_none() {
+        blocked =
+            crate::csv_merge::target_block(&input.output, &input.protected_dirs, input.case_sense);
+    }
+    let resolution = if blocked.is_none() && input.target_exists {
+        Some(PlanResolution::Skip)
+    } else {
+        None
+    };
+    let reason = match &blocked {
+        Some(block) => block.reason.clone(),
+        None if input.target_exists => "target exists; skipped by default".to_string(),
+        None => format!(
+            "compress {} files, {} bytes -> {} ZIP (UTF-8 names)",
+            input.source_file_count,
+            input.source_bytes,
+            input.compression.as_str()
+        ),
+    };
+    let mut warnings = Vec::new();
+    if input.target_exists && blocked.is_none() {
+        warnings.push(PlanWarning {
+            kind: "target-exists-skipped".to_string(),
+            suggestion: Some("existing output files are skipped by default".to_string()),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    let mut params = BTreeMap::new();
+    params.insert(
+        "sources".to_string(),
+        PlanParamValue::String(serde_json::to_string(&input.sources).map_err(|error| {
+            KernelError::internal("source list is not serializable", error.to_string())
+        })?),
+    );
+    params.insert(
+        "compression".to_string(),
+        PlanParamValue::String(input.compression.as_str().to_string()),
+    );
+    params.insert(
+        "sourceCount".to_string(),
+        PlanParamValue::Number(input.source_file_count),
+    );
+    params.insert(
+        "sourceBytes".to_string(),
+        PlanParamValue::Number(input.source_bytes),
+    );
+    let entries = vec![PlanEntry {
+        entry_id: format!("{}-0001", input.plan_id),
+        source: input.sources[0].clone(),
+        target: Some(input.output),
+        action: PlanAction::Archive,
+        relation: None,
+        reason,
+        conflict: None,
+        resolution,
+        blocked,
+        expected: None,
+        range: None,
+        merge: None,
+        csv: None,
+        csv_merge: None,
+        csv_extract: None,
+        csv_rows: None,
+    }];
+    let stats = PlanStats {
+        total: 1,
+        conflict: 0,
+        warning: warnings.len(),
+        blocked: entries
+            .iter()
+            .filter(|entry| entry.blocked.is_some())
+            .count(),
+    };
+    Ok(PlanDocument {
+        plan_id: input.plan_id,
+        kind: C10_KIND.to_string(),
+        params,
+        entries,
+        stats,
+        warnings,
+    })
+}
+
 pub struct ArchiveApplyContext<'a> {
     pub fs: &'a dyn FsAdapter,
     pub license: &'a dyn LicenseService,
@@ -433,10 +588,10 @@ pub fn apply_archive_plan(
     if plan
         .entries
         .iter()
-        .any(|entry| entry.action != PlanAction::Extract)
+        .any(|entry| !matches!(entry.action, PlanAction::Extract | PlanAction::Archive))
     {
         return Err(KernelError::invalid_params(
-            "c10 extract plans only support extract entries in this slice",
+            "c10 plans only support extract/archive entries",
         ));
     }
     if options.on_conflict == OnConflict::Overwrite && !options.overwrite_confirmed {
@@ -444,24 +599,6 @@ pub fn apply_archive_plan(
             "overwrite requires explicit confirmation (overwriteConfirmed)",
         ));
     }
-    let max_total = match plan.params.get("maxTotalBytes") {
-        Some(PlanParamValue::Number(value)) => *value,
-        _ => {
-            return Err(KernelError::missing_param(
-                "plan param maxTotalBytes is required",
-            ))
-        }
-    };
-    let max_ratio = match plan.params.get("maxRatio") {
-        Some(PlanParamValue::String(value)) => value
-            .parse::<f64>()
-            .map_err(|_| KernelError::invalid_params("plan param maxRatio is not a number"))?,
-        _ => {
-            return Err(KernelError::missing_param(
-                "plan param maxRatio is required",
-            ))
-        }
-    };
     let mut reports = Vec::with_capacity(plan.entries.len());
     let mut failed = 0usize;
     let mut ok = 0usize;
@@ -564,6 +701,131 @@ pub fn apply_archive_plan(
             });
             continue;
         }
+        if entry.action == PlanAction::Archive {
+            let Some(target) = entry.target.clone() else {
+                context.license.release(&plan.kind, 1);
+                failed += 1;
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Failed,
+                    error: Some(KernelError::missing_param("archive target is required")),
+                });
+                continue;
+            };
+            if protected_by(&target, None, &context.protected_dirs, context.case_sense).is_some() {
+                context.license.release(&plan.kind, 1);
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Skipped,
+                    error: Some(KernelError::new(
+                        "E2009",
+                        "target is under a protected directory",
+                        None,
+                        false,
+                    )),
+                });
+                continue;
+            }
+            if context.fs.stat(&target).is_ok() {
+                context.license.release(&plan.kind, 1);
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Skipped,
+                    error: None,
+                });
+                continue;
+            }
+            let sources = match plan_param_sources(plan) {
+                Ok(sources) => sources,
+                Err(error) => {
+                    context.license.release(&plan.kind, 1);
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                    });
+                    continue;
+                }
+            };
+            let compression = match plan_param_compression(plan) {
+                Ok(compression) => compression,
+                Err(error) => {
+                    context.license.release(&plan.kind, 1);
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                    });
+                    continue;
+                }
+            };
+            let bytes = match context.archive.compress(&sources, compression) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    context.license.release(&plan.kind, 1);
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                    });
+                    continue;
+                }
+            };
+            if let Err(error) = context.fs.write_atomic(&target, &bytes) {
+                context.license.release(&plan.kind, 1);
+                failed += 1;
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Failed,
+                    error: Some(error),
+                });
+                continue;
+            }
+            let forward = FsOp::WriteAtomic {
+                path: target.clone(),
+                data_ref: None,
+            };
+            let reverse = match context
+                .fs
+                .quarantine_target_path(crate::conflict::file_name_of(&target))
+            {
+                Ok(path) => FsOp::Quarantine {
+                    from: target.clone(),
+                    to: path,
+                },
+                Err(error) => {
+                    context.license.release(&plan.kind, 1);
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                    });
+                    continue;
+                }
+            };
+            if let Err(error) = append_journal(context, plan, entry, forward, reverse.clone()) {
+                let _ = execute_reverse(context.fs, &reverse);
+                context.license.release(&plan.kind, 1);
+                failed += 1;
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Failed,
+                    error: Some(error),
+                });
+                continue;
+            }
+            ok += 1;
+            reports.push(ApplyEntryReport {
+                entry_id: entry.entry_id.clone(),
+                status: ApplyStatus::Ok,
+                error: None,
+            });
+            continue;
+        }
         let inspect = match context.archive.inspect(&entry.source) {
             Ok(inspect) => inspect,
             Err(error) => {
@@ -596,6 +858,38 @@ pub fn apply_archive_plan(
             });
             continue;
         }
+        let max_total = match plan.params.get("maxTotalBytes") {
+            Some(PlanParamValue::Number(value)) => *value,
+            _ => {
+                context.license.release(&plan.kind, 1);
+                failed += 1;
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Failed,
+                    error: Some(KernelError::missing_param(
+                        "plan param maxTotalBytes is required",
+                    )),
+                });
+                continue;
+            }
+        };
+        let max_ratio = match plan.params.get("maxRatio") {
+            Some(PlanParamValue::String(value)) => value
+                .parse::<f64>()
+                .map_err(|_| KernelError::invalid_params("plan param maxRatio is not a number"))?,
+            _ => {
+                context.license.release(&plan.kind, 1);
+                failed += 1;
+                reports.push(ApplyEntryReport {
+                    entry_id: entry.entry_id.clone(),
+                    status: ApplyStatus::Failed,
+                    error: Some(KernelError::missing_param(
+                        "plan param maxRatio is required",
+                    )),
+                });
+                continue;
+            }
+        };
         let output_dir = entry.target.clone().unwrap_or_default();
         let selection = select_entries(
             &inspect.entries,
@@ -716,7 +1010,6 @@ pub fn apply_archive_plan(
                     to: path,
                 },
                 Err(error) => {
-                    let _ = execute_reverse(context.fs, &forward);
                     first_error.get_or_insert(error);
                     failures += 1;
                     continue;
@@ -764,6 +1057,29 @@ pub fn apply_archive_plan(
             undone_by: None,
         },
     })
+}
+
+fn plan_param_sources(plan: &PlanDocument) -> Result<Vec<String>, KernelError> {
+    let raw = match plan.params.get("sources") {
+        Some(PlanParamValue::String(value)) => value,
+        _ => return Err(KernelError::missing_param("plan param sources is required")),
+    };
+    serde_json::from_str(raw).map_err(|error| {
+        KernelError::invalid_params(format!("plan param sources is not a string list: {error}"))
+    })
+}
+
+fn plan_param_compression(plan: &PlanDocument) -> Result<ArchiveCompression, KernelError> {
+    let raw = match plan.params.get("compression") {
+        Some(PlanParamValue::String(value)) => value,
+        _ => {
+            return Err(KernelError::missing_param(
+                "plan param compression is required",
+            ))
+        }
+    };
+    ArchiveCompression::parse(raw)
+        .ok_or_else(|| KernelError::invalid_params("plan param compression is not supported"))
 }
 
 fn append_journal(
@@ -916,6 +1232,43 @@ mod tests {
         assert!(plan.entries[0]
             .reason
             .contains("skipped unsafe=0 existing=1 protected=1"));
+    }
+
+    fn compress_input(sources: Vec<&str>, output: &str) -> PlanC10CompressInput {
+        PlanC10CompressInput {
+            plan_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            output: output.to_string(),
+            sources: sources.into_iter().map(str::to_string).collect(),
+            compression: ArchiveCompression::Deflate,
+            target_exists: false,
+            source_file_count: 2,
+            source_bytes: 20,
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+        }
+    }
+
+    #[test]
+    fn compression_plan_blocks_self_inclusion() {
+        let plan = plan_c10_compress(compress_input(vec!["/data/a"], "/data/a.zip")).unwrap();
+        assert!(plan.entries[0].blocked.is_none());
+        let inside =
+            plan_c10_compress(compress_input(vec!["/data/dir"], "/data/dir/out.zip")).unwrap();
+        assert_eq!(inside.entries[0].blocked.as_ref().unwrap().code, "E1002");
+        let same = plan_c10_compress(compress_input(vec!["/data/a"], "/data/a")).unwrap();
+        assert_eq!(same.entries[0].blocked.as_ref().unwrap().code, "E1002");
+    }
+
+    #[test]
+    fn compression_plan_skips_existing_target() {
+        let mut input = compress_input(vec!["/data/a", "/data/b"], "/data/out.zip");
+        input.target_exists = true;
+        let plan = plan_c10_compress(input).unwrap();
+        assert_eq!(plan.entries[0].resolution, Some(PlanResolution::Skip));
+        match &plan.params["sources"] {
+            PlanParamValue::String(sources) => assert!(sources.contains("/data/a")),
+            other => panic!("unexpected sources param: {other:?}"),
+        }
     }
 
     #[test]

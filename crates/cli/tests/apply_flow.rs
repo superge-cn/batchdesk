@@ -2645,6 +2645,156 @@ fn c10_z02_rejects_traversal_entries_but_extracts_the_safe_one() {
 }
 
 #[test]
+fn c10_compress_extract_roundtrip_and_self_inclusion() {
+    let dir = TempDir::new();
+    let source = dir.0.join("src");
+    fs::create_dir_all(source.join("sub")).unwrap();
+    fs::write(source.join("a.txt"), b"alpha").unwrap();
+    fs::write(source.join("sub").join("b.txt"), b"beta").unwrap();
+    let zip_path = dir.0.join("out.zip");
+    let output = dir.0.join("out");
+    fs::create_dir_all(&output).unwrap();
+
+    let compress_plan = batchdesk(&[
+        "c10",
+        "--compress",
+        path_text(&source),
+        "--output",
+        path_text(&zip_path),
+        "--compression",
+        "deflate",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        compress_plan.status.success(),
+        "c10 compress plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compress_plan.stdout),
+        String::from_utf8_lossy(&compress_plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&compress_plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c10");
+    assert_eq!(document["entries"][0]["action"], "archive");
+    fs::write(
+        dir.0.join("compress-plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let compress_apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("compress-plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("compress-journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        compress_apply.status.success(),
+        "c10 compress apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compress_apply.stdout),
+        String::from_utf8_lossy(&compress_apply.stderr)
+    );
+    assert!(zip_path.is_file());
+    assert!(fs::metadata(&zip_path).unwrap().len() > 0);
+
+    let extract_plan = batchdesk(&[
+        "c10",
+        "--extract",
+        path_text(&zip_path),
+        "--output-dir",
+        path_text(&output),
+        "--max-total-bytes",
+        "10000",
+        "--max-ratio",
+        "100",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(extract_plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&extract_plan.stdout).unwrap();
+    fs::write(
+        dir.0.join("extract-plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let extract_apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("extract-plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("extract-journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        extract_apply.status.success(),
+        "c10 extract apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&extract_apply.stdout),
+        String::from_utf8_lossy(&extract_apply.stderr)
+    );
+    let root_name = source.file_name().unwrap().to_str().unwrap();
+    assert_eq!(
+        fs::read(output.join(root_name).join("a.txt")).unwrap(),
+        b"alpha"
+    );
+    assert_eq!(
+        fs::read(output.join(root_name).join("sub").join("b.txt")).unwrap(),
+        b"beta"
+    );
+
+    let extract_undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("extract-journal.jsonl")),
+        "--json",
+    ]);
+    assert!(extract_undo.status.success());
+    assert!(!output.join(root_name).exists());
+    let compress_undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("compress-journal.jsonl")),
+        "--json",
+    ]);
+    assert!(compress_undo.status.success());
+    assert!(!zip_path.exists());
+
+    let self_plan = batchdesk(&[
+        "c10",
+        "--compress",
+        path_text(&source),
+        "--output",
+        path_text(&source.join("inside.zip")),
+        "--json",
+    ]);
+    assert!(self_plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&self_plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["blocked"]["code"], "E1002");
+
+    fs::write(&zip_path, b"existing").unwrap();
+    let existing_plan = batchdesk(&[
+        "c10",
+        "--compress",
+        path_text(&source),
+        "--output",
+        path_text(&zip_path),
+        "--json",
+    ]);
+    assert!(existing_plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&existing_plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["resolution"], "skip");
+}
+
+#[test]
 fn f07_missing_column_blocks_with_e3004() {
     let dir = TempDir::new();
     let source = dir.0.join("a.csv");

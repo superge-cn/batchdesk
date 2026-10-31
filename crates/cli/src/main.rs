@@ -11,7 +11,8 @@ use std::path::PathBuf;
 
 use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome};
 use kernel::archive::{
-    apply_archive_plan, plan_c10, ArchiveApplyContext, ArchiveService, PlanC10Input, C10_KIND,
+    apply_archive_plan, plan_c10, plan_c10_compress, ArchiveApplyContext, ArchiveCompression,
+    ArchiveService, PlanC10CompressInput, PlanC10Input, C10_KIND,
 };
 use kernel::create_dirs::{
     normalize_list_path, plan_f11, target_for_list_path, PlanF11Input, PlanF11Row,
@@ -86,6 +87,9 @@ const USAGE: &str = "usage:
   batchdesk c10 --extract <zip> --output-dir <dir>
                 --max-total-bytes <bytes> --max-ratio <n>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c10 --compress <path>... --output <zip>
+                [--compression store|deflate]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f02 --file <path>... --lines N --output-dir <dir>
@@ -159,10 +163,13 @@ c09 options:
   --json                  machine-readable output
 
 c10 options:
-  --extract PATH          ZIP archive to extract (this slice is extraction-only)
+  --extract PATH          ZIP archive to extract
   --output-dir DIR        existing directory receiving extracted entries
-  --max-total-bytes N     explicit total uncompressed-size limit (required; no product default)
-  --max-ratio N           explicit uncompressed/compressed ratio limit (required; no product default)
+  --max-total-bytes N     explicit total uncompressed-size limit (extract; required; no product default)
+  --max-ratio N           explicit uncompressed/compressed ratio limit (extract; required; no product default)
+  --compress PATH         repeatable source file/directory to add to a ZIP
+  --output PATH           output ZIP path for compression
+  --compression MODE      store | deflate (default: deflate)
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
   --protected-dir DIR     repeatable protected directory
   --json                  machine-readable plan output
@@ -352,8 +359,9 @@ f09 options:
 apply/undo/cleanup:
   apply consumes a previously generated plan: c09 entries move to quarantine; c01
   entries transcode in place; c02/c03 entries rewrite content in place (all keep a
-  quarantine backup and undo restores from the Journal); c10 entries extract ZIP
-  entries under --output-dir and journal every file/directory for undo;
+  quarantine backup and undo restores from the Journal); c10 extract entries write
+  ZIP entries under --output-dir and c10 compress entries build a UTF-8-name ZIP;
+  every created file/directory is journaled for undo;
   f01/f02/f03 entries write line-aligned parts (undo moves the parts into quarantine);
   f04 entries merge sources in order into one output with a single BOM;
   f05 entries write CSV parts on record boundaries, repeating the header by default;
@@ -1487,6 +1495,9 @@ fn run_c10(args: &[String]) -> i32 {
     let mut output_dir = None;
     let mut max_total_bytes = None;
     let mut max_ratio = None;
+    let mut sources = Vec::new();
+    let mut output = None;
+    let mut compression = ArchiveCompression::Deflate;
     let mut plan_id = None;
     let mut protected_dirs = Vec::new();
     let mut json = false;
@@ -1535,6 +1546,30 @@ fn run_c10(args: &[String]) -> i32 {
                     }
                 }
             }
+            "--compress" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --compress requires a path");
+                };
+                sources.push(PathBuf::from(value));
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a ZIP path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--compression" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --compression requires store|deflate");
+                };
+                let Some(parsed) = ArchiveCompression::parse(value) else {
+                    return input_error(format!("E1002: unknown compression: {value}"));
+                };
+                compression = parsed;
+            }
             "--plan-id" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
@@ -1555,6 +1590,65 @@ fn run_c10(args: &[String]) -> i32 {
         index += 1;
     }
 
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c10"));
+
+    if !sources.is_empty() {
+        if archive.is_some()
+            || output_dir.is_some()
+            || max_total_bytes.is_some()
+            || max_ratio.is_some()
+        {
+            return input_error(
+                "E1002: --compress cannot be combined with --extract/--output-dir/limits",
+            );
+        }
+        let Some(output) = output else {
+            return input_error("E1001: c10 --compress requires --output <zip>");
+        };
+        let source_paths: Vec<PathBuf> = sources.iter().map(|path| make_absolute(path)).collect();
+        let output = make_absolute(&output);
+        let source_strings: Vec<String> = source_paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        let inspect = match platform::archive::inspect_sources(&source_strings) {
+            Ok(inspect) => inspect,
+            Err(error) => return print_kernel_error(&error),
+        };
+        let planned = plan_c10_compress(PlanC10CompressInput {
+            plan_id,
+            output: output.to_string_lossy().into_owned(),
+            sources: source_strings,
+            compression,
+            target_exists: output.exists(),
+            source_file_count: inspect.file_count,
+            source_bytes: inspect.total_bytes,
+            protected_dirs,
+            case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        });
+        return match planned {
+            Ok(plan) => {
+                if json {
+                    print_plan_json(&plan);
+                } else {
+                    print_plan_human(&plan);
+                }
+                0
+            }
+            Err(error) => print_kernel_error(&error),
+        };
+    }
+
+    if output.is_some() || args.iter().any(|argument| argument == "--compression") {
+        return input_error("E1002: --output/--compression require --compress");
+    }
     let Some(archive) = archive else {
         return input_error("E1001: c10 requires --extract <zip>");
     };
@@ -1581,20 +1675,12 @@ fn run_c10(args: &[String]) -> i32 {
             output_dir.display()
         ));
     }
-    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
-        Ok(protected_dirs) => protected_dirs,
-        Err(error) => {
-            eprintln!("{}: {}", error.code, error.message);
-            return 2;
-        }
-    };
     let service = platform::archive::ZipArchiveService;
     let inspect = match service.inspect(&archive.to_string_lossy()) {
         Ok(inspect) => inspect,
         Err(error) => return print_kernel_error(&error),
     };
     let existing = platform::archive::existing_paths(&output_dir);
-    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c10"));
     let planned = plan_c10(PlanC10Input {
         plan_id,
         archive: archive.to_string_lossy().into_owned(),
