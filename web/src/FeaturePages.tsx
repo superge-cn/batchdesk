@@ -43,7 +43,10 @@ type View =
   | "c11"
   | "c12"
   | "c13"
-  | "c14";
+  | "c14"
+  | "c07"
+  | "c08"
+  | "c10";
 type Busy = "plan" | "apply" | "undo" | null;
 
 interface TaskView {
@@ -121,6 +124,55 @@ function planOperationFor(
         roots: form.roots ? form.roots.split("\n").filter(Boolean) : [],
         ...(form.output ? { output: form.output } : {}),
         ...(form.outputDir ? { outputDir: form.outputDir } : {})
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c07") {
+    return planOperation({
+      kind: "c07",
+      params: {
+        manifest: form.manifest,
+        sourceRoot: form.sourceRoot,
+        targetRoot: form.targetRoot,
+        operation: form.operation === "copy" ? "copy" : "move",
+        missing: form.missing === "error" ? "error" : "skip",
+        ...(form.delimiter ? { delimiter: form.delimiter } : {})
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c08") {
+    return planOperation({
+      kind: "c08",
+      params: {
+        sourceRoot: form.sourceRoot,
+        targetRoot: form.targetRoot,
+        rules: form.rules ? form.rules.split("\n").filter(Boolean) : [],
+        recursive: form.recursive === "yes",
+        ...(form.unclassifiedDir ? { unclassifiedDir: form.unclassifiedDir } : {})
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c10") {
+    const compress = form.mode === "compress";
+    return planOperation({
+      kind: "c10",
+      params: {
+        mode: compress ? "compress" : "extract",
+        ...(compress
+          ? {
+              output: form.output,
+              sources: form.sources ? form.sources.split("\n").filter(Boolean) : [],
+              ...(form.compression ? { compression: form.compression } : {})
+            }
+          : {
+              archive: form.archive,
+              outputDir: form.outputDir,
+              maxTotalBytes: Number(form.maxTotalBytes || 0),
+              maxRatio: Number(form.maxRatio || 0)
+            })
       },
       sourcePaths: []
     } as never);
@@ -313,6 +365,9 @@ const FEATURE_TITLES: Record<View, string> = {
   c12: "CSV 过滤（C12）",
   c13: "CSV 排序（C13）",
   c14: "CSV 列拆分/合并（C14）",
+  c07: "清单驱动移动/复制（C07）",
+  c08: "按规则归档（C08）",
+  c10: "ZIP 解压/压缩（C10）",
   f11: "清单建档（F11）",
   f12: "批量改名（F12）"
 };
@@ -477,6 +532,42 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
     { name: "target", label: "目标编码", placeholder: "utf-8" },
     { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  c07: [
+    { name: "manifest", label: "清单 CSV（两列：名称,目标子目录）", placeholder: "/path/manifest.csv", wide: true },
+    { name: "sourceRoot", label: "源根目录", placeholder: "/path/src", wide: true },
+    { name: "targetRoot", label: "目标根目录", placeholder: "/path/dst", wide: true },
+    { name: "operation", label: "操作 move|copy", placeholder: "move" },
+    { name: "missing", label: "缺失项 skip|error", placeholder: "skip" },
+    { name: "delimiter", label: "清单分隔符（可留空嗅探）", placeholder: "," }
+  ],
+  c08: [
+    { name: "sourceRoot", label: "源目录", placeholder: "/path/src", wide: true },
+    { name: "targetRoot", label: "归档目标目录", placeholder: "/path/dst", wide: true },
+    {
+      name: "rules",
+      label: "规则链（每行 <子目录>|<type>:<params>，首中生效）",
+      kind: "textarea",
+      placeholder: "images|ext:jpg,png\n2024|mtime:2024-01-01..2024-12-31\nbig|size:1048576..\nlogs|name:log\n",
+      hint: "四类条件：ext / mtime(from..to) / size(字节 min..max) / name 关键字；未命中默认留在原位。"
+    },
+    { name: "recursive", label: "递归 yes", placeholder: "yes" },
+    { name: "unclassifiedDir", label: "未分类去向（留空＝留在原位）", placeholder: "unsorted", wide: true }
+  ],
+  c10: [
+    { name: "mode", label: "模式 extract|compress", placeholder: "extract" },
+    { name: "archive", label: "压缩包路径（解压）", placeholder: "/path/a.zip", wide: true },
+    { name: "outputDir", label: "解压输出目录（须已存在）", placeholder: "/path/out", wide: true },
+    { name: "maxTotalBytes", label: "解压总量上限字节（必填）", placeholder: "104857600" },
+    { name: "maxRatio", label: "解压比例上限（必填，如 100）", placeholder: "100" },
+    { name: "output", label: "压缩产物路径（压缩模式）", placeholder: "/path/bundle.zip", wide: true },
+    {
+      name: "sources",
+      label: "压缩源（每行一个路径，压缩模式）",
+      kind: "textarea",
+      placeholder: "/path/src\n/path/other.txt\n"
+    },
+    { name: "compression", label: "压缩算法（压缩模式）", placeholder: "deflate" }
   ],
   f11: [
     { name: "root", label: "目标根目录", placeholder: "/path/root", wide: true },

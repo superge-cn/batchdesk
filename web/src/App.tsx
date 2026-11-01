@@ -207,7 +207,7 @@ function App() {
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
   const [activeView, setActiveView] = useState<
-    "c09" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f06" | "f07" | "f08" | "f09" | "f10" | "f11" | "f12" | "c04" | "c11" | "c12" | "c13" | "c14"
+    "c09" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f06" | "f07" | "f08" | "f09" | "f10" | "f11" | "f12" | "c04" | "c07" | "c08" | "c10" | "c11" | "c12" | "c13" | "c14"
   >("c09");
 
   useEffect(() => {
@@ -710,6 +710,36 @@ function App() {
                   <Files size={16} /> CSV 列拆分/合并
                 </span>
                 <span className="soon">C14</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "c07" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("c07")}
+              >
+                <span>
+                  <Files size={16} /> 清单移动/复制
+                </span>
+                <span className="soon">C07</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "c08" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("c08")}
+              >
+                <span>
+                  <Files size={16} /> 按规则归档
+                </span>
+                <span className="soon">C08</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "c10" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("c10")}
+              >
+                <span>
+                  <Files size={16} /> ZIP 解压/压缩
+                </span>
+                <span className="soon">C10</span>
               </button>
               <button
                 className={`nav-item${activeView === "f11" ? " active" : ""}`}

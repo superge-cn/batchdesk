@@ -1071,8 +1071,36 @@ fn run_apply(
         control: Arc::clone(control),
     };
     // kind 路由（设计 12 §3.1，UI 接入切片）：c09 走隔离清理专用执行器，
-    // 其余走通用执行器（move/copy/delete/edit-content/split/merge/csv-* 全族；
-    // c10 ZIP 归档走桌面执行暂缓，登记台账）。
+    // c10 走 ZIP 归档专用执行器，其余走通用执行器
+    // （move/copy/delete/edit-content/split/merge/csv-* 全族）。
+    if plan.plan.kind == kernel::archive::C10_KIND {
+        let service = platform::archive::ZipArchiveService;
+        let mut context = kernel::archive::ArchiveApplyContext {
+            fs: &adapter,
+            license: inner.license.as_ref(),
+            journal: &mut journal,
+            archive: &service,
+            task_id: task_id.to_string(),
+            now_rfc3339: now_rfc3339(),
+            protected_dirs: plan.protected_dirs.clone(),
+            case_sense: plan.case_sense,
+            progress: Some(&sink),
+            cancel: Some(control.as_ref()),
+        };
+        return match kernel::archive::apply_archive_plan(&plan.plan, &options, &mut context) {
+            Ok(outcome) => JobResult {
+                state: match outcome.state {
+                    ApplyState::Completed => TaskState::Completed,
+                    ApplyState::PartialFailed => TaskState::PartialFailed,
+                    ApplyState::Failed => TaskState::Failed,
+                    ApplyState::Cancelled => TaskState::Cancelled,
+                },
+                report: outcome.report,
+                message: None,
+            },
+            Err(error) => failed_result(plan_id, task_id, error),
+        };
+    }
     if plan.plan.kind != kernel::plan::C09_KIND {
         let lister = platform::listing::FsDirectoryLister;
         let mut context = kernel::generic_apply::GenericApplyContext {
@@ -2407,6 +2435,77 @@ mod tests {
         let undone = wait_terminal(&queue, &undo_id);
         assert_eq!(undone.summary.state, TaskState::Completed);
         assert!(root.join("a.txt").exists());
+    }
+
+    #[test]
+    fn zip_compress_plan_executes_through_the_desktop_queue_and_undoes() {
+        // UI 接入切片第五批：c10 ZIP 压缩经桌面队列专用执行器 apply→undo
+        // （此前「桌面执行暂缓」的缺口）。
+        use kernel::archive::{
+            plan_c10_compress, ArchiveCompression, ArchiveService, PlanC10CompressInput,
+        };
+
+        let dir = TempDir::new();
+        let source = dir.0.join("src");
+        fs::create_dir_all(source.join("sub")).unwrap();
+        fs::write(source.join("a.txt"), b"aaa").unwrap();
+        fs::write(source.join("sub/b.txt"), b"bb\nbb\n").unwrap();
+        let zip = dir.0.join("bundle.zip");
+
+        let inspect = platform::archive::inspect_sources(&[source.to_string_lossy().into_owned()])
+            .expect("source inspect");
+        let plan = plan_c10_compress(PlanC10CompressInput {
+            plan_id: new_ulid("c10-ui"),
+            output: zip.to_string_lossy().into_owned(),
+            sources: vec![source.to_string_lossy().into_owned()],
+            compression: ArchiveCompression::Deflate,
+            target_exists: false,
+            source_file_count: inspect.file_count,
+            source_bytes: inspect.total_bytes,
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+        })
+        .expect("c10 compress plan");
+        assert_eq!(plan.kind, kernel::archive::C10_KIND);
+
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: dir.0.join("quarantine"),
+                journal_path: dir.0.join("journal.jsonl"),
+                queue_path: dir.0.join("tasks.json"),
+                oplog_path: dir.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_, _| {}),
+        );
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan: plan.clone(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &task_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        assert!(zip.exists(), "压缩包已落盘");
+        let entries = platform::archive::ZipArchiveService
+            .inspect(&zip.to_string_lossy())
+            .expect("inspect produced zip");
+        assert_eq!(
+            entries
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry.kind, kernel::archive::ArchiveEntryKind::File))
+                .count(),
+            2,
+            "两个源文件进入压缩包"
+        );
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert!(!zip.exists(), "撤销把压缩产物移入隔离目录");
     }
 
     #[test]
