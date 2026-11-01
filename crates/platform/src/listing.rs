@@ -48,6 +48,37 @@ impl DirectoryLister for FsDirectoryLister {
 }
 
 /// 计划期摘要扫描（不写输出；只读元数据）。
+/// C08 按规则归档的文件事实（相对路径＋大小＋修改日期，§5.9 规则求值输入）。
+pub struct TreeFile {
+    /// 相对 source_root 的路径（正斜杠）。
+    pub rel_path: String,
+    pub name: String,
+    pub size: u64,
+    /// RFC 3339 修改时间（前 10 字符即 ISO 日期，供字典序区间比较）。
+    pub mtime: String,
+}
+
+/// 采集 source_root 下（可选递归）的文件事实；目录本身不入列。
+pub fn collect_tree_files(root: &Path, recursive: bool) -> io::Result<Vec<TreeFile>> {
+    let mut files = Vec::new();
+    let options = ListingOptions {
+        include_files: true,
+        include_dirs: false,
+    };
+    walk(root, &options, &mut |row| {
+        if recursive || row.level <= 1 {
+            files.push(TreeFile {
+                rel_path: row.path.clone(),
+                name: row.name.clone(),
+                size: row.size,
+                mtime: row.mtime.clone(),
+            });
+        }
+        Ok(())
+    })?;
+    Ok(files)
+}
+
 pub fn inspect_tree(root: &Path, options: &ListingOptions) -> io::Result<ListingStats> {
     walk(root, options, &mut |_| Ok(()))
 }

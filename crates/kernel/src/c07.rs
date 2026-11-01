@@ -89,7 +89,7 @@ pub struct PlanC07Input {
 }
 
 /// 清单字段的安全检查：拒绝空段、绝对路径与 `..` 逃逸（方案 §5.8"路径安全解析"）。
-fn validate_relative_segment(value: &str, kind: &str) -> Result<String, KernelError> {
+pub(crate) fn validate_relative_segment(value: &str, kind: &str) -> Result<String, KernelError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(KernelError::new(

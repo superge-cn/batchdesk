@@ -17,6 +17,9 @@ use kernel::archive::{
     ArchiveService, PlanC10CompressInput, PlanC10Input, C10_KIND,
 };
 use kernel::c07::{plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input, PlanC07Row};
+use kernel::c08::{
+    plan_c08, ArchiveCondition, ArchiveRule, PlanC08File, PlanC08Input, UnmatchedPolicy,
+};
 use kernel::create_dirs::{
     normalize_list_path, plan_f11, target_for_list_path, PlanF11Input, PlanF11Row,
 };
@@ -121,6 +124,12 @@ const USAGE: &str = "usage:
   batchdesk c07 --manifest <csv> --source-root <dir> --target-root <dir>
                 --operation move|copy [--missing skip|error] [--delimiter <d>]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c08 --source-root <dir> --target-root <dir>
+                --rule <subdir>|<type>:<params> ...
+                [--recursive] [--unclassified-dir <name>]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
+                （rule 类型：ext:jpg,png ／ mtime:2025-01-01..2025-12-31 ／
+                  size:1048576.. ／ name:report）
   batchdesk c14 (--split-column <name> | --split-column-index <n>)
                 (--split-separator <text> | --split-regex <pattern>)
                 | (--merge-column <name> | --merge-column-index <n>)...
@@ -498,6 +507,9 @@ fn main() {
     }
     if args[1] == "c07" {
         std::process::exit(run_c07(&args));
+    }
+    if args[1] == "c08" {
+        std::process::exit(run_c08(&args));
     }
     if args[1] == "c14" {
         std::process::exit(run_c14(&args));
@@ -6138,6 +6150,223 @@ fn run_c07(args: &[String]) -> i32 {
         target_root: target_root.to_string_lossy().into_owned(),
         rows,
         facts,
+        protected_dirs,
+        case_sense,
+        long_path_supported,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn parse_archive_condition(params: &str) -> Result<ArchiveCondition, String> {
+    if let Some(set) = params.strip_prefix("ext:") {
+        let extensions: Vec<String> = set
+            .split(',')
+            .map(|extension| extension.trim().to_string())
+            .filter(|extension| !extension.is_empty())
+            .collect();
+        if extensions.is_empty() {
+            return Err("ext rule requires at least one extension".to_string());
+        }
+        return Ok(ArchiveCondition::Extensions(extensions));
+    }
+    if let Some(range) = params.strip_prefix("mtime:") {
+        let (from, to) = range
+            .split_once("..")
+            .ok_or_else(|| format!("mtime rule requires from..to: {range}"))?;
+        let parse_bound = |bound: &str| {
+            let bound = bound.trim();
+            if bound.is_empty() {
+                None
+            } else {
+                Some(bound.to_string())
+            }
+        };
+        return Ok(ArchiveCondition::ModifiedDateRange {
+            from: parse_bound(from),
+            to: parse_bound(to),
+        });
+    }
+    if let Some(range) = params.strip_prefix("size:") {
+        let (min, max) = range
+            .split_once("..")
+            .ok_or_else(|| format!("size rule requires min..max (bytes): {range}"))?;
+        let parse_bound = |bound: &str| -> Result<Option<u64>, String> {
+            let bound = bound.trim();
+            if bound.is_empty() {
+                Ok(None)
+            } else {
+                bound
+                    .parse::<u64>()
+                    .map(Some)
+                    .map_err(|_| format!("size bound must be a byte count: {bound}"))
+            }
+        };
+        return Ok(ArchiveCondition::SizeRange {
+            min: parse_bound(min)?,
+            max: parse_bound(max)?,
+        });
+    }
+    if let Some(keyword) = params.strip_prefix("name:") {
+        if keyword.is_empty() {
+            return Err("name rule requires a keyword".to_string());
+        }
+        return Ok(ArchiveCondition::NameKeyword(keyword.to_string()));
+    }
+    Err(format!(
+        "unknown rule type (expected ext:/mtime:/size:/name:): {params}"
+    ))
+}
+
+fn run_c08(args: &[String]) -> i32 {
+    let mut source_root = None;
+    let mut target_root = None;
+    let mut rules_text = Vec::new();
+    let mut recursive = false;
+    let mut unclassified = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--source-root" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source-root requires a directory");
+                };
+                source_root = Some(PathBuf::from(value));
+            }
+            "--target-root" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target-root requires a directory");
+                };
+                target_root = Some(PathBuf::from(value));
+            }
+            "--rule" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --rule requires <subdir>|<type>:<params>");
+                };
+                rules_text.push(value.clone());
+            }
+            "--recursive" => recursive = true,
+            "--unclassified-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --unclassified-dir requires a name");
+                };
+                unclassified = Some(value.clone());
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c08 argument: {other}")),
+        }
+        index += 1;
+    }
+    let Some(source_root) = source_root else {
+        return input_error("E1001: c08 requires --source-root <dir>");
+    };
+    let Some(target_root) = target_root else {
+        return input_error("E1001: c08 requires --target-root <dir>");
+    };
+    if rules_text.is_empty() {
+        return input_error("E1001: c08 requires at least one --rule <subdir>|<type>:<params>");
+    }
+    let mut rules = Vec::with_capacity(rules_text.len());
+    for rule_text in &rules_text {
+        let Some((sub_dir, params)) = rule_text.split_once('|') else {
+            return input_error(format!(
+                "E1002: --rule must be <subdir>|<type>:<params>: {rule_text}"
+            ));
+        };
+        let condition = match parse_archive_condition(params) {
+            Ok(condition) => condition,
+            Err(message) => return input_error(format!("E1002: {message}")),
+        };
+        rules.push(ArchiveRule {
+            sub_dir: sub_dir.trim().to_string(),
+            condition,
+        });
+    }
+    let unmatched = match unclassified {
+        Some(dir) => UnmatchedPolicy::MoveTo(dir),
+        None => UnmatchedPolicy::Keep,
+    };
+
+    let source_root = make_absolute(&source_root);
+    let target_root = make_absolute(&target_root);
+    if !source_root.is_dir() || !target_root.is_dir() {
+        eprintln!(
+            "E1003: source-root and target-root must be existing directories ({} / {})",
+            source_root.display(),
+            target_root.display()
+        );
+        return 2;
+    }
+
+    // 文件事实采集（§5.9 大目录先抽样估算 → 本切片直接全量列举，抽样估算待补）。
+    let files = match platform::listing::collect_tree_files(&source_root, recursive) {
+        Ok(files) => files,
+        Err(error) => {
+            eprintln!(
+                "E1004: cannot walk the source root ({}): {error}",
+                source_root.display()
+            );
+            return 2;
+        }
+    };
+    let plan_files: Vec<PlanC08File> = files
+        .iter()
+        .map(|file| PlanC08File {
+            rel_path: file.rel_path.clone(),
+            size: file.size,
+            modified_date: file.mtime.get(..10).map(String::from),
+            exists: true,
+        })
+        .collect();
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c08"));
+    let planned = plan_c08(PlanC08Input {
+        plan_id,
+        source_root: source_root.to_string_lossy().into_owned(),
+        target_root: target_root.to_string_lossy().into_owned(),
+        rules,
+        unmatched,
+        files: plan_files,
         protected_dirs,
         case_sense,
         long_path_supported,

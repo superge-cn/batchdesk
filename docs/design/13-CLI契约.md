@@ -71,3 +71,4 @@ batchdesk config get|set|reset [--scope <scope>] [--json]
 | v0.16 | 2026-11-01 | 追加 C05 `c05 --plan <plan.json>`（重命名族预览报告：§5.5 对照行状态标记折叠两阶段、§7.4 四类计数与高危汇总，零副作用只读）；`undo` 追加 `--dry-run`（C06 回滚预演——按 Journal 逆序检查 reverse 落点，§7.8 回滚前重新冲突检测，零副作用）；两者均为 §2.1 实验命令。 |
 | v0.17 | 2026-11-01 | 追加 C14 `c14`（`--split-column/--split-separator/--split-regex` 拆分与 `--merge-column/--join-with/--merge-name` 合并两模式，1:1 产物＋同一 `apply` 路由）实验命令；§2.1 清单扩展加入 C14；`undo` 未知 planId 由静默 reverted=0 改为 E1001 映射缺失提示（PRE-○2）。 |
 | v0.18 | 2026-11-01 | 追加 C07 `c07`（`--manifest`/`--source-root`/`--target-root`/`--operation move\|copy`/`--missing skip\|error`）清单驱动移动/复制切片实验命令；§2.1 清单扩展加入 C07。 |
+| v0.19 | 2026-11-01 | 追加 C08 `c08`（`--rule <subdir>\|<type>:<params>` 判定器链、`--recursive`、`--unclassified-dir`）按规则归档切片实验命令；§2.1 清单扩展加入 C08。 |

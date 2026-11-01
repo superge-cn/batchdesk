@@ -4256,3 +4256,150 @@ fn c07_missing_sources_skip_or_error_and_copy_keeps_source() {
         String::from_utf8_lossy(&error_plan.stderr)
     );
 }
+
+#[test]
+fn c08_rule_archive_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let source_root = dir.0.join("src");
+    let target_root = dir.0.join("dst");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&target_root).unwrap();
+    fs::create_dir_all(source_root.join("nested")).unwrap();
+    fs::write(source_root.join("photo.jpg"), b"jpg").unwrap();
+    fs::write(source_root.join("nested").join("deep.jpg"), b"deep").unwrap();
+    fs::write(source_root.join("note.txt"), b"txt").unwrap();
+
+    let plan = batchdesk(&[
+        "c08",
+        "--source-root",
+        path_text(&source_root),
+        "--target-root",
+        path_text(&target_root),
+        "--rule",
+        "photos|ext:jpg",
+        "--recursive",
+        "--unclassified-dir",
+        "未分类",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c08 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c08");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 3);
+    // 首中生效：*.jpg → photos（递归含 nested）；note.txt 未命中 → 未分类目录。
+    // 遍历顺序按目录项排序（nested 先于 photo），按 rel_path 定位而非下标。
+    let targets: Vec<&str> = document["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["target"].as_str().unwrap())
+        .collect();
+    let prefix = format!("{}/", path_text(&target_root).replace('\\', "/"));
+    assert!(targets
+        .iter()
+        .any(|target| *target == format!("{prefix}photos/photo.jpg")));
+    assert!(targets
+        .iter()
+        .any(|target| *target == format!("{prefix}photos/deep.jpg")));
+    assert!(targets
+        .iter()
+        .any(|target| *target == format!("{prefix}未分类/note.txt")));
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c08 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(target_root.join("photos/photo.jpg").exists());
+    assert!(target_root.join("photos/deep.jpg").exists());
+    assert!(target_root.join("未分类/note.txt").exists());
+    assert!(!source_root.join("photo.jpg").exists());
+
+    // 撤销＝反向移动（§5.8 移动引擎回滚）。
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(source_root.join("photo.jpg").exists());
+    assert!(source_root.join("nested").join("deep.jpg").exists());
+    assert!(source_root.join("note.txt").exists());
+    assert!(!target_root.join("photos/photo.jpg").exists());
+}
+
+#[test]
+fn c08_rejects_unsafe_rules_and_reports_hit_statistics() {
+    let dir = TempDir::new();
+    let source_root = dir.0.join("src");
+    let target_root = dir.0.join("dst");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&target_root).unwrap();
+    fs::write(source_root.join("a.jpg"), b"jpg").unwrap();
+    fs::write(source_root.join("b.jpg"), b"jpg").unwrap();
+    fs::write(source_root.join("c.jpg"), b"jpg").unwrap();
+
+    // 规则子目录越界 → E1003。
+    let escape = batchdesk(&[
+        "c08",
+        "--source-root",
+        path_text(&source_root),
+        "--target-root",
+        path_text(&dir.0.join("dst")),
+        "--rule",
+        "../escape|ext:jpg",
+        "--json",
+    ]);
+    assert!(!escape.status.success());
+    assert!(
+        String::from_utf8_lossy(&escape.stderr).contains("E1003"),
+        "stderr: {}",
+        String::from_utf8_lossy(&escape.stderr)
+    );
+
+    // 全中规则 → 高危警告（§5.9 命中超 50%）。
+    let plan = batchdesk(&[
+        "c08",
+        "--source-root",
+        path_text(&source_root),
+        "--target-root",
+        path_text(&dir.0.join("dst")),
+        "--rule",
+        "all|ext:jpg",
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert!(
+        document["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["kind"] == "high-hit-rule" && warning["riskLevel"] == "danger"),
+        "warnings: {document}"
+    );
+}
