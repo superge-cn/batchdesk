@@ -4132,9 +4132,14 @@ fn c07_move_plan_apply_and_undo_via_manifest() {
     assert_eq!(document["kind"], "c07");
     assert_eq!(document["entries"].as_array().unwrap().len(), 2);
     assert_eq!(document["entries"][0]["action"], "move");
+    // kernel 计划内路径一律正斜杠规范化；与平台 join 结果比较前先归一。
+    let planned_target = document["entries"][0]["target"]
+        .as_str()
+        .unwrap()
+        .replace('\\', "/");
+    let expected_target = path_text(&target_root.join("archive/2026/a.txt")).replace('\\', "/");
     assert_eq!(
-        document["entries"][0]["target"],
-        json!(path_text(&target_root.join("archive/2026/a.txt"))),
+        planned_target, expected_target,
         "target sub-directory is resolved against the target root"
     );
     let plan_path = dir.0.join("plan.json");
