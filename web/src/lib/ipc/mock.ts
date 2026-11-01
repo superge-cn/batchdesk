@@ -68,6 +68,31 @@ export function mockGetStorageInfo(): StorageInfo {
 
 export async function mockPlan(input: PlanOperationInput): Promise<PlanDocument> {
   await wait(320);
+  // 非 C09 功能切片：给出同形状的最小夹具（只是界面预览，不代表文件系统真实结果）。
+  // 没有这一段时，功能页在浏览器预览里会拿到 C09 专属的"E1001 请填写扫描目录"。
+  if (input.kind !== "c09") {
+    const firstPath = Object.values(input.params).find(
+      (value) => typeof value === "string" && value.startsWith("/")
+    ) as string | undefined;
+    const base = (firstPath ?? "/mock").replace(/\/+$/, "");
+    lastPlan = {
+      planId: PLAN_ID,
+      kind: input.kind,
+      params: { ...input.params },
+      entries: [
+        {
+          entryId: `${PLAN_ID}-0001`,
+          source: `${base}/sample-a.txt`,
+          target: `${base}/sample-b.txt`,
+          action: "rename",
+          reason: `${input.kind} 预览夹具：真实执行与撤销需桌面壳`
+        }
+      ],
+      stats: { total: 1, conflict: 0, warning: 0, blocked: 0 },
+      warnings: []
+    };
+    return lastPlan;
+  }
   const root = input.sourcePaths[0]?.replace(/\/+$/, "");
   if (!root) fail("E1001", "请填写扫描目录");
   const keep = input.params.keep ?? "earliest";

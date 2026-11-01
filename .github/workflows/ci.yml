@@ -203,6 +203,14 @@ jobs:
       - name: 前端组件测试（Vitest：导航可达 ＋ 任务控制/撤销链）
         run: pnpm test
         working-directory: web
+      # 真实浏览器（Chromium）UI 语义层：数据走浏览器 mock 夹具，
+      # 不代表真机文件系统结果；真 WebView 链路仍是 scripts/e2e-tauri.mjs（需 tauri-driver）。
+      - name: 安装 Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: UI 语义测试（Playwright：C05 预览面板 ＋ S01 预检报告 ＋ 23 视图可达）
+        run: pnpm test:e2e
+        working-directory: web
 
   # ── ⑤ 桌面壳检查（Tauri 独立 workspace）──────────────────────
   desktop:

@@ -38,3 +38,8 @@ Thumbs.db
 # ── 临时/半成品文件（对齐方案 §4.3 的原子落盘命名习惯）────
 *.tmp
 *.part
+
+# Playwright 产物
+web/test-results/
+web/playwright-report/
+web/blob-report/

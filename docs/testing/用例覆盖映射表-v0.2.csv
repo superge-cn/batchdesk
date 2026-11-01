@@ -251,10 +251,10 @@ C18,执行前预览/干跑,阶段 0,P0★,TC-C18-RBK-01,RBK,01,R○1,干跑零�
 C18,执行前预览/干跑,阶段 0,P0★,TC-C18-RBK-02,RBK,02,R○2,失效即阻断,方案 §7.1、§7.4,◐,CI（cargo test --workspace --all-features）,kernel `preview` non_rename_kinds_are_rejected_with_e1002,UI 阻断入口待 WebDriver
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-01,PRE,01,P1,正常输入触发预览、逐项差异可见、零落盘、可退出,方案 §5.13、§7.4；T §3.2 C05,✅,CI（cargo test --workspace --all-features）,apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects,
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-02,PRE,02,P2,参数边界（--find 空、scope 非法 E1002）,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel `name_replace`/`regex_rename` 参数校验单测,缺 CLI 层边界 ±1 断言（已登记小缺口）
-C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-03,PRE,03,P3,危险项标注＋未选策略阻断＋不覆盖,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled,「未选策略时执行入口阻断」属 UI 交互（F12 页已内嵌预览面板，阻断断言待 WebDriver）
-C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-04,PRE,04,P4,预览失效：改参数后旧预览失效、执行被阻断,方案 §5.13、§7.4；T §3.2 C05,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,壳层 renamePreview 命令已就位（ADR-0040）,面板语义（参数变化→旧预览失效）待 e2e 断言
+C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-03,PRE,03,P3,危险项标注＋未选策略阻断＋不覆盖,方案 §5.13、§7.4；T §3.2 C05,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled；e2e/rename-preview.spec.ts「无计划时执行入口被禁用」,UI 恒传 onConflict=skip、不提供策略选择入口（C19 属阶段 1），故「未选策略阻断」只能测到无计划禁用态
+C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-04,PRE,04,P4,预览失效：改参数后旧预览失效、执行被阻断,方案 §5.13、§7.4；T §3.2 C05,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,e2e/rename-preview.spec.ts「改参数后重新预览：旧面板被新面板替换」,只断言旧面板被替换；「参数已改但未重新预览时执行入口应失效」的标记未实现（执行仍带旧 planId）
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-05,PRE,05,P5,冲突矩阵抽样（existing/within-batch/case-only）,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel `rename` 冲突扫描单测,preview 层未逐类断言（可补两条参数化单测）
-C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-06,PRE,06,P6,预览刷新,方案 §5.13、§7.4；T §3.2 C05,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,同 PRE-04,预览刷新为 UI 语义
+C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-06,PRE,06,P6,预览刷新,方案 §5.13、§7.4；T §3.2 C05,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,e2e/rename-preview.spec.ts「改参数后重新预览」＋「回滚预演面板呈现零冲突判定」,
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-EXE-01,EXE,01,E○1,正常标注链跑通（预览→确认→执行）,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel `preview` 4 项＋CLI c05,「确认→执行」衔接待 UI/e2e
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-EXE-02,EXE,02,E○2,阻断路径零副作用,方案 §5.13、§7.4；T §3.2 C05,✅,CI（cargo test --workspace --all-features）,kernel::preview::tests::non_rename_kinds_are_rejected_with_e1002,
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-RBK-01,RBK,01,R○1,映射可查（Journal/oplog 反查）,方案 §5.13、§7.4；T §3.2 C05,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,apply_and_undo_run_through_the_queue_with_events（oplog 与 Journal 反查）,
@@ -276,17 +276,17 @@ S01,执行前预检,阶段 0,P0,TC-S01-PRE-02,PRE,02,P6,磁盘余量按 §9.1 �
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-03,PRE,03,P6,命中阻断（E2004 零副作用）,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,src-tauri preflightPlan／applyPlan E2004 前置阻断（实现）,壳层阻断路径断言待补（已登记小缺口）；入口交互待 UI
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-04,PRE,04,P6,环境变化重算,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层每次 applyPlan 重跑预检,缺「两次采集不同结论」显式断言
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-05,PRE,05,P6,UNC 不可达降级不阻塞,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --workspace --all-features）,kernel UNC 超时降级单测＋platform 2 秒探测,真 UNC 环境归 Windows 实机日
-S01,执行前预检,阶段 0,P0,TC-S01-PRE-06,PRE,06,P6,报告可读,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,PreflightReport DTO（web 已呈现报告）,可读性（人话/分层）待 UI 断言
+S01,执行前预检,阶段 0,P0,TC-S01-PRE-06,PRE,06,P6,报告可读,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,e2e/preflight-report.spec.ts（报告含三类计数与逐项结论；另断言无跳过预检入口）,文案观感（人话/分层）仍属人工走查（U v1.3）
 S01,执行前预检,阶段 0,P0,TC-S01-EXE-01,EXE,01,E○1,预检通过→执行,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层阻断与 apply 测试,端到端组合待 e2e
 S01,执行前预检,阶段 0,P0,TC-S01-EXE-02,EXE,02,E○2,预检中取消,方案 §3.3、§4.9、§9.1、11.6-12,⛔,待人类裁决（TC §5.1 阻塞类型＝裁决）,无,「预检中取消」语义未定义：预检是同步快照、不存在中途可取消态；需人类走方案 §11.6 澄清后再定用例（v0.1 已登记为 OQ 候选）
 S01,执行前预检,阶段 0,P0,TC-S01-RBK-01,RBK,01,R○1,不通过零副作用,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,applyPlan E2004 返回且零变更（实现）,断言待补（同 PRE-03）
-S01,执行前预检,阶段 0,P0,TC-S01-RBK-02,RBK,02,R○2,无「跳过预检」入口,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,默认无该入口（实现事实）,UI 层断言待建
+S01,执行前预检,阶段 0,P0,TC-S01-RBK-02,RBK,02,R○2,无「跳过预检」入口,方案 §3.3、§4.9、§9.1、11.6-12,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,e2e/preflight-report.spec.ts「界面上不存在跳过预检的入口」（负向断言）,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-01,PRE,01,P6,默认空名单不误拦,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,各功能计划在空名单下零 blocked（split/rename/csv_* 单测隐含）,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-02,PRE,02,P6,自定义名单命中（literal）,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,kernel::preflight::tests::protected_literal_and_canonical_hits_block_the_entry,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-03,PRE,03,P6,折叠/子路径（canonical 命中）,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,同上＋generic_apply::protected_path_hit,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-04,PRE,04,P6,名单变更重算（旧预览失效 E1002）,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes,端到端重算待 e2e
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-05,PRE,05,P6,UNC/链接路径名单,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,◐,CI（cargo test --workspace --all-features）,platform `preflight` is_network_path 与 probe 单测,名单×UNC 组合断言未写；真环境归实机日
-S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-06,PRE,06,P6,二次确认文案,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,无,二次确认文案待 UI（U v1.3 token）
+S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-06,PRE,06,P6,二次确认文案,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,⛔,待实现（前端无二次确认入口）,无,界面上不存在保护命中的二次确认弹窗，故本条无法测；需先实现（方案 §9.2 命中即禁止含二次确认）
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-EXE-01,EXE,01,E○1,命中写入尝试被阻断并给提示,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,◐,CI（cargo test --workspace --all-features）,generic_apply::protected_target_is_skipped_before_any_change＋protected_source_is_rechecked_during_execution,提示呈现待 UI
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-EXE-02,EXE,02,E○2,默认名单态写入不误拦,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,各功能 apply_flow 集成测试均在空名单下全量成功,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-RBK-01,RBK,01,R○1,阻断零副作用,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,generic_apply::protected_target_is_skipped_before_any_change,

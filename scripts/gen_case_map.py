@@ -30,6 +30,7 @@ HARNESS = {"C01", "C04", "C07", "C08", "C09", "C13", "C14", "F01", "F12"}
 CI = "CI（cargo test --workspace --all-features）"
 SHELL = "CI（cargo test --manifest-path src-tauri/Cargo.toml）"
 WEBDRIVER = "WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）"
+PW = "CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）"
 MANUAL_CARRIER = "真人工（Windows 实机/受控环境）"
 
 STATUS_BY_CORPUS = {"asserted": "✅", "partial": "◐", "pending": "⛔"}
@@ -717,11 +718,12 @@ add("C05",
     pre_slots={
         1: ("✅", CI, "apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects", ""),
         2: ("◐", CI, "kernel `name_replace`/`regex_rename` 参数校验单测", "缺 CLI 层边界 ±1 断言（已登记小缺口）"),
-        3: ("◐", CI, "kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled",
-            "「未选策略时执行入口阻断」属 UI 交互（F12 页已内嵌预览面板，阻断断言待 WebDriver）"),
-        4: ("🔶", WEBDRIVER, "壳层 renamePreview 命令已就位（ADR-0040）", "面板语义（参数变化→旧预览失效）待 e2e 断言"),
+        3: ("◐", PW, "kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled；e2e/rename-preview.spec.ts「无计划时执行入口被禁用」",
+            "UI 恒传 onConflict=skip、不提供策略选择入口（C19 属阶段 1），故「未选策略阻断」只能测到无计划禁用态"),
+        4: ("◐", PW, "e2e/rename-preview.spec.ts「改参数后重新预览：旧面板被新面板替换」",
+            "只断言旧面板被替换；「参数已改但未重新预览时执行入口应失效」的标记未实现（执行仍带旧 planId）"),
         5: ("◐", CI, "kernel `rename` 冲突扫描单测", "preview 层未逐类断言（可补两条参数化单测）"),
-        6: ("🔶", WEBDRIVER, "同 PRE-04", "预览刷新为 UI 语义"),
+        6: ("✅", PW, "e2e/rename-preview.spec.ts「改参数后重新预览」＋「回滚预演面板呈现零冲突判定」", ""),
     },
     exe_slots={
         1: ("◐", CI, "kernel `preview` 4 项＋CLI c05", "「确认→执行」衔接待 UI/e2e"),
@@ -778,7 +780,8 @@ add("S01",
             "壳层阻断路径断言待补（已登记小缺口）；入口交互待 UI"),
         4: ("◐", SHELL, "壳层每次 applyPlan 重跑预检", "缺「两次采集不同结论」显式断言"),
         5: ("◐", CI, "kernel UNC 超时降级单测＋platform 2 秒探测", "真 UNC 环境归 Windows 实机日"),
-        6: ("🔶", WEBDRIVER, "PreflightReport DTO（web 已呈现报告）", "可读性（人话/分层）待 UI 断言"),
+        6: ("◐", PW, "e2e/preflight-report.spec.ts（报告含三类计数与逐项结论；另断言无跳过预检入口）",
+            "文案观感（人话/分层）仍属人工走查（U v1.3）"),
     },
     exe_slots={
         1: ("◐", SHELL, "壳层阻断与 apply 测试", "端到端组合待 e2e"),
@@ -787,7 +790,8 @@ add("S01",
     },
     rbk_slots={
         1: ("◐", SHELL, "applyPlan E2004 返回且零变更（实现）", "断言待补（同 PRE-03）"),
-        2: ("🔶", WEBDRIVER, "默认无该入口（实现事实）", "UI 层断言待建"),
+        2: ("✅", PW, "e2e/preflight-report.spec.ts「界面上不存在跳过预检的入口」（负向断言）", ""),
+        # ↑ 负向 UI 断言：真实浏览器里不存在跳过预检的按钮，默认必检
     })
 
 add("S02",
@@ -807,7 +811,8 @@ add("S02",
         4: ("✅", SHELL, "protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes",
             "端到端重算待 e2e"),
         5: ("◐", CI, "platform `preflight` is_network_path 与 probe 单测", "名单×UNC 组合断言未写；真环境归实机日"),
-        6: ("🔶", WEBDRIVER, "无", "二次确认文案待 UI（U v1.3 token）"),
+        6: ("⛔", "待实现（前端无二次确认入口）", "无",
+            "界面上不存在保护命中的二次确认弹窗，故本条无法测；需先实现（方案 §9.2 命中即禁止含二次确认）"),
     },
     exe_slots={
         1: ("◐", CI, "generic_apply::protected_target_is_skipped_before_any_change＋protected_source_is_rechecked_during_execution",
