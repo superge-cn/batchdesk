@@ -1068,6 +1068,40 @@ fn run_apply(
         task_id: task_id.to_string(),
         control: Arc::clone(control),
     };
+    // kind 路由（设计 12 §3.1，UI 接入切片）：c09 走隔离清理专用执行器，
+    // 其余走通用执行器（move/copy/delete/edit-content/split/merge/csv-* 全族；
+    // c10 ZIP 归档走桌面执行暂缓，登记台账）。
+    if plan.plan.kind != kernel::plan::C09_KIND {
+        let lister = platform::listing::FsDirectoryLister;
+        let mut context = kernel::generic_apply::GenericApplyContext {
+            fs: &adapter,
+            license: inner.license.as_ref(),
+            journal: &mut journal,
+            task_id: task_id.to_string(),
+            now_rfc3339: now_rfc3339(),
+            protected_dirs: plan.protected_dirs.clone(),
+            case_sense: plan.case_sense,
+            progress: Some(&sink),
+            cancel: Some(control.as_ref()),
+            content_editor: None,
+            content_rewriter: None,
+            directory_lister: Some(&lister),
+        };
+        return match kernel::generic_apply::apply_generic_plan(&plan.plan, &options, &mut context)
+        {
+            Ok(outcome) => JobResult {
+                state: match outcome.state {
+                    ApplyState::Completed => TaskState::Completed,
+                    ApplyState::PartialFailed => TaskState::PartialFailed,
+                    ApplyState::Failed => TaskState::Failed,
+                    ApplyState::Cancelled => TaskState::Cancelled,
+                },
+                report: outcome.report,
+                message: None,
+            },
+            Err(error) => failed_result(plan_id, task_id, error),
+        };
+    }
     let mut context = ApplyContext {
         fs: &adapter,
         license: inner.license.as_ref(),
@@ -1634,6 +1668,8 @@ mod tests {
                 csv_rows: None,
                 csv_dedup: None,
                 csv_filter: None,
+                csv_columns: None,
+                csv_sort: None,
             })
             .collect();
         PlanDocument {
@@ -2281,6 +2317,80 @@ mod tests {
             "TaskSummary keeps updating even when the push is coalesced"
         );
     }
+
+    #[test]
+    fn generic_plan_kinds_execute_through_the_desktop_queue() {
+        // UI 接入切片：非 c09 计划（c07 move）经桌面队列走通用执行器。
+        let dir = TempDir::new();
+        let quarantine = dir.0.join("quarantine");
+        let journal_path = dir.0.join("journal.jsonl");
+        let queue_path = dir.0.join("tasks.json");
+        let root = dir.0.join("tree");
+        let dst = dir.0.join("dst");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(root.join("a.txt"), b"a").unwrap();
+
+        let entries = vec![kernel::plan::PlanEntry {
+            entry_id: "e1".to_string(),
+            source: root.join("a.txt").to_string_lossy().into_owned(),
+            target: Some(dst.join("archived").join("a.txt").to_string_lossy().into_owned()),
+            action: kernel::plan::PlanAction::Move,
+            relation: None,
+            reason: "c07 manifest move".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: None,
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: None,
+            csv_extract: None,
+            csv_rows: None,
+            csv_dedup: None,
+            csv_filter: None,
+            csv_columns: None,
+            csv_sort: None,
+        }];
+        let plan = kernel::plan::PlanDocument {
+            plan_id: new_ulid("c07-ui"),
+            kind: "c07".to_string(),
+            params: BTreeMap::new(),
+            entries,
+            stats: kernel::plan::PlanStats::default(),
+            warnings: Vec::new(),
+        };
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: quarantine,
+                journal_path: journal_path,
+                queue_path: queue_path,
+                oplog_path: dir.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_, _| {}),
+        );
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan: plan.clone(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &task_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        assert!(dst.join("archived/a.txt").exists());
+        assert!(!root.join("a.txt").exists());
+        assert_eq!(done.entries[0].status, kernel::apply::ApplyStatus::Ok);
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert!(root.join("a.txt").exists());
+    }
+
 
     fn insert_control_task(queue: &TaskQueue, task_id: &str) {
         let summary = TaskSummary {

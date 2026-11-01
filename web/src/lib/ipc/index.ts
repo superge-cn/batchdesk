@@ -13,12 +13,16 @@ import {
   mockPlan,
   mockPreflightPlan,
   mockRecoverTask,
+  mockRenamePreview,
   mockResume,
   mockRetry,
+  mockUndoDryRun,
   mockUndo
 } from "./mock";
 import type {
   CleanupOutcome,
+  RenamePreview,
+  UndoDryRun,
   IpcMeta,
   PreflightReport,
   ProgressEvent,
@@ -94,6 +98,18 @@ export async function recoverTask(
 
 export async function retryTask(taskId: string): Promise<TaskHandle> {
   return isTauri() ? invoke<TaskHandle>("retryTask", { taskId }) : mockRetry(taskId);
+}
+
+export async function renamePreview(planId: string): Promise<RenamePreview> {
+  return isTauri()
+    ? invoke<RenamePreview>("renamePreview", { planId })
+    : mockRenamePreview(planId);
+}
+
+export async function undoDryRun(planId: string): Promise<UndoDryRun> {
+  return isTauri()
+    ? invoke<UndoDryRun>("undoDryRun", { planId })
+    : mockUndoDryRun(planId);
 }
 
 export async function cancelTask(taskId: string): Promise<void> {

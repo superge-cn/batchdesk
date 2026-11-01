@@ -199,3 +199,45 @@ export interface PlanOperationInput {
   };
   sourcePaths: string[];
 }
+
+export type PreviewStatus = "normal" | "conflict" | "invalid" | "too-long" | "protected";
+
+export interface RenamePreviewRow {
+  entryId: string;
+  oldPath: string;
+  newPath: string;
+  status: PreviewStatus;
+  twoPhase: boolean;
+  detail?: string;
+}
+
+export interface RenamePreviewCounts {
+  toProcess: number;
+  skipped: number;
+  conflicts: number;
+  blocked: number;
+}
+
+export interface RenamePreview {
+  planId: string;
+  kind: string;
+  counts: RenamePreviewCounts;
+  rows: RenamePreviewRow[];
+  highlights: string[];
+}
+
+export type UndoDryRunStatus = "ok" | "conflict" | "missing";
+
+export interface UndoDryRunEntry {
+  entryId: string;
+  status: UndoDryRunStatus;
+  code?: string;
+  detail?: string;
+}
+
+export interface UndoDryRun {
+  planId: string;
+  entries: UndoDryRunEntry[];
+  conflictCount: number;
+  missingCount: number;
+}

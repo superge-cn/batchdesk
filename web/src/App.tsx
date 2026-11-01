@@ -40,6 +40,7 @@ import {
   toIpcError,
   undoPlan
 } from "./lib/ipc";
+import { FeaturePages } from "./FeaturePages";
 import type {
   ApplyReport,
   CleanupOutcome,
@@ -205,6 +206,7 @@ function App() {
   const [meta, setMeta] = useState<IpcMeta | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
+  const [activeView, setActiveView] = useState<"c09" | "f05" | "f11" | "f12">("c09");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -597,11 +599,35 @@ function App() {
                 </span>
                 <span className="soon">C09</span>
               </button>
-              <button className="nav-item" type="button" disabled>
+              <button
+                className={`nav-item${activeView === "f05" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f05")}
+              >
                 <span>
-                  <Files size={16} /> 文件整理
+                  <Files size={16} /> CSV 分割
                 </span>
-                <span className="soon">后续</span>
+                <span className="soon">F05</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f11" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f11")}
+              >
+                <span>
+                  <Files size={16} /> 清单建档
+                </span>
+                <span className="soon">F11</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f12" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f12")}
+              >
+                <span>
+                  <Files size={16} /> 批量改名
+                </span>
+                <span className="soon">F12</span>
               </button>
               <button className="nav-item" type="button" disabled>
                 <span>
@@ -657,6 +683,8 @@ function App() {
           </header>
 
           <div className="content">
+            {activeView === "c09" && (
+            <div style={{ display: "contents" }}>
             {error && (
               <div className="banner banner-danger" role="alert">
                 <div>
@@ -1058,6 +1086,8 @@ function App() {
                 </section>
               </div>
             </div>
+            </div>
+            )}
           </div>
         </main>
       </div>

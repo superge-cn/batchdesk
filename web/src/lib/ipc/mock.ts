@@ -2,6 +2,8 @@
 // when the Vite app runs outside Tauri; real desktop runs call Rust commands.
 import type {
   ApplyEntryReport,
+  RenamePreviewCounts,
+  RenamePreviewRow,
   ApplyReport,
   CleanupOutcome,
   IpcError,
@@ -418,5 +420,44 @@ export async function mockCleanup(
     removedEntries: apply ? 2 : 0,
     removedFiles: apply ? 2 : 0,
     failed: []
+  };
+}
+
+// C05/C06 mock：浏览器预览用（无真实计划存储）。
+let lastRenamePreview: {
+  planId: string;
+  kind: string;
+  counts: RenamePreviewCounts;
+  rows: RenamePreviewRow[];
+  highlights: string[];
+} | null = null;
+
+export function mockRenamePreview(planId: string) {
+  lastRenamePreview = {
+    planId,
+    kind: "f12",
+    counts: { toProcess: 1, skipped: 0, conflicts: 0, blocked: 0 },
+    rows: [
+      {
+        entryId: `${planId}-0001`,
+        oldPath: "/mock/dup.txt",
+        newPath: "/mock/uniq.txt",
+        status: "normal",
+        twoPhase: false
+      }
+    ],
+    highlights: []
+  };
+  return lastRenamePreview;
+}
+
+export function mockUndoDryRun(planId: string) {
+  return {
+    planId,
+    entries: [
+      { entryId: `${planId}-0001`, status: "ok" as const }
+    ],
+    conflictCount: 0,
+    missingCount: 0
   };
 }

@@ -14,6 +14,7 @@ use kernel::duplicate::{group_duplicates, DuplicateCandidate, GroupingMode, Grou
 use kernel::error::KernelError;
 use kernel::fs::FsAdapter;
 use kernel::path::ProtectedDir;
+use kernel::csv::Delimiter;
 use kernel::plan::{
     plan_c09, KeepPolicy, PlanAction, PlanC09Input, PlanDocument, PlanFile, PlanResolution,
 };
@@ -189,11 +190,19 @@ fn planOperation(
     params: Value,
     source_paths: Vec<String>,
 ) -> Result<PlanDocument, IpcError> {
-    if kind != "c09" {
-        return Err(IpcError::new(
-            "E1002",
-            "this shell slice supports only c09 plans",
-        ));
+    // kind 路由（UI 接入切片，设计 12 §3.1）：c09 既有路径；
+    // f05/f11/f12 主流程在此采集事实并生成计划；其余 kind E1002 明确拒绝。
+    match kind.as_str() {
+        "c09" => {}
+        "f05" => return plan_f05_shell(&state, params, source_paths),
+        "f11" => return plan_f11_shell(&state, params, source_paths),
+        "f12" => return plan_f12_shell(&state, params, source_paths),
+        other => {
+            return Err(IpcError::new(
+                "E1002",
+                format!("this shell slice does not support plan kind: {other}"),
+            ))
+        }
     }
     if source_paths.len() != 1 {
         return Err(IpcError::new(
@@ -788,6 +797,274 @@ fn importRecipe(state: State<'_, AppState>, payload: String) -> Result<RecipeDoc
         .map_err(IpcError::from)
 }
 
+// ── f05/f11/f12 主流程计划（UI 接入切片，设计 12 §3.1）──────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct F05ShellParams {
+    file: String,
+    #[serde(default)]
+    target_bytes: Option<u64>,
+    #[serde(default)]
+    rows: Option<u64>,
+    output_dir: String,
+    #[serde(default)]
+    delimiter: Option<String>,
+    #[serde(default = "default_true")]
+    keep_header: bool,
+    #[serde(default)]
+    plan_id: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn plan_f05_shell(
+    state: &State<'_, AppState>,
+    params: Value,
+    _source_paths: Vec<String>,
+) -> Result<PlanDocument, IpcError> {
+    let params: F05ShellParams = serde_json::from_value(params)
+        .map_err(|error| IpcError::new("E1002", format!("invalid f05 params: {error}")))?;
+    let basis = match (params.target_bytes, params.rows) {
+        (Some(bytes), None) => kernel::csv::CsvSplitBasis::Bytes(bytes),
+        (None, Some(rows)) => kernel::csv::CsvSplitBasis::Rows(rows),
+        _ => {
+            return Err(IpcError::new(
+                "E1002",
+                "f05 requires exactly one of targetBytes or rows",
+            ))
+        }
+    };
+    let delimiter = match params.delimiter.as_deref() {
+        Some(value) => Some(Delimiter::parse(value).ok_or_else(|| {
+            IpcError::new("E1002", format!("invalid delimiter: {value}"))
+        })?),
+        None => None,
+    };
+    let absolute = make_absolute(Path::new(&params.file));
+    let metadata = std::fs::metadata(&absolute)
+        .map_err(|error| IpcError::new("E2001", format!("{}: {error}", absolute.display())))?;
+    if !metadata.is_file() {
+        return Err(IpcError::new("E1002", "f05 requires a regular file"));
+    }
+    let output_dir = make_absolute(Path::new(&params.output_dir));
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|error| IpcError::new("E1004", format!("{}: {error}", output_dir.display())))?;
+    let sample_window = metadata.len().max(4096);
+    let layout = platform::csv::csv_split_layout(
+        &absolute,
+        platform::csv::CsvScanOptions {
+            delimiter,
+            keep_header: params.keep_header,
+            basis,
+            sample_window_bytes: sample_window,
+        },
+    )
+    .map_err(|error| IpcError::new("E1004", format!("{}: {error}", absolute.display())))?;
+    let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f05"));
+    let target = output_dir.join(
+        absolute
+            .file_stem()
+            .map(|stem| format!("{}.part-0001.csv", stem.to_string_lossy()))
+            .unwrap_or_else(|| "part-0001.csv".into()),
+    );
+    let plan = kernel::csv::plan_f05(kernel::csv::PlanF05Input {
+        plan_id: plan_id.clone(),
+        basis,
+        keep_header: params.keep_header,
+        delimiter,
+        output_dir: output_dir.to_string_lossy().into_owned(),
+        protected_dirs: Vec::new(),
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        existing_targets: vec![target.to_string_lossy().into_owned()],
+        files: vec![kernel::csv::PlanF05File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path: platform::fs::canonicalize_display(&absolute),
+            // C18 计划幂等（ADR-0039）：groupId 确定性派生。
+            group_id: platform::ids::derived_ulid(&format!("f05:{plan_id}")),
+            layout,
+        }],
+    })
+    .map_err(IpcError::from)?;
+    state.plans.lock().unwrap().insert(
+        plan.plan_id.clone(),
+        StoredPlan {
+            plan: plan.clone(),
+            protected_dirs: Vec::new(),
+            case_sense: CliFsAdapter::new(None).case_sensitivity(),
+            protected_source: ProtectedSource::Params,
+        },
+    );
+    Ok(plan)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct F11ShellParams {
+    list: String,
+    root: String,
+    #[serde(default)]
+    plan_id: Option<String>,
+}
+
+fn plan_f11_shell(
+    state: &State<'_, AppState>,
+    params: Value,
+    _source_paths: Vec<String>,
+) -> Result<PlanDocument, IpcError> {
+    let params: F11ShellParams = serde_json::from_value(params)
+        .map_err(|error| IpcError::new("E1002", format!("invalid f11 params: {error}")))?;
+    let root = make_absolute(Path::new(&params.root));
+    if !root.is_dir() {
+        return Err(IpcError::new("E1003", "f11 root must be a directory"));
+    }
+    let rows: Vec<kernel::create_dirs::PlanF11Row> = params
+        .list
+        .lines()
+        .enumerate()
+        .map(|(index, line)| kernel::create_dirs::PlanF11Row {
+            line: index as u64 + 1,
+            path: line.trim().to_string(),
+        })
+        .filter(|row| !row.path.is_empty())
+        .collect();
+    let existing: Vec<String> = rows
+        .iter()
+        .map(|row| root.join(&row.path).to_string_lossy().into_owned())
+        .filter(|path| Path::new(path).exists())
+        .collect();
+    let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f11"));
+    let plan = kernel::create_dirs::plan_f11(kernel::create_dirs::PlanF11Input {
+        plan_id: plan_id.clone(),
+        root: root.to_string_lossy().into_owned(),
+        canonical_root: platform::fs::canonicalize_display(&root),
+        rows,
+        existing_targets: existing,
+        protected_dirs: Vec::new(),
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+    })
+    .map_err(IpcError::from)?;
+    state.plans.lock().unwrap().insert(
+        plan.plan_id.clone(),
+        StoredPlan {
+            plan: plan.clone(),
+            protected_dirs: Vec::new(),
+            case_sense: CliFsAdapter::new(None).case_sensitivity(),
+            protected_source: ProtectedSource::Params,
+        },
+    );
+    Ok(plan)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct F12ShellParams {
+    dir: String,
+    #[serde(default)]
+    prefix: Option<String>,
+    #[serde(default)]
+    suffix: Option<String>,
+    #[serde(default)]
+    find: Option<String>,
+    #[serde(default = "default_empty")]
+    replace: String,
+    #[serde(default = "default_scope")]
+    scope: String,
+    #[serde(default)]
+    plan_id: Option<String>,
+}
+
+fn default_empty() -> String {
+    String::new()
+}
+
+fn default_scope() -> String {
+    "full".to_string()
+}
+
+fn plan_f12_shell(
+    state: &State<'_, AppState>,
+    params: Value,
+    _source_paths: Vec<String>,
+) -> Result<PlanDocument, IpcError> {
+    let params: F12ShellParams = serde_json::from_value(params)
+        .map_err(|error| IpcError::new("E1002", format!("invalid f12 params: {error}")))?;
+    let scope = kernel::rename::RenameScope::parse(&params.scope)
+        .ok_or_else(|| IpcError::new("E1002", format!("invalid scope: {}", params.scope)))?;
+    let dir = make_absolute(Path::new(&params.dir));
+    if !dir.is_dir() {
+        return Err(IpcError::new("E1003", "f12 dir must be a directory"));
+    }
+    let mut items = Vec::new();
+    let mut existing = Vec::new();
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|error| IpcError::new("E1004", format!("{}: {error}", dir.display())))?
+    {
+        let entry = entry.map_err(|error| IpcError::new("E1004", error.to_string()))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        existing.push(path.to_string_lossy().into_owned());
+        items.push(kernel::rename::PlanF12Item { path: path.to_string_lossy().into_owned(), name });
+    }
+    let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f12"));
+    let plan = kernel::rename::plan_f12(kernel::rename::PlanF12Input {
+        plan_id: plan_id.clone(),
+        items,
+        existing_targets: existing,
+        protected_dirs: Vec::new(),
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        long_path_supported: platform::preflight::long_path_supported(),
+        rule: kernel::rename::PlanF12Rule {
+            prefix: params.prefix,
+            suffix: params.suffix,
+            find: params.find,
+            replace: params.replace,
+            scope,
+        },
+    })
+    .map_err(IpcError::from)?;
+    state.plans.lock().unwrap().insert(
+        plan.plan_id.clone(),
+        StoredPlan {
+            plan: plan.clone(),
+            protected_dirs: Vec::new(),
+            case_sense: CliFsAdapter::new(None).case_sensitivity(),
+            protected_source: ProtectedSource::Params,
+        },
+    );
+    Ok(plan)
+}
+
+/// C05 预览面板（§7.4）：对已生成的重命名族计划聚合对照行与计数，零副作用。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn renamePreview(state: State<'_, AppState>, plan_id: String) -> Result<Value, IpcError> {
+    let plan = state
+        .plans
+        .lock()
+        .unwrap()
+        .get(&plan_id)
+        .cloned()
+        .ok_or_else(|| IpcError::new("E1001", "plan not found; generate a fresh preview"))?
+        .plan;
+    let preview = kernel::preview::rename_preview(&plan).map_err(IpcError::from)?;
+    serde_json::to_value(preview).map_err(|error| IpcError::new("E9001", error.to_string()))
+}
+
+/// C06 回滚预演（§7.8"回滚前重新做冲突检测"）：零副作用。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn undoDryRun(state: State<'_, AppState>, plan_id: String) -> Result<Value, IpcError> {
+    let mut journal = FileJournal::open(state.paths.journal_path.clone())
+        .map_err(IpcError::from)?;
+    let adapter = CliFsAdapter::new(None);
+    let preview = kernel::apply::undo_dry_run(&plan_id, &mut journal, &adapter)
+        .map_err(IpcError::from)?;
+    serde_json::to_value(preview).map_err(|error| IpcError::new("E9001", error.to_string()))
+}
+
 fn build_candidates(outcome: &platform::scan::ScanOutcome) -> Vec<DuplicateCandidate> {
     outcome
         .files
@@ -857,6 +1134,8 @@ pub fn run() {
             preflightPlan,
             recoverTask,
             retryTask,
+            renamePreview,
+            undoDryRun,
             undoPlan,
             cancelTask,
             pauseTask,
