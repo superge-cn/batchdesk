@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{Emitter, Manager, State};
 
+mod plan_kinds;
 mod tasks;
 
 use tasks::{
@@ -197,6 +198,23 @@ fn planOperation(
         "f05" => return plan_f05_shell(&state, params, source_paths),
         "f11" => return plan_f11_shell(&state, params, source_paths),
         "f12" => return plan_f12_shell(&state, params, source_paths),
+        "f01" | "f02" | "f03" => {
+            return plan_kinds::plan_split_shell(&state, &kind, params)
+                .map_err(IpcError::from)
+        }
+        "f04" => {
+            return plan_kinds::plan_merge_shell(&state, params).map_err(IpcError::from)
+        }
+        "c01" => {
+            return plan_kinds::plan_transcode_shell(&state, params).map_err(IpcError::from)
+        }
+        "c02" => {
+            return plan_kinds::plan_line_endings_shell(&state, params)
+                .map_err(IpcError::from)
+        }
+        "c03" => {
+            return plan_kinds::plan_replace_shell(&state, params).map_err(IpcError::from)
+        }
         other => {
             return Err(IpcError::new(
                 "E1002",

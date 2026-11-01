@@ -2364,8 +2364,8 @@ mod tests {
         let queue = test_queue(
             TaskPaths {
                 quarantine_dir: quarantine,
-                journal_path: journal_path,
-                queue_path: queue_path,
+                journal_path,
+                queue_path,
                 oplog_path: dir.0.join("oplog.sqlite3"),
             },
             Arc::new(|_, _| {}),

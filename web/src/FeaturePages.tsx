@@ -23,7 +23,17 @@ import type {
   UndoDryRun
 } from "./lib/ipc/types";
 
-type View = "f05" | "f11" | "f12";
+type View =
+  | "f01"
+  | "f02"
+  | "f03"
+  | "f04"
+  | "c01"
+  | "c02"
+  | "c03"
+  | "f05"
+  | "f11"
+  | "f12";
 type Busy = "plan" | "apply" | "undo" | null;
 
 interface TaskView {
@@ -59,6 +69,71 @@ function planOperationFor(
       sourcePaths: []
     } as never);
   }
+  if (view === "f01" || view === "f02" || view === "f03") {
+    return planOperation({
+      kind: view,
+      params: {
+        file: form.file,
+        outputDir: form.outputDir,
+        ...(view === "f01" && form.targetBytes
+          ? { targetBytes: Number(form.targetBytes) }
+          : {}),
+        ...(view === "f02" && form.linesPerPart
+          ? { linesPerPart: Number(form.linesPerPart) }
+          : {}),
+        ...(view === "f03" && form.parts ? { parts: Number(form.parts) } : {})
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "f04") {
+    return planOperation({
+      kind: "f04",
+      params: {
+        files: form.files ? form.files.split("\n").filter(Boolean) : [],
+        output: form.output,
+        target: form.target,
+        ...(form.source ? { source: form.source } : {})
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c01") {
+    return planOperation({
+      kind: "c01",
+      params: {
+        files: form.files ? form.files.split("\n").filter(Boolean) : [],
+        target: form.target,
+        sampleWindow: Number(form.sampleWindow || 4096),
+        sampleBlocks: Number(form.sampleBlocks || 0)
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c02") {
+    return planOperation({
+      kind: "c02",
+      params: {
+        files: form.files ? form.files.split("\n").filter(Boolean) : [],
+        target: form.target,
+        sampleBytes: Number(form.sampleBytes || 4096)
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c03") {
+    return planOperation({
+      kind: "c03",
+      params: {
+        files: form.files ? form.files.split("\n").filter(Boolean) : [],
+        mode: form.mode || "plain",
+        find: form.find,
+        replacement: form.replacement,
+        sampleBytes: Number(form.sampleBytes || 4096)
+      },
+      sourcePaths: []
+    } as never);
+  }
   return planOperation({
     kind: "f12",
     params: {
@@ -82,9 +157,101 @@ function statusBadge(status: string) {
   return <span className="badge">{status}</span>;
 }
 
+const FEATURE_TITLES: Record<View, string> = {
+  f01: "TXT 按字节分割（F01）",
+  f02: "TXT 按行数分割（F02）",
+  f03: "TXT 按份数分割（F03）",
+  f04: "TXT 合并（F04）",
+  c01: "编码转换（C01）",
+  c02: "换行符转换（C02）",
+  c03: "查找替换（C03）",
+  f05: "CSV 分割（F05）",
+  f11: "清单建档（F11）",
+  f12: "批量改名（F12）"
+};
+
+interface FieldSpec {
+  name: string;
+  label: string;
+  placeholder?: string;
+  wide?: boolean;
+  kind?: "textarea";
+  hint?: string;
+}
+
+const FILE_LIST: FieldSpec = {
+  name: "files",
+  label: "文件列表（每行一个路径）",
+  kind: "textarea",
+  placeholder: "/path/a.csv\n/path/b.csv\n"
+};
+
+const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
+  f01: [
+    { name: "file", label: "源 TXT 文件", placeholder: "/path/a.txt", wide: true },
+    { name: "targetBytes", label: "目标分片字节", placeholder: "8" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true }
+  ],
+  f02: [
+    { name: "file", label: "源 TXT 文件", placeholder: "/path/a.txt", wide: true },
+    { name: "linesPerPart", label: "每片行数", placeholder: "100" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true }
+  ],
+  f03: [
+    { name: "file", label: "源 TXT 文件", placeholder: "/path/a.txt", wide: true },
+    { name: "parts", label: "目标份数", placeholder: "4" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true }
+  ],
+  f04: [
+    FILE_LIST,
+    { name: "output", label: "合并产物路径", placeholder: "/path/merged.txt", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" }
+  ],
+  c01: [
+    FILE_LIST,
+    { name: "target", label: "目标编码", placeholder: "utf-8", wide: true },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  c02: [
+    FILE_LIST,
+    { name: "target", label: "目标换行符 (crlf|lf|cr)", placeholder: "lf", wide: true },
+    { name: "sampleBytes", label: "采样字节", placeholder: "4096" }
+  ],
+  c03: [
+    FILE_LIST,
+    { name: "mode", label: "模式 (plain|regex)", placeholder: "plain" },
+    { name: "find", label: "查找文本", placeholder: "查找…", wide: true },
+    { name: "replacement", label: "替换为", placeholder: "替换…", wide: true }
+  ],
+  f05: [
+    { name: "file", label: "源 CSV 文件", placeholder: "/path/名单.csv", wide: true },
+    { name: "targetBytes", label: "分片目标字节（二选一）", placeholder: "留空则用行数" },
+    { name: "rows", label: "分片行数（二选一）", placeholder: "留空则用字节" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," }
+  ],
+  f11: [
+    { name: "root", label: "目标根目录", placeholder: "/path/root", wide: true },
+    {
+      name: "list",
+      label: "清单（每行一个相对路径）",
+      kind: "textarea",
+      placeholder: "folder-a\nfolder-b/sub\n",
+      hint: "路径相对目标根目录；禁止 .. 逃逸（E1003）。"
+    }
+  ],
+  f12: [
+    { name: "dir", label: "改名目录", placeholder: "/path/dir", wide: true },
+    { name: "prefix", label: "前缀", placeholder: "追加到词根前" },
+    { name: "suffix", label: "后缀", placeholder: "追加到词根后" },
+    { name: "find", label: "查找文本", placeholder: "字面查找" },
+    { name: "replace", label: "替换为", placeholder: "替换文本" },
+    { name: "scope", label: "作用范围 full|stem|ext", placeholder: "full" }
+  ]
+};
+
 export function FeaturePages({ view, onBack }: { view: View; onBack: () => void }) {
-  const title =
-    view === "f05" ? "CSV 分割（F05）" : view === "f11" ? "清单建档（F11）" : "批量改名（F12）";
+  const title = FEATURE_TITLES[view] ?? view;
   const [form, setForm] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<PlanDocument | null>(null);
   const [preview, setPreview] = useState<RenamePreview | null>(null);
@@ -274,44 +441,24 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             </div>
 
             <div className="field-grid">
-              {view === "f05" && (
-                <>
-                  {field("源 CSV 文件", "file", "例如 D:\\名单.csv 或 /home/user/名单.csv", true)}
-                  {field("分片目标字节（二选一）", "targetBytes", "留空则用行数")}
-                  {field("分片行数（二选一）", "rows", "留空则用字节")}
-                  {field("输出目录", "outputDir", "分片输出目录", true)}
-                  {field("分隔符（可留空嗅探）", "delimiter", ",")}
-                </>
-              )}
-              {view === "f11" && (
-                <>
-                  {field("目标根目录", "root", "清单路径相对该目录", true)}
-                </>
-              )}
-              {view === "f12" && (
-                <>
-                  {field("改名目录", "dir", "仅目录一层（方案 §5.13）", true)}
-                  {field("前缀", "prefix", "追加到词根前")}
-                  {field("后缀", "suffix", "追加到词根后")}
-                  {field("查找文本", "find", "字面查找")}
-                  {field("替换为", "replace", "替换文本")}
-                  {field("作用范围 full|stem|ext", "scope", "full")}
-                </>
-              )}
-              {view === "f11" && (
-                <div className="field wide">
-                  <label htmlFor={`${view}-list`}>清单（每行一个相对路径）</label>
-                  <textarea
-                    id={`${view}-list`}
-                    className="textarea"
-                    value={form.list ?? ""}
-                    onChange={(event) => setField("list", event.target.value)}
-                    placeholder={"folder-a\nfolder-b/sub\n"}
-                    rows={6}
-                    spellCheck={false}
-                  />
-                  <div className="hint">路径相对目标根目录；禁止 `..` 逃逸（E1003）。</div>
-                </div>
+              {(FEATURE_FIELDS[view] ?? []).map((spec) =>
+                spec.kind === "textarea" ? (
+                  <div className="field wide" key={spec.name}>
+                    <label htmlFor={`${view}-${spec.name}`}>{spec.label}</label>
+                    <textarea
+                      id={`${view}-${spec.name}`}
+                      className="textarea"
+                      value={form[spec.name] ?? ""}
+                      onChange={(event) => setField(spec.name, event.target.value)}
+                      placeholder={spec.placeholder}
+                      rows={6}
+                      spellCheck={false}
+                    />
+                    {spec.hint && <div className="hint">{spec.hint}</div>}
+                  </div>
+                ) : (
+                  field(spec.label, spec.name, spec.placeholder ?? "", spec.wide)
+                )
               )}
             </div>
 

@@ -206,7 +206,9 @@ function App() {
   const [meta, setMeta] = useState<IpcMeta | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
-  const [activeView, setActiveView] = useState<"c09" | "f05" | "f11" | "f12">("c09");
+  const [activeView, setActiveView] = useState<
+    "c09" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f11" | "f12"
+  >("c09");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -628,6 +630,56 @@ function App() {
                   <Files size={16} /> 批量改名
                 </span>
                 <span className="soon">F12</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f01" || activeView === "f02" || activeView === "f03" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f01")}
+              >
+                <span>
+                  <Files size={16} /> TXT 分割
+                </span>
+                <span className="soon">F01–03</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f04" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f04")}
+              >
+                <span>
+                  <Files size={16} /> TXT 合并
+                </span>
+                <span className="soon">F04</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "c01" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("c01")}
+              >
+                <span>
+                  <Files size={16} /> 编码转换
+                </span>
+                <span className="soon">C01</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "c02" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("c02")}
+              >
+                <span>
+                  <Files size={16} /> 换行转换
+                </span>
+                <span className="soon">C02</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "c03" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("c03")}
+              >
+                <span>
+                  <Files size={16} /> 查找替换
+                </span>
+                <span className="soon">C03</span>
               </button>
               <button className="nav-item" type="button" disabled>
                 <span>
