@@ -762,14 +762,34 @@ function App() {
                 <span className="soon">F12</span>
               </button>
               <button
-                className={`nav-item${activeView === "f01" || activeView === "f02" || activeView === "f03" ? " active" : ""}`}
+                className={`nav-item${activeView === "f01" ? " active" : ""}`}
                 type="button"
                 onClick={() => setActiveView("f01")}
               >
                 <span>
-                  <Files size={16} /> TXT 分割
+                  <Files size={16} /> TXT 按字节分割
                 </span>
-                <span className="soon">F01–03</span>
+                <span className="soon">F01</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f02" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f02")}
+              >
+                <span>
+                  <Files size={16} /> TXT 按行数分割
+                </span>
+                <span className="soon">F02</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f03" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f03")}
+              >
+                <span>
+                  <Files size={16} /> TXT 按份数分割
+                </span>
+                <span className="soon">F03</span>
               </button>
               <button
                 className={`nav-item${activeView === "f04" ? " active" : ""}`}
