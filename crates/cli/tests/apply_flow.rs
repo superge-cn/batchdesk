@@ -3696,3 +3696,133 @@ fn c06_undo_is_terminal_and_the_plan_can_be_reapplied() {
     assert!(batchdesk(&apply_args).status.success());
     assert!(root.join("new_a.txt").exists());
 }
+
+#[test]
+fn c06_unknown_plan_id_reports_missing_mapping() {
+    // TC C06 PRE-○2：映射缺失给明确提示（E1001），而非静默"撤销 0 条"。
+    let dir = TempDir::new();
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&journal_path, "").unwrap();
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9",
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(!undo.status.success());
+    assert!(
+        String::from_utf8_lossy(&undo.stderr).contains("no journal entries for this plan"),
+        "stderr: {}",
+        String::from_utf8_lossy(&undo.stderr)
+    );
+}
+
+#[test]
+fn c06_cross_batch_undos_are_independent() {
+    // TC C06 RBK-04：两个批次的映射互不干扰——链式重命名后按批次逆序撤销。
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+
+    let plan_a = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan_a.status.success());
+    let document_a: serde_json::Value = serde_json::from_slice(&plan_a.stdout).unwrap();
+    let plan_a_path = dir.0.join("plan-a.json");
+    fs::write(
+        &plan_a_path,
+        serde_json::to_string_pretty(&document_a).unwrap(),
+    )
+    .unwrap();
+    let apply_a = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_a_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply_a.status.success());
+    assert!(root.join("new_a.txt").exists());
+
+    // 批次 B 建立在批次 A 的产物上：new_a → final_new_a。
+    let plan_b = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "final_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9",
+        "--json",
+    ]);
+    assert!(plan_b.status.success());
+    let document_b: serde_json::Value = serde_json::from_slice(&plan_b.stdout).unwrap();
+    let plan_b_path = dir.0.join("plan-b.json");
+    fs::write(
+        &plan_b_path,
+        serde_json::to_string_pretty(&document_b).unwrap(),
+    )
+    .unwrap();
+    let apply_b = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_b_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply_b.status.success());
+    assert!(root.join("final_new_a.txt").exists());
+
+    // 撤销批次 B：只回它自己的映射，批次 A 的产物保持。
+    let undo_b = batchdesk(&[
+        "undo",
+        "--plan",
+        "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9",
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo_b.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&undo_b.stdout).unwrap();
+    assert_eq!(report["reverted"], 1);
+    assert!(root.join("new_a.txt").exists());
+    assert!(!root.join("final_new_a.txt").exists());
+    assert!(
+        !root.join("a.txt").exists(),
+        "undo of batch B must not restore batch A's source"
+    );
+
+    // 撤销批次 A：回到最初状态。
+    let undo_a = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(undo_a.status.success());
+    assert!(root.join("a.txt").exists());
+    assert!(!root.join("new_a.txt").exists());
+}

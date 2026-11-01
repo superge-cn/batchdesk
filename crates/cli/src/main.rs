@@ -5121,6 +5121,7 @@ fn run_undo(args: &[String]) -> i32 {
         return 1;
     }
 
+    let journal_display = journal_path.display().to_string();
     let mut journal = match FileJournal::open(journal_path) {
         Ok(journal) => journal,
         Err(error) => return print_kernel_error(&error),
@@ -5130,6 +5131,17 @@ fn run_undo(args: &[String]) -> i32 {
         Ok(entries) => entries,
         Err(error) => return print_kernel_error(&error),
     };
+    if entries.is_empty() {
+        // C06 PRE-○2（TC v0.3）：映射缺失给明确提示，而非静默"撤销 0 条"。
+        return print_kernel_error(&kernel::error::KernelError::new(
+            "E1001",
+            "no journal entries for this plan; check the planId",
+            Some(format!(
+                "plan {plan_id} has no mapping in {journal_display}"
+            )),
+            false,
+        ));
+    }
     if entries.iter().any(|entry| entry.ts <= cutoff) {
         eprintln!(
             "E9001: undo window expired (retention {retention_days} days); run cleanup to purge expired quarantine data"
