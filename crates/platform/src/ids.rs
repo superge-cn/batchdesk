@@ -37,6 +37,22 @@ pub fn new_ulid(seed: &str) -> String {
     String::from_utf8(output.to_vec()).expect("Crockford alphabet is ASCII")
 }
 
+/// 确定性 ULID 形态 id：同一 seed 恒产生同一值（C18 重复预览幂等，§5.15）。
+/// 首字符强制 ≤ '7' 以满足 ULID 形态校验。
+pub fn derived_ulid(seed: &str) -> String {
+    let digest = blake3::hash(format!("derived:{seed}").as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest.as_bytes()[..16]);
+    bytes[0] &= 0x7f;
+    let mut number = u128::from_be_bytes(bytes);
+    let mut output = [0u8; 26];
+    for slot in output.iter_mut().rev() {
+        *slot = CROCKFORD[(number & 0x1f) as usize];
+        number >>= 5;
+    }
+    String::from_utf8(output.to_vec()).expect("Crockford alphabet is ASCII")
+}
+
 pub fn is_ulid(value: &str) -> bool {
     value.len() == 26
         && value.as_bytes()[0] <= b'7'

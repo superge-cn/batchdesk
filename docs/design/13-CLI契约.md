@@ -73,3 +73,4 @@ batchdesk config get|set|reset [--scope <scope>] [--json]
 | v0.18 | 2026-11-01 | 追加 C07 `c07`（`--manifest`/`--source-root`/`--target-root`/`--operation move\|copy`/`--missing skip\|error`）清单驱动移动/复制切片实验命令；§2.1 清单扩展加入 C07。 |
 | v0.19 | 2026-11-01 | 追加 C08 `c08`（`--rule <subdir>\|<type>:<params>` 判定器链、`--recursive`、`--unclassified-dir`）按规则归档切片实验命令；§2.1 清单扩展加入 C08。 |
 | v0.20 | 2026-11-01 | 追加 C13 `c13`（`--sort-column/--sort-column-index/--order/--external-chunk-rows`）CSV 排序切片实验命令；§2.1 清单扩展加入 C13。 |
+| v0.21 | 2026-11-01 | C18 横切干跑收口：全部 plan 命令即干跑接口（零落盘），横切 harness（apply_flow）验证 9 命令重复预览幂等＋源树零落盘；groupId 等派生 id 确定性化（derived_ulid）。 |

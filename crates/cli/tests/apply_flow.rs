@@ -42,6 +42,13 @@ fn batchdesk(args: &[&str]) -> Output {
         .expect("run batchdesk")
 }
 
+fn batchdesk_str(args: &[String]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_batchdesk"))
+        .args(args)
+        .output()
+        .expect("run batchdesk")
+}
+
 fn path_text(path: &Path) -> &str {
     path.to_str().expect("test paths are UTF-8")
 }
@@ -4563,4 +4570,203 @@ fn c13_external_merge_sort_with_small_chunks() {
         .filter(|entry| entry.file_name().to_string_lossy().contains(".sort-chunk-"))
         .collect();
     assert!(leftovers.is_empty(), "chunk temp files must be cleaned up");
+}
+
+/// C18 横切干跑（§3.2 C18、§5.15）：对全部功能的 plan 命令做横切收口——
+/// ① 重复预览幂等（同一输入＋固定 plan-id 两次输出逐字节一致）；
+/// ② 预览零落盘（源树文件集合与内容前后一致）。
+/// 执行仍需显式 apply（不变量 2"plan 为纯函数绝不落盘"的横切验证）。
+#[test]
+fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
+    let dir = TempDir::new();
+    let root = dir.0.join("tree");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(root.join("a.txt"), b"alpha\nbeta\n").unwrap();
+    fs::write(root.join("b.csv"), b"id,value\n2,10\n1,20\n").unwrap();
+    fs::write(root.join("c.csv"), b"id,value\n1,x\n").unwrap();
+    fs::write(root.join("photo.jpg"), b"jpg").unwrap();
+    fs::write(root.join("dup.txt"), b"dup").unwrap();
+    fs::write(root.join("sub").join("dup.txt"), b"dup").unwrap();
+
+    // 源树快照（相对路径 + 内容哈希占位：内容长度 + 字节）。
+    let snapshot = || -> Vec<(String, u64)> {
+        let mut files: Vec<(String, u64)> = walk_source(&root);
+        files.sort();
+        files
+    };
+    let before = snapshot();
+
+    // 各功能 plan 命令（固定 --plan-id 保证输出可复现）。
+    let out_dir = dir.0.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let manifest = dir.0.join("manifest.csv");
+    fs::write(&manifest, "a.txt,archived\n").unwrap();
+    let plan_commands: Vec<Vec<String>> = vec![
+        vec![
+            "c01".into(),
+            "--file".into(),
+            path_text(&root.join("b.csv")).to_string(),
+            "--target".into(),
+            "utf-8".into(),
+            "--sample-window".into(),
+            "4096".into(),
+            "--sample-blocks".into(),
+            "1".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "c04".into(),
+            "--dir".into(),
+            path_text(&root).to_string(),
+            "--find".into(),
+            "dup".into(),
+            "--replace".into(),
+            "uniq".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "c07".into(),
+            "--manifest".into(),
+            path_text(&manifest).to_string(),
+            "--source-root".into(),
+            path_text(&root).to_string(),
+            "--target-root".into(),
+            path_text(&out_dir).to_string(),
+            "--operation".into(),
+            "move".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "c08".into(),
+            "--source-root".into(),
+            path_text(&root).to_string(),
+            "--target-root".into(),
+            path_text(&out_dir).to_string(),
+            "--rule".into(),
+            "jpgs|ext:jpg".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "c09".into(),
+            path_text(&root).to_string(),
+            "--plan".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "c13".into(),
+            "--file".into(),
+            path_text(&root.join("b.csv")).to_string(),
+            "--sort-column".into(),
+            "value".into(),
+            "--output-dir".into(),
+            path_text(&out_dir).to_string(),
+            "--target".into(),
+            "utf-8".into(),
+            "--sample-bytes".into(),
+            "4096".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "c14".into(),
+            "--file".into(),
+            path_text(&root.join("b.csv")).to_string(),
+            "--split-column".into(),
+            "value".into(),
+            "--split-separator".into(),
+            " ".into(),
+            "--output-dir".into(),
+            path_text(&out_dir).to_string(),
+            "--target".into(),
+            "utf-8".into(),
+            "--sample-bytes".into(),
+            "4096".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "f01".into(),
+            "--file".into(),
+            path_text(&root.join("a.txt")).to_string(),
+            "--target-bytes".into(),
+            "8".into(),
+            "--output-dir".into(),
+            path_text(&out_dir).to_string(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+        vec![
+            "f12".into(),
+            "--dir".into(),
+            path_text(&root).to_string(),
+            "--prefix".into(),
+            "r_".into(),
+            "--plan-id".into(),
+            PLAN_ID.into(),
+            "--json".into(),
+        ],
+    ];
+
+    for command in &plan_commands {
+        let first = batchdesk_str(command);
+        assert!(
+            first.status.success(),
+            "plan failed: {}\nstdout:\n{}\nstderr:\n{}",
+            command[0],
+            String::from_utf8_lossy(&first.stdout),
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let second = batchdesk_str(command);
+        assert!(
+            second.status.success(),
+            "repeated plan failed: {}",
+            command[0]
+        );
+        assert_eq!(
+            first.stdout, second.stdout,
+            "C18 重复预览必须幂等（feature: {}）",
+            command[0]
+        );
+        let after = snapshot();
+        assert_eq!(before, after, "C18 预览零落盘（feature: {}）", command[0]);
+    }
+}
+
+/// 收集源树全部文件的（相对路径, 内容长度）；目录结构变化也能被察觉（缺文件
+/// 会改变清单）。仅用于 C18 横切快照，不复制基线判定文本。
+fn walk_source(root: &Path) -> Vec<(String, u64)> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.push((rel, fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0)));
+            }
+        }
+    }
+    files
 }

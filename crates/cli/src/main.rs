@@ -2705,9 +2705,12 @@ fn run_split(args: &[String], mode: SplitMode) -> i32 {
     };
     let adapter = CliFsAdapter::new(None);
     let case_sense = adapter.case_sensitivity();
+    // C18 重复预览幂等（§5.15）：先解析 planId，供 groupId 确定性派生。
+    let resolved_plan_id = plan_id.clone().unwrap_or_else(|| new_ulid(kind));
+    let _ = &plan_id;
     let mut plan_files = Vec::with_capacity(files.len());
     let mut existing_targets = Vec::new();
-    for path in &files {
+    for (file_index, path) in files.iter().enumerate() {
         let absolute = make_absolute(path);
         let metadata = match std::fs::metadata(&absolute) {
             Ok(metadata) => metadata,
@@ -2760,12 +2763,17 @@ fn run_split(args: &[String], mode: SplitMode) -> i32 {
         plan_files.push(PlanF01File {
             path: absolute.to_string_lossy().into_owned(),
             canonical_path,
-            group_id: new_ulid(kind),
+            // C18 重复预览幂等（§5.15）：groupId 由 planId 确定性派生。
+            group_id: platform::ids::derived_ulid(&format!(
+                "{kind}:{}:{resolved_plan_id}",
+                file_index
+            )),
             layout,
         });
     }
 
-    let plan_id = plan_id.unwrap_or_else(|| new_ulid(kind));
+    let resolved_plan_id = plan_id.clone().unwrap_or_else(|| new_ulid(kind));
+    let plan_id = resolved_plan_id;
     let output_dir = output_dir.to_string_lossy().into_owned();
     let planned = match mode {
         SplitMode::Bytes => plan_f01(PlanF01Input {
@@ -3218,7 +3226,11 @@ fn run_f05(args: &[String]) -> i32 {
         plan_files.push(PlanF05File {
             path: absolute.to_string_lossy().into_owned(),
             canonical_path,
-            group_id: new_ulid("f05"),
+            // C18 重复预览幂等（§5.15）：groupId 由 planId 确定性派生。
+            group_id: platform::ids::derived_ulid(&format!(
+                "f05:{}",
+                plan_id.clone().unwrap_or_else(|| new_ulid("f05"))
+            )),
             layout,
         });
     }
