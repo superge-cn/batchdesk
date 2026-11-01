@@ -240,6 +240,7 @@ pub fn plan_f09(input: PlanF09Input) -> Result<PlanDocument, KernelError> {
             }),
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         });
     }
 

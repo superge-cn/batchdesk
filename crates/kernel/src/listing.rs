@@ -167,6 +167,7 @@ pub fn plan_f10(input: PlanF10Input) -> Result<PlanDocument, KernelError> {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         });
     }
 

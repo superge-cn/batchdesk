@@ -195,6 +195,7 @@ pub fn plan_f08(input: PlanF08Input) -> Result<PlanDocument, KernelError> {
             }),
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         });
     }
 

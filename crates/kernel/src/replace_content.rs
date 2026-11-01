@@ -477,6 +477,7 @@ pub fn plan_c03(input: PlanC03Input) -> Result<PlanDocument, KernelError> {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         });
     }
 

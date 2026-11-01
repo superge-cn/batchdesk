@@ -105,6 +105,7 @@ pub enum PlanAction {
     Merge,
     /// F07 CSV 抽取指定列产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvExtract,
+    CsvColumns,
     /// F08/F09 CSV 行抽取产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvRows,
     /// F10 目录清单产物（1:1，每个根目录一条 entry；方案 §5.15）。
@@ -130,6 +131,7 @@ impl PlanAction {
             Self::Split => "split",
             Self::Merge => "merge",
             Self::CsvExtract => "csv-extract",
+            Self::CsvColumns => "csv-columns",
             Self::CsvRows => "csv-rows",
             Self::Listing => "listing",
             Self::CsvDedup => "csv-dedup",
@@ -408,6 +410,68 @@ pub struct PlanCsvExtract {
     pub dirty_rows: u64,
 }
 
+/// C14 列拆分的载荷细节（方案 §5.15"按分隔符/正则切分并映射到新列"）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvColumnsSplit {
+    /// 源列的 1-based 序号（解析自表头名或序号选择）。
+    pub index: u64,
+    /// 有表头时的规范化源列名（用于派生新列名）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 字面分隔符；与 `regex` 二选一。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
+    /// 正则分隔（regex 语法；与 `separator` 二选一）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex: Option<String>,
+    /// 计划期评估的新列数（采样最大段数；执行期行内超出部分原样保留）。
+    pub parts: u64,
+    /// 新列名（有表头时 `<源列名>.1..N`；无表头为空）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_names: Vec<String>,
+}
+
+/// C14 列合并的载荷细节（方案 §5.15"多列拼接加分隔符"）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvColumnsMerge {
+    /// 按拼接顺序解析的源列（1-based 序号＋规范化列名）。
+    pub picks: Vec<PlanCsvExtractColumn>,
+    /// 拼接分隔符（允许空串＝直接连接）。
+    pub joiner: String,
+    /// 新列名（追加在表尾；缺省由各列名按 joiner 连接）。
+    pub target_name: String,
+}
+
+/// C14 CSV 列拆分/合并的载荷（仅 `csv-columns` 动作使用）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvColumns {
+    /// `"split"` 或 `"merge"`（二选一，计划期校验）。
+    pub mode: String,
+    /// 检测或用户确认的源编码；`None` 表示需人工确认（E3001 阻断）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    /// 输入分隔符（输出沿用同一分隔符）。
+    pub delimiter: String,
+    pub has_header: bool,
+    /// 规范化表头字段（保留重复项）；无表头时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    pub column_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split: Option<PlanCsvColumnsSplit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<PlanCsvColumnsMerge>,
+    /// 目标编码（`TargetEncoding::as_str`）。
+    pub target_encoding: String,
+    /// 非法序列策略（`InvalidSequencePolicy::as_str`）。
+    pub invalid: String,
+    pub dirty_rows: u64,
+}
+
 /// F08/F09 CSV 行抽取的载荷（仅 `csv-rows` 动作使用）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -496,6 +560,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：C12 CSV 过滤的条件与源结构（仅 `csv-filter` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_filter: Option<PlanCsvFilter>,
+    /// 追加式可选字段：C14 列拆分/合并的模式与源结构（仅 `csv-columns` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_columns: Option<PlanCsvColumns>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -670,6 +737,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 csv_rows: None,
                 csv_dedup: None,
                 csv_filter: None,
+                csv_columns: None,
             });
         }
     }
@@ -887,6 +955,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         });
     }
 

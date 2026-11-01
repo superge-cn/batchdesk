@@ -20,6 +20,10 @@ use kernel::create_dirs::{
     normalize_list_path, plan_f11, target_for_list_path, PlanF11Input, PlanF11Row,
 };
 use kernel::csv::{plan_f05, CsvSplitBasis, Delimiter, PlanF05File, PlanF05Input};
+use kernel::csv_columns::{
+    plan_c14, resolve_column, split_value, ColumnsMode, MergeSpec, PlanC14File, PlanC14Input,
+    SplitBy, SplitSpec,
+};
 use kernel::csv_dedup::{plan_c11, PlanC11File, PlanC11Input};
 use kernel::csv_extract::{plan_f07, ColumnPick, PlanF07File, PlanF07Input};
 use kernel::csv_filter::{plan_c12, FilterOp, PlanC12File, PlanC12Input};
@@ -113,6 +117,16 @@ const USAGE: &str = "usage:
                 [--mode plain|regex] [--scope full|stem|ext]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c05 --plan <plan.json> [--json]
+  batchdesk c14 (--split-column <name> | --split-column-index <n>)
+                (--split-separator <text> | --split-regex <pattern>)
+                | (--merge-column <name> | --merge-column-index <n>)...
+                [--join-with <text>] [--merge-name <name>]
+                --file <path>... (--output <file> | --output-dir <dir>)
+                --target <encoding> --sample-bytes <n> --sample-blocks <n>
+                [--delimiter <d>] [--no-header] [--source <encoding>]
+                [--invalid replace-and-count|abort]
+                [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f02 --file <path>... --lines N --output-dir <dir>
@@ -477,6 +491,9 @@ fn main() {
     }
     if args[1] == "c03" {
         std::process::exit(run_c03(&args));
+    }
+    if args[1] == "c14" {
+        std::process::exit(run_c14(&args));
     }
     if args[1] == "c05" {
         std::process::exit(run_c05(&args));
@@ -5455,6 +5472,452 @@ fn run_c05(args: &[String]) -> i32 {
         }
     }
     0
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_c14(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut output = None;
+    let mut output_dir = None;
+    let mut split_column = None;
+    let mut split_separator = None;
+    let mut split_regex = None;
+    let mut merge_picks = Vec::new();
+    let mut join_with = String::new();
+    let mut merge_name = None;
+    let mut target = None;
+    let mut source = None;
+    let mut delimiter = None;
+    let mut invalid = InvalidSequencePolicy::ReplaceAndCount;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_window = None;
+    let mut sample_blocks = 0usize;
+    let mut has_header = true;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--split-column" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --split-column requires a header name");
+                };
+                split_column = Some(ColumnPick::Name(value.clone()));
+            }
+            "--split-column-index" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --split-column-index requires a 1-based index");
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => split_column = Some(ColumnPick::Index(parsed)),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --split-column-index must be a positive integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--split-separator" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --split-separator requires text");
+                };
+                split_separator = Some(value.clone());
+            }
+            "--split-regex" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --split-regex requires a pattern");
+                };
+                split_regex = Some(value.clone());
+            }
+            "--merge-column" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --merge-column requires a header name");
+                };
+                merge_picks.push(ColumnPick::Name(value.clone()));
+            }
+            "--merge-column-index" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --merge-column-index requires a 1-based index");
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => merge_picks.push(ColumnPick::Index(parsed)),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --merge-column-index must be a positive integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--join-with" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --join-with requires text (may be empty with --join-with \"\"… use \"\")");
+                };
+                join_with = value.clone();
+            }
+            "--merge-name" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --merge-name requires a header name");
+                };
+                merge_name = Some(value.clone());
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target requires an encoding");
+                };
+                let Some(parsed) = TargetEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown target encoding: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires a value");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--invalid" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --invalid requires a policy");
+                };
+                let Some(parsed) = InvalidSequencePolicy::parse(value) else {
+                    return input_error(format!("E1002: unknown invalid-sequence policy: {value}"));
+                };
+                invalid = parsed;
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires a window size");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => sample_window = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--sample-blocks" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-blocks requires a count");
+                };
+                match value.parse::<usize>() {
+                    Ok(blocks) => sample_blocks = blocks,
+                    Err(_) => {
+                        return input_error(format!(
+                            "E1002: --sample-blocks must be a non-negative integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--no-header" => has_header = false,
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c14 argument: {other}")),
+        }
+        index += 1;
+    }
+
+    if files.is_empty() {
+        return input_error("E1001: c14 requires at least one --file <path>");
+    }
+    let has_split = split_column.is_some() || split_separator.is_some() || split_regex.is_some();
+    let has_merge = !merge_picks.is_empty();
+    if has_split && has_merge {
+        return input_error("E1002: use either split or merge mode, not both");
+    }
+    if !has_split && !has_merge {
+        return input_error(
+            "E1001: c14 requires split flags (--split-column … --split-separator/--split-regex) or merge flags (--merge-column… --join-with)",
+        );
+    }
+    if has_split && merge_name.is_some() {
+        return input_error("E1002: --merge-name only applies to merge mode");
+    }
+    let Some(target) = target else {
+        return input_error("E1001: c14 requires --target <encoding>");
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: c14 requires --sample-bytes <n> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    if output.is_some() && output_dir.is_some() {
+        return input_error("E1001: use either --output or --output-dir, not both");
+    }
+    let targets: Vec<PathBuf> = match (output, output_dir) {
+        (Some(output), None) => {
+            if files.len() != 1 {
+                return input_error("E1002: --output requires exactly one --file");
+            }
+            vec![make_absolute(&output)]
+        }
+        (None, Some(dir)) => {
+            let dir = make_absolute(&dir);
+            files
+                .iter()
+                .map(|path| {
+                    let name = path
+                        .file_name()
+                        .map(|value| value.to_os_string())
+                        .unwrap_or_else(|| "output.csv".into());
+                    dir.join(name)
+                })
+                .collect()
+        }
+        _ => return input_error("E1001: c14 requires --output <file> or --output-dir <dir>"),
+    };
+
+    // 模式组内部一致性校验（错误码与 kernel 计划层一致）。
+    let mode = if has_split {
+        let Some(pick) = split_column else {
+            return input_error(
+                "E1001: split mode requires --split-column or --split-column-index",
+            );
+        };
+        match (split_separator.as_deref(), split_regex.as_deref()) {
+            (Some(separator), None) if !separator.is_empty() => ColumnsMode::Split(SplitSpec {
+                source: pick,
+                by: SplitBy::Separator(separator.to_string()),
+            }),
+            (None, Some(pattern)) if !pattern.is_empty() => ColumnsMode::Split(SplitSpec {
+                source: pick,
+                by: SplitBy::Regex(pattern.to_string()),
+            }),
+            (Some(_), Some(_)) | (None, None) => {
+                return input_error(
+                    "E1002: split mode requires exactly one of --split-separator or --split-regex",
+                )
+            }
+            _ => return input_error("E1002: --split-separator/--split-regex must not be empty"),
+        }
+    } else {
+        if join_with.is_empty() {
+            // 空拼接合法（直接连接），但需显式 --join-with "" 才生效；此处默认空串即可。
+        }
+        ColumnsMode::Merge(MergeSpec {
+            picks: merge_picks,
+            joiner: join_with.clone(),
+            target_name: merge_name.clone(),
+        })
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    for (path, target_path) in files.iter().zip(targets.iter()) {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: c14 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        let scan_options = CsvMergeScanOptions {
+            delimiter,
+            has_header,
+            sample_window_bytes: sample_window,
+            sample_blocks,
+            platform_prior: prior,
+            source_encoding: source,
+        };
+        // 拆分模式需要记录级事实评估列数（§5.15"拆分后列数评估"）；合并只需表头统计。
+        let inspection;
+        let records: Vec<Vec<String>>;
+        if has_split {
+            let dedup = match csv_dedup_inspect(&absolute, scan_options) {
+                Ok(dedup) => dedup,
+                Err(error) => {
+                    eprintln!(
+                        "E1004: cannot inspect CSV for column split ({}): {error}",
+                        absolute.display()
+                    );
+                    return 2;
+                }
+            };
+            inspection = dedup.inspection;
+            records = dedup.records;
+        } else {
+            match csv_merge_inspect(&absolute, scan_options) {
+                Ok(inspected) => {
+                    inspection = inspected;
+                    records = Vec::new();
+                }
+                Err(error) => {
+                    eprintln!(
+                        "E1004: cannot inspect CSV for column merge ({}): {error}",
+                        absolute.display()
+                    );
+                    return 2;
+                }
+            }
+        }
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        let mut parts = 1u64;
+        if let ColumnsMode::Split(spec) = &mode {
+            // 先解析源列（与 kernel 计划层同规则），再对采样记录评估最大段数。
+            let resolved = resolve_column(
+                &spec.source,
+                has_header,
+                &inspection.columns,
+                inspection.column_count,
+            )
+            .map_err(|error| {
+                eprintln!("{}: {}", error.code, error.message);
+                std::process::exit(2);
+            })
+            .unwrap_or_else(|_| unreachable!());
+            let data_rows = if has_header {
+                records.get(1..).unwrap_or(&[])
+            } else {
+                &records[..]
+            };
+            parts = data_rows
+                .iter()
+                .map(|row| {
+                    split_value(
+                        row.get(resolved.index as usize - 1)
+                            .map(String::as_str)
+                            .unwrap_or_default(),
+                        &spec.by,
+                    )
+                    .len() as u64
+                })
+                .max()
+                .unwrap_or(1);
+        }
+        plan_files.push(PlanC14File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: inspection.file_size,
+            source_encoding: inspection.source_encoding,
+            delimiter: inspection.delimiter,
+            has_header,
+            columns: inspection.columns,
+            column_count: inspection.column_count,
+            data_rows: inspection.data_rows,
+            dirty_rows: inspection.dirty_rows,
+            parts,
+            target: target_path.to_string_lossy().into_owned(),
+            target_occupied: target_path.exists(),
+        });
+    }
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c14"));
+    let planned = plan_c14(PlanC14Input {
+        plan_id,
+        mode,
+        target_encoding: target,
+        invalid,
+        protected_dirs,
+        case_sense,
+        files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
 }
 
 fn input_error(message: impl Into<String>) -> i32 {

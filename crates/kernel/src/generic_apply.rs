@@ -32,8 +32,8 @@ use crate::license::{Capability, LicenseService};
 use crate::listing::{DirectoryLister, ListingOptions};
 use crate::path::{is_under, protected_by, try_normalize, ProtectedDir};
 use crate::plan::{
-    PlanAction, PlanCsvDedup, PlanCsvExtract, PlanCsvFilter, PlanCsvMerge, PlanCsvRows,
-    PlanDocument, PlanParamValue, PlanResolution,
+    PlanAction, PlanCsvColumns, PlanCsvDedup, PlanCsvExtract, PlanCsvFilter, PlanCsvMerge,
+    PlanCsvRows, PlanDocument, PlanParamValue, PlanResolution,
 };
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
@@ -101,6 +101,7 @@ pub fn apply_generic_plan(
             | PlanAction::CsvRows
             | PlanAction::CsvDedup
             | PlanAction::CsvFilter
+            | PlanAction::CsvColumns
             | PlanAction::Listing
             | PlanAction::CreateDir => {}
             other => {
@@ -127,6 +128,7 @@ pub fn apply_generic_plan(
             | PlanAction::Split
             | PlanAction::Merge
             | PlanAction::CsvExtract
+            | PlanAction::CsvColumns
             | PlanAction::CsvRows
             | PlanAction::Listing
             | PlanAction::CreateDir
@@ -205,6 +207,12 @@ pub fn apply_generic_plan(
                     KernelError::invalid_params("csv-extract entries require a csvExtract payload")
                 })?;
                 validate_csv_extract(payload)?;
+            }
+            PlanAction::CsvColumns => {
+                let payload = entry.csv_columns.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-columns entries require a csvColumns payload")
+                })?;
+                validate_csv_columns(payload)?;
             }
             PlanAction::CsvRows => {
                 let payload = entry.csv_rows.as_ref().ok_or_else(|| {
@@ -606,6 +614,7 @@ fn precheck_entry(
             | PlanAction::Split
             | PlanAction::Merge
             | PlanAction::CsvExtract
+            | PlanAction::CsvColumns
             | PlanAction::CsvRows
             | PlanAction::Listing
             | PlanAction::CreateDir
@@ -1293,6 +1302,13 @@ fn perform(
                 })?;
                 perform_csv_extract(view, &entry.source, target, overwrite, payload)
             }
+            PlanAction::CsvColumns => {
+                let target = target.expect("validated: csv-columns requires a target");
+                let payload = entry.csv_columns.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-columns entries require a csvColumns payload")
+                })?;
+                perform_csv_columns(view, &entry.source, target, overwrite, payload)
+            }
             PlanAction::CsvRows => {
                 let target = target.expect("validated: csv-rows requires a target");
                 let payload = entry.csv_rows.as_ref().ok_or_else(|| {
@@ -1395,6 +1411,171 @@ fn perform(
         }
     };
     Ok(run())
+}
+
+/// 执行 `csv-columns` 条目（与 F07 同构：备份 → 解析 → 变换 → 原子写出）。
+fn perform_csv_columns(
+    view: &WorkerView<'_>,
+    source: &str,
+    target: &str,
+    overwrite: bool,
+    payload: &PlanCsvColumns,
+) -> Result<crate::generic_apply::Performed, KernelError> {
+    use crate::csv_columns::{split_value, SplitBy};
+    use crate::csv_merge::{parse_records, write_record};
+    use crate::journal::FsOp;
+
+    let encoding = payload.encoding.ok_or_else(|| {
+        KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        )
+    })?;
+    let target_encoding = TargetEncoding::parse(&payload.target_encoding)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvColumns target encoding"))?;
+    let invalid = InvalidSequencePolicy::parse(&payload.invalid).ok_or_else(|| {
+        KernelError::invalid_params("unsupported csvColumns invalid-sequence policy")
+    })?;
+    let delimiter = Delimiter::parse(&payload.delimiter)
+        .ok_or_else(|| KernelError::invalid_params("unsupported csvColumns delimiter"))?;
+
+    let backup = if overwrite {
+        Some(view.fs.backup_to_quarantine(target)?)
+    } else {
+        None
+    };
+    let data = view.fs.read_bytes(source)?;
+    let decoded = transcode(
+        &data,
+        encoding,
+        TargetEncoding::Utf8 { bom: false },
+        invalid,
+    )?;
+    let records = parse_records(&decoded.bytes, delimiter.as_byte());
+    let (header, rows): (Option<&Vec<String>>, &[Vec<String>]) = if payload.has_header {
+        let Some((header, rows)) = records.split_first() else {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        };
+        if normalized_columns(header) != payload.columns {
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+        (Some(header), rows)
+    } else {
+        (None, &records)
+    };
+
+    let mut output = String::new();
+    match (payload.mode.as_str(), &payload.split, &payload.merge) {
+        ("split", Some(split), _) => {
+            let by = match (&split.separator, &split.regex) {
+                (Some(separator), _) => SplitBy::Separator(separator.clone()),
+                (None, Some(pattern)) => SplitBy::Regex(pattern.clone()),
+                _ => {
+                    return Err(KernelError::invalid_params(
+                        "csvColumns split requires a separator or regex",
+                    ))
+                }
+            };
+            if let Some(header) = header {
+                let mut names = header.to_vec();
+                for (offset, name) in split.new_names.iter().enumerate() {
+                    let position = split.index as usize + offset;
+                    names.insert(position.min(names.len()), name.clone());
+                }
+                write_record(&names, delimiter.as_byte(), &mut output);
+            }
+            for row in rows {
+                let mut fields = row.clone();
+                // 源列取值用 1-based 序号换算的 0-based 下标（差一曾致取错列）。
+                let source_value = fields
+                    .get(split.index as usize - 1)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut parts = split_value(&source_value, &by);
+                // 不足评估段数的行补空串（§5.15 空值处理）；超出部分原样保留不截断。
+                while parts.len() < split.parts as usize {
+                    parts.push(String::new());
+                }
+                // 0-based 插入点＝源列之后（源列 1-based index 的 0-based 位置）。
+                for (offset, part) in parts.iter().enumerate() {
+                    let position = split.index as usize + offset;
+                    fields.insert(position.min(fields.len()), part.clone());
+                }
+                write_record(&fields, delimiter.as_byte(), &mut output);
+            }
+        }
+        ("merge", _, Some(merge)) => {
+            if let Some(header) = header {
+                let mut names = header.to_vec();
+                names.push(merge.target_name.clone());
+                write_record(&names, delimiter.as_byte(), &mut output);
+            }
+            for row in rows {
+                let joined = merge
+                    .picks
+                    .iter()
+                    .map(|pick| {
+                        // 1-based 序号换算 0-based 下标（差一曾致取错列）。
+                        row.get(pick.index as usize - 1)
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(&merge.joiner);
+                let mut fields = row.clone();
+                fields.push(joined);
+                write_record(&fields, delimiter.as_byte(), &mut output);
+            }
+        }
+        _ => {
+            return Err(KernelError::invalid_params(
+                "csvColumns payload does not match its mode",
+            ))
+        }
+    }
+
+    let transcoded = transcode(
+        output.as_bytes(),
+        SourceEncoding::Utf8,
+        target_encoding,
+        invalid,
+    )?;
+    view.fs.write_atomic(target, &transcoded.bytes)?;
+    let final_path = target.to_string();
+    let reverse = match backup {
+        Some(backup) => FsOp::WriteAtomic {
+            path: final_path.clone(),
+            data_ref: Some(backup),
+        },
+        None => FsOp::Quarantine {
+            from: final_path.clone(),
+            to: view
+                .fs
+                .quarantine_target_path(crate::conflict::file_name_of(&final_path))?,
+        },
+    };
+    Ok(Performed {
+        skipped: false,
+        replaced: overwrite,
+        final_path: final_path.clone(),
+        forward: FsOp::WriteAtomic {
+            path: final_path,
+            data_ref: None,
+        },
+        reverse,
+    })
 }
 
 fn to_performed(
@@ -1614,6 +1795,55 @@ fn validate_csv_merge(payload: &PlanCsvMerge) -> Result<(), KernelError> {
                 "csvMerge source has no header columns: {}",
                 file.path
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_csv_columns(payload: &PlanCsvColumns) -> Result<(), KernelError> {
+    if payload.encoding.is_none() {
+        return Err(KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        ));
+    }
+    match (payload.mode.as_str(), &payload.split, &payload.merge) {
+        ("split", Some(split), None) => {
+            if split.parts == 0 {
+                return Err(KernelError::invalid_params(
+                    "csvColumns split requires an evaluated parts count of at least 1",
+                ));
+            }
+            match (&split.separator, &split.regex) {
+                (Some(separator), None) if !separator.is_empty() => {}
+                (None, Some(pattern)) => {
+                    crate::regex_rename::compile_regex(pattern)?;
+                }
+                _ => {
+                    return Err(KernelError::invalid_params(
+                        "csvColumns split requires exactly one of separator or regex",
+                    ))
+                }
+            }
+            if payload.has_header && split.new_names.len() != split.parts as usize {
+                return Err(KernelError::invalid_params(
+                    "csvColumns split new column names must match the evaluated parts count",
+                ));
+            }
+        }
+        ("merge", None, Some(merge)) => {
+            if merge.picks.len() < 2 {
+                return Err(KernelError::invalid_params(
+                    "csvColumns merge requires at least two source columns",
+                ));
+            }
+        }
+        _ => {
+            return Err(KernelError::invalid_params(
+                "csvColumns payload does not match its mode",
+            ))
         }
     }
     Ok(())
@@ -3070,6 +3300,7 @@ mod tests {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 
@@ -3703,6 +3934,7 @@ mod tests {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 
@@ -3952,6 +4184,7 @@ mod tests {
             }),
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 
@@ -4009,6 +4242,7 @@ mod tests {
             }),
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 
@@ -4055,6 +4289,7 @@ mod tests {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 
@@ -4099,6 +4334,7 @@ mod tests {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 

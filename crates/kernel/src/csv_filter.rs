@@ -435,6 +435,7 @@ pub fn plan_c12(input: PlanC12Input) -> Result<PlanDocument, KernelError> {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: Some(payload),
+            csv_columns: None,
         });
     }
     let stats = PlanStats {

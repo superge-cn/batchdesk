@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.29（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额、C04 `plan_c04`/名称查找替换） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.30（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额、C04 `plan_c04`/名称查找替换、C14 `plan_c14`/`csv-columns` 动作/`csvColumns` 载荷/列拆分合并） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -334,7 +334,7 @@ interface PlanEntry {
   action: "rename" | "move" | "copy" | "archive" | "extract" | "create-dir"
         | "transcode" | "edit-content" | "delete" | "split" | "merge"
         | "csv-extract" | "csv-rows" | "listing" | "create-dir";
-                             // extract=解压产物（C10）、create-dir=建目录（F11，逐级 entry、source 为空、target=目录）、split=文本分片（F01/F02/F03）、merge=TXT 合并（F04，单条汇总 N 个输入）/CSV 合并（F06，携带 `csvMerge` 载荷）、csv-extract=CSV 抽取指定列（F07，1:1，携带 `csvExtract` 载荷）、csv-rows=CSV 行抽取（F08 数量/F09 位置区间，1:1，携带 `csvRows` 载荷）、csv-dedup=CSV 去重（C11，1:1，携带 `csvDedup` 载荷）、csv-filter=CSV 过滤（C12，1:1，携带 `csvFilter` 载荷）、listing=目录清单（F10，1:1，source=根目录、target=清单文件，内容在 apply 期流式生成）；追加式枚举，只增不改
+                             // extract=解压产物（C10）、create-dir=建目录（F11，逐级 entry、source 为空、target=目录）、split=文本分片（F01/F02/F03）、merge=TXT 合并（F04，单条汇总 N 个输入）/CSV 合并（F06，携带 `csvMerge` 载荷）、csv-extract=CSV 抽取指定列（F07，1:1，携带 `csvExtract` 载荷）、csv-rows=CSV 行抽取（F08 数量/F09 位置区间，1:1，携带 `csvRows` 载荷）、csv-dedup=CSV 去重（C11，1:1，携带 `csvDedup` 载荷）、csv-filter=CSV 过滤（C12，1:1，携带 `csvFilter` 载荷）、csv-columns=CSV 列拆分/合并（C14，1:1，携带 `csvColumns` 载荷）、listing=目录清单（F10，1:1，source=根目录、target=清单文件，内容在 apply 期流式生成）；追加式枚举，只增不改
   relation?: PlanRelation;   // 1:N / N:1 分组（拆分/合并/压缩解压），见下方语义（F04 由 §5 的 `merge` 载荷表达、F06 由 `csvMerge` 载荷表达；F07/F08 为 1:1，均不设 relation）
   reason: string;            // 预览面板展示（§6.4）
   conflict?: ConflictInfo;   // §5.13 三类冲突，预览期全部暴露；默认处置=跳过（不变量 7）
@@ -349,6 +349,7 @@ interface PlanEntry {
                              // csvMerge 条目：size=首个输入大小，algorithm="size"；全部输入在 §csvMerge.files 中逐项复核
                              // csvExtract 条目：size=源文件大小，algorithm="size"；apply 复核源大小并在执行期重验表头
                              // csvRows 条目：size=源文件大小，algorithm="size"；apply 复核源大小并在执行期重验表头
+                            // csvColumns 条目：size=源文件大小，algorithm="size"；apply 复核源大小并在执行期重验表头
                              // listing 条目：省略 expected；目录树在 apply 期重新遍历，清单是快照
                              // F05 的 split 条目：size=表头区间字节数＋该片记录区间字节数，algorithm="csv-byte-range"
   range?: { start: number; end: number };
@@ -415,6 +416,13 @@ interface PlanEntry {
   csvFilter?: { encoding?: SourceEncoding; size: number; delimiter: string;
                 hasHeader: boolean; columns: string[]; columnCount: number;
                 condition: { column: { index: number; name?: string };
+  csvColumns?: { mode: "split" | "merge"; encoding?: SourceEncoding; size: number;
+    delimiter: string; has_header: boolean; columns: string[]; column_count: number;
+    split?: { index: number; name?: string; separator?: string; regex?: string;
+              parts: number; new_names: string[] };
+    merge?: { picks: { index: number; name?: string }[]; joiner: string;
+              target_name: string };
+    target_encoding: string; invalid: string; dirty_rows: number };
                              op: "contains" | "not-contains" | "eq" | "ne" | "gt" | "ge" | "lt" | "le";
                              value: string };
                 mode: "keep" | "drop";
@@ -590,3 +598,4 @@ interface JournalEntry {
 | v1.27 | 2026-10-31 | §3.1 追加 `csv-filter` 动作与 `plan_c12`；§3 追加 `csvFilter` 载荷（condition{column,op,value}、mode、matchedRows/keptRows/nonNumericCells）；§5.1 落地 C12 CSV 过滤：contains/not-contains/数值比较、keep/drop 显式选向、非数值单元格保守不匹配＋告警、表头保留、E3001/E2009/E3004/E1002；执行期一次 `write_atomic`，撤销同 §8。决策见 [ADR-0032](../adr/0032-C12-CSV过滤判定器与类型解析.md)。 |
 | v1.28 | 2026-10-31 | `ApplyOptions` 追加 `entryConcurrency`（1–16，缺省 1＝串行；方案 §5.12）；通用执行器落地任务内条目级并发（分块有界池＋资源键不相交＋Journal 计划序记账）；执行期限额：单任务 20 万条目 E3007、并发越界 E1002；`ProgressEvent.message` 明确为双层进度的条目层明细。决策见 [ADR-0033](../adr/0033-C15任务内条目级并发分块有界池.md)。 |
 | v1.29 | 2026-11-01 | §3.1 追认 `plan_c04`（kind `c04`，复用 `rename` 动作）；§5.1 落地 C04 名称查找替换：plain 字面/regex 与 F13 同引擎、find 空与非法正则/缺失捕获引用计划期 E1002、冲突/长路径/两阶段继承 F12。决策见 [ADR-0034](../adr/0034-C04名称查找替换复用重命名引擎.md)。 |
+| v1.30 | 2026-11-01 | §3.1 追加 `plan_c14`；§5 追加 `csv-columns` 动作与可选 `csvColumns{mode,encoding,size,delimiter,hasHeader,columns,columnCount,split,merge,targetEncoding,invalid,dirtyRows}` 载荷（C14 1:1，每个输入一条 entry；split=按分隔符/正则切段新列紧随源列且源列保留、parts 为采样评估值；merge=多列拼接新列追加表尾）。决策见 [ADR-0035](../adr/0035-C14-CSV列拆分合并.md)。 |

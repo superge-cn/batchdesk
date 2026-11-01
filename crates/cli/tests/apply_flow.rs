@@ -3826,3 +3826,270 @@ fn c06_cross_batch_undos_are_independent() {
     assert!(root.join("a.txt").exists());
     assert!(!root.join("new_a.txt").exists());
 }
+
+#[test]
+fn c14_split_plan_apply_and_undo_inserts_columns_after_source() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let out_dir = dir.0.join("out");
+    let plan_path = dir.0.join("plan.json");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&source, b"id,tags,note\n1,x;y;z,first\n2,only,second\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c14",
+        "--file",
+        path_text(&source),
+        "--split-column",
+        "tags",
+        "--split-separator",
+        ";",
+        "--output-dir",
+        path_text(&out_dir),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c14 split plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c14");
+    assert_eq!(document["entries"][0]["action"], "csv-columns");
+    let split = &document["entries"][0]["csvColumns"]["split"];
+    assert_eq!(split["index"], 2);
+    assert_eq!(split["parts"], 3);
+    assert_eq!(
+        split["newNames"],
+        json!(["tags.1", "tags.2", "tags.3"]),
+        "new columns are derived from the source name (方案 §5.15)"
+    );
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c14 split apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let output = out_dir.join("a.csv");
+    assert!(output.exists());
+    let text = fs::read_to_string(&output).unwrap();
+    let mut lines = text.lines();
+    assert_eq!(lines.next().unwrap(), "id,tags,tags.1,tags.2,tags.3,note");
+    assert_eq!(lines.next().unwrap(), "1,x;y;z,x,y,z,first");
+    // 段数不足补空串（方案 §5.15 空值处理）：单段如实映射，其余新列为空。
+    assert_eq!(lines.next().unwrap(), "2,only,only,,,second");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!output.exists(), "undo removes the produced file");
+}
+
+#[test]
+fn c14_split_regex_and_merge_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let out_dir = dir.0.join("out");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&source, b"full,extra\nAlice; alice@example.com,ok\n").unwrap();
+
+    // 正则拆分：按分号及其两侧空白切段。
+    let plan = batchdesk(&[
+        "c14",
+        "--file",
+        path_text(&source),
+        "--split-column",
+        "full",
+        "--split-regex",
+        r"\s*;\s*",
+        "--output-dir",
+        path_text(&out_dir),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    fs::write(
+        dir.0.join("plan-split.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan-split.json")),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    let text = fs::read_to_string(out_dir.join("a.csv")).unwrap();
+    assert_eq!(text.lines().next().unwrap(), "full,full.1,full.2,extra");
+    assert_eq!(
+        text.lines().nth(1).unwrap(),
+        "Alice; alice@example.com,Alice,alice@example.com,ok"
+    );
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!out_dir.join("a.csv").exists());
+
+    // 合并：两列拼接为一个新列追加在表尾。
+    let merge = batchdesk(&[
+        "c14",
+        "--file",
+        path_text(&source),
+        "--merge-column",
+        "full",
+        "--merge-column-index",
+        "2",
+        "--join-with",
+        " | ",
+        "--merge-name",
+        "combined",
+        "--output-dir",
+        path_text(&out_dir),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(merge.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&merge.stdout).unwrap();
+    fs::write(
+        dir.0.join("plan-merge.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan-merge.json")),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    let text = fs::read_to_string(out_dir.join("a.csv")).unwrap();
+    assert_eq!(text.lines().next().unwrap(), "full,extra,combined");
+    assert_eq!(
+        text.lines().nth(1).unwrap(),
+        "Alice; alice@example.com,ok,Alice; alice@example.com | ok"
+    );
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!out_dir.join("a.csv").exists());
+}
+
+#[test]
+fn c14_rejects_invalid_regex_and_conflicting_modes() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, b"id,tags\n1,x\n").unwrap();
+
+    let invalid_regex = batchdesk(&[
+        "c14",
+        "--file",
+        path_text(&source),
+        "--split-column",
+        "tags",
+        "--split-regex",
+        "(unclosed",
+        "--output-dir",
+        path_text(&dir.0.join("out")),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--json",
+    ]);
+    assert!(!invalid_regex.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid_regex.stderr).contains("E1005"),
+        "stderr: {}",
+        String::from_utf8_lossy(&invalid_regex.stderr)
+    );
+
+    let both_modes = batchdesk(&[
+        "c14",
+        "--file",
+        path_text(&source),
+        "--split-column",
+        "tags",
+        "--split-separator",
+        ";",
+        "--merge-column",
+        "id",
+        "--join-with",
+        "-",
+        "--output-dir",
+        path_text(&dir.0.join("out")),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--json",
+    ]);
+    assert!(!both_modes.status.success());
+    assert!(
+        String::from_utf8_lossy(&both_modes.stderr).contains("either split or merge"),
+        "stderr: {}",
+        String::from_utf8_lossy(&both_modes.stderr)
+    );
+    assert!(!dir.0.join("out").join("a.csv").exists());
+}

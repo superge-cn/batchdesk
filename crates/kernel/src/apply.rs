@@ -1143,6 +1143,7 @@ mod tests {
             csv_rows: None,
             csv_dedup: None,
             csv_filter: None,
+            csv_columns: None,
         }
     }
 
