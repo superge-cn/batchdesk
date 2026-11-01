@@ -38,7 +38,12 @@ type View =
   | "f09"
   | "f10"
   | "f11"
-  | "f12";
+  | "f12"
+  | "c04"
+  | "c11"
+  | "c12"
+  | "c13"
+  | "c14";
 type Busy = "plan" | "apply" | "undo" | null;
 
 interface TaskView {
@@ -119,6 +124,62 @@ function planOperationFor(
       },
       sourcePaths: []
     } as never);
+  }
+  if (view === "c04") {
+    return planOperation({
+      kind: "c04",
+      params: {
+        dir: form.dir,
+        find: form.find,
+        replace: form.replace ?? "",
+        mode: form.mode || "plain",
+        scope: form.scope || "full"
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "c11" || view === "c12" || view === "c13" || view === "c14") {
+    const opParams: Record<string, unknown> = {
+      files: form.files ? form.files.split("\n").filter(Boolean) : [],
+      target: form.target,
+      sampleWindow: Number(form.sampleWindow || 4096),
+      sampleBlocks: Number(form.sampleBlocks || 0)
+    };
+    if (form.output) opParams.output = form.output;
+    if (form.outputDir) opParams.outputDir = form.outputDir;
+    if (form.delimiter) opParams.delimiter = form.delimiter;
+    if (form.source) opParams.source = form.source;
+    if (isNoHeader(form.header)) opParams.hasHeader = false;
+    if (view === "c11") {
+      opParams.keyColumns = splitList(form.keyColumns);
+      opParams.keyColumnIndexes = splitNumbers(form.keyColumnIndexes);
+    }
+    if (view === "c12") {
+      if (form.column) opParams.column = form.column;
+      if (form.columnIndex) opParams.columnIndex = Number(form.columnIndex);
+      opParams.op = form.op;
+      opParams.value = form.value ?? "";
+      opParams.filterMode = form.filterMode === "drop" ? "drop" : "keep";
+    }
+    if (view === "c13") {
+      opParams.sortColumns = splitList(form.sortColumns);
+      opParams.sortColumnIndexes = splitNumbers(form.sortColumnIndexes);
+      opParams.order = form.order === "desc" ? "desc" : "asc";
+      if (form.externalChunkRows)
+        opParams.externalChunkRows = Number(form.externalChunkRows);
+    }
+    if (view === "c14") {
+      if (form.splitColumn) opParams.splitColumn = form.splitColumn;
+      if (form.splitColumnIndex)
+        opParams.splitColumnIndex = Number(form.splitColumnIndex);
+      if (form.splitSeparator) opParams.splitSeparator = form.splitSeparator;
+      if (form.splitRegex) opParams.splitRegex = form.splitRegex;
+      opParams.mergeColumns = splitList(form.mergeColumns);
+      opParams.mergeColumnIndexes = splitNumbers(form.mergeColumnIndexes);
+      if (form.mergeJoinWith !== undefined) opParams.mergeJoinWith = form.mergeJoinWith;
+      if (form.mergeName) opParams.mergeName = form.mergeName;
+    }
+    return planOperation({ kind: view, params: opParams, sourcePaths: [] } as never);
   }
   if (view === "f11") {
     return planOperation({
@@ -206,6 +267,19 @@ function planOperationFor(
   } as never);
 }
 
+function splitList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitNumbers(value: string | undefined): number[] {
+  return splitList(value)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item) && item > 0);
+}
+
 function isNoHeader(value: string | undefined) {
   const normalized = (value ?? "").trim().toLowerCase();
   return normalized === "无" || normalized === "no" || normalized === "false";
@@ -234,6 +308,11 @@ const FEATURE_TITLES: Record<View, string> = {
   f08: "CSV 抽取前/后 N 行（F08）",
   f09: "CSV 抽取位置行区间（F09）",
   f10: "生成目录清单（F10）",
+  c04: "名称查找替换（C04）",
+  c11: "CSV 去重（C11）",
+  c12: "CSV 过滤（C12）",
+  c13: "CSV 排序（C13）",
+  c14: "CSV 列拆分/合并（C14）",
   f11: "清单建档（F11）",
   f12: "批量改名（F12）"
 };
@@ -347,6 +426,57 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
       hint: "UTF-8 BOM CSV，列：相对路径/名称/类型/大小/修改时间/层级；不读文件内容。"
     },
     { name: "outputDir", label: "清单输出目录", placeholder: "/path/out", wide: true }
+  ],
+  c04: [
+    { name: "dir", label: "目录", placeholder: "/path/dir", wide: true },
+    { name: "mode", label: "模式 plain|regex", placeholder: "plain" },
+    { name: "scope", label: "作用范围 full|stem|ext", placeholder: "full" },
+    { name: "find", label: "查找文本", placeholder: "字面或正则", wide: true },
+    { name: "replace", label: "替换为（支持 $1/\${name}）", placeholder: "替换文本", wide: true }
+  ],
+  c11: [
+    FILE_LIST,
+    { name: "keyColumns", label: "键列名（逗号分隔，留空＝整行）", placeholder: "订单号,客户", wide: true },
+    { name: "keyColumnIndexes", label: "键列序号（逗号分隔，1-based）", placeholder: "1" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
+    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  c12: [
+    FILE_LIST,
+    { name: "column", label: "条件列名", placeholder: "金额" },
+    { name: "columnIndex", label: "条件列序号（与列名二选一）", placeholder: "3" },
+    { name: "op", label: "算子 contains|not-contains|eq|ne|gt|ge|lt|le", placeholder: "gt", wide: true },
+    { name: "value", label: "比较值", placeholder: "100" },
+    { name: "filterMode", label: "选向 keep|drop", placeholder: "keep" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  c13: [
+    FILE_LIST,
+    { name: "sortColumns", label: "排序键列名（逗号分隔）", placeholder: "金额", wide: true },
+    { name: "sortColumnIndexes", label: "排序键列序号（逗号分隔）", placeholder: "" },
+    { name: "order", label: "顺序 asc|desc", placeholder: "asc" },
+    { name: "externalChunkRows", label: "外排块行数（留空＝内存排序）", placeholder: "5000" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  c14: [
+    FILE_LIST,
+    { name: "splitColumn", label: "拆分源列名", placeholder: "标签" },
+    { name: "splitColumnIndex", label: "拆分源列序号（与列名二选一）", placeholder: "" },
+    { name: "splitSeparator", label: "拆分分隔符", placeholder: ";" },
+    { name: "splitRegex", label: "拆分正则（与分隔符二选一）", placeholder: "[;,]" },
+    { name: "mergeColumns", label: "合并源列名（逗号分隔，与拆分互斥）", placeholder: "姓,名", wide: true },
+    { name: "mergeJoinWith", label: "合并连接符", placeholder: "-" },
+    { name: "mergeName", label: "合并新列名", placeholder: "姓名" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
   ],
   f11: [
     { name: "root", label: "目标根目录", placeholder: "/path/root", wide: true },

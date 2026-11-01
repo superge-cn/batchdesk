@@ -2410,6 +2410,95 @@ mod tests {
     }
 
     #[test]
+    fn csv_dedup_plan_executes_through_the_desktop_queue_and_undoes() {
+        // UI 接入切片第四批：c11 去重计划（壳层同源事实采集）经桌面队列 apply→undo。
+        use kernel::csv_dedup::{plan_c11, PlanC11File, PlanC11Input};
+        use kernel::encoding::{
+            InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+        };
+        use platform::csv_merge::{csv_dedup_inspect, CsvMergeScanOptions};
+
+        let dir = TempDir::new();
+        let root = dir.0.join("csv");
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("names.csv");
+        fs::write(&input, "name,count\napple,1\napple,1\npear,2\n").unwrap();
+        let output = root.join("dedup.csv");
+
+        let inspection = csv_dedup_inspect(
+            &input,
+            CsvMergeScanOptions {
+                delimiter: None,
+                has_header: true,
+                sample_window_bytes: 4096,
+                sample_blocks: 0,
+                platform_prior: PlatformPrior::Other,
+                source_encoding: None,
+            },
+        )
+        .unwrap();
+        let plan = plan_c11(PlanC11Input {
+            plan_id: new_ulid("c11-ui"),
+            target: TargetEncoding::Utf8 { bom: false },
+            invalid: InvalidSequencePolicy::ReplaceAndCount,
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            key: Vec::new(),
+            files: vec![PlanC11File {
+                path: input.to_string_lossy().into_owned(),
+                canonical_path: None,
+                output: output.to_string_lossy().into_owned(),
+                file_size: inspection.inspection.file_size,
+                source_encoding: inspection
+                    .inspection
+                    .source_encoding
+                    .or(Some(SourceEncoding::Utf8)),
+                delimiter: inspection.inspection.delimiter,
+                has_header: true,
+                columns: inspection.inspection.columns,
+                column_count: inspection.inspection.column_count,
+                dirty_rows: inspection.inspection.dirty_rows,
+                records: inspection.records,
+                target_occupied: false,
+            }],
+        })
+        .expect("c11 plan");
+        assert_eq!(plan.entries.len(), 1);
+
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: dir.0.join("quarantine"),
+                journal_path: dir.0.join("journal.jsonl"),
+                queue_path: dir.0.join("tasks.json"),
+                oplog_path: dir.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_, _| {}),
+        );
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan: plan.clone(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &task_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        let body = fs::read_to_string(&output).unwrap();
+        assert_eq!(
+            body.lines().filter(|line| !line.is_empty()).count(),
+            3,
+            "表头＋去重后两条数据行：{body}"
+        );
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert!(!output.exists(), "撤销把去重产物移入隔离目录");
+    }
+
+    #[test]
     fn listing_plan_streams_csv_through_the_desktop_queue_and_undoes() {
         // UI 接入切片第三批：f10 目录清单经桌面队列走 DirectoryLister 流式写出。
         let dir = TempDir::new();

@@ -41,6 +41,7 @@ use tauri::{Emitter, Manager, State};
 
 mod plan_csv;
 mod plan_kinds;
+mod plan_ops;
 mod tasks;
 
 use tasks::{
@@ -212,6 +213,9 @@ fn planOperation(
             return plan_csv::plan_csv_shell(&state, &kind, params).map_err(IpcError::from)
         }
         "f10" => return plan_csv::plan_listing_shell(&state, params).map_err(IpcError::from),
+        "c04" | "c11" | "c12" | "c13" | "c14" => {
+            return plan_ops::plan_op_shell(&state, &kind, params).map_err(IpcError::from)
+        }
         other => {
             return Err(IpcError::new(
                 "E1002",
