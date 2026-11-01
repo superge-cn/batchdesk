@@ -33,7 +33,7 @@
   - ⚠️ `cargo test` 不生成语料；生成脚本只准备输入，不代表回归已执行。
   - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。**断言 harness 覆盖 K01–K08＋T01–T08＋R01–R04/R06＋Z01/Z02（24 条中 19 条 asserted／4 条 partial），其余 1 条（E03）在 `crates/kernel/tests/assertions.tsv` 标 pending**：CI 绿灯仍只代表"生成 + 范围核对 + 单元测试 + 已接入的语料断言通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
 - 单 crate 测试：`cargo test -p batchdesk-kernel` / `-p batchdesk-platform`（包名带 `batchdesk-` 前缀；`kernel`/`platform` 是 `[lib]` 名，`-p kernel` 会报 package ID 不匹配）
-- Web/壳：pnpm install（根，Tauri CLI）→ (cd web && pnpm install) → pnpm build；pnpm tauri dev；cargo check --manifest-path src-tauri/Cargo.toml（独立 workspace，需 WebKitGTK/WebView2；不随根 cargo test 编译）
+- Web/壳：pnpm install（根，Tauri CLI）→ (cd web && pnpm install) → pnpm build → **pnpm test**（Vitest：23 视图导航可达＋取消/重试/撤销调用形状）；pnpm tauri dev；cargo check --manifest-path src-tauri/Cargo.toml（独立 workspace，需 WebKitGTK/WebView2；不随根 cargo test 编译）
 - 桌面壳任务队列测试：cargo test --manifest-path src-tauri/Cargo.toml --offline
 - WebView E2E：先启动 Vite 与 tauri-driver（前置条件见 scripts/e2e-tauri.mjs 文件头），再 `node scripts/e2e-tauri.mjs`
 - 语料生成物校验：python fixtures/corpus/verify_corpus.py --hashes（加 `--rebuild` 校验幂等）
@@ -65,7 +65,7 @@
 - [ ] 新增/改动批量写功能：有 plan/apply 结构与对应测试
 - [ ] 新增/改动处理模板或持久化：有 C37/T B9 覆盖，模板不保存敏感/路径数据，UiState 不混入 Config
 - [ ] 涉及 L2a 移植：PDR/台账行已批准，来源/版本/许可证/移植部件/排除项齐全，文件头/NOTICE/SBOM 与 T 语料回归通过
-- [ ] 涉及 web/src-tauri：`pnpm build` 通过；`cargo check --manifest-path src-tauri/Cargo.toml` 通过（本机 WebView 依赖可用时）
+- [ ] 涉及 web/src-tauri：`pnpm build` 与 **`pnpm test`** 通过（改了功能视图/导航必须让可达性断言继续绿——历史上曾出现 import 了 `FeaturePages` 却从未渲染、tsc 与构建都不报错而页面空白，见 ADR-0045）；`cargo check --manifest-path src-tauri/Cargo.toml` 通过（本机 WebView 依赖可用时）
 - [ ] 涉及工程实现决策：已写 docs/adr/NNNN（判据见其 README）
 - [ ] 修复 P0/P1 缺陷：已在 fixtures/corpus/manifest.md 挂新语料条目，并同步 manual-only.txt（如标为人工）——两处不同步会被 check_scope.py 拦下
 - [ ] 已按协作纪律第 4 条在 `docs/DEVELOPMENT-PLAN.md` + `docs/design/TRACEABILITY.md`（及对应 PDR/测试/CHANGELOG/ADR）标注状态、证据与剩余缺口

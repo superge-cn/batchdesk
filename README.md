@@ -108,6 +108,7 @@ python fixtures/bench/C-6-重复文件集/assert_c09.py --generate
 (cd web && pnpm install)
 (cd web && pnpm dev)     # http://127.0.0.1:1420
 (cd web && pnpm build)   # 类型检查 + 生产构建
+(cd web && pnpm test)    # 前端组件测试（Vitest + jsdom：导航可达与任务控制形状）
 pnpm install             # 根目录安装 Tauri CLI
 pnpm tauri dev           # 启动 Tauri 桌面壳（需 WebKitGTK/WebView2）
 
