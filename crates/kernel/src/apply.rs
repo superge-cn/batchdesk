@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::KernelError;
-use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind};
+use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind, ScanFilter};
 use crate::journal::{FsOp, JournalStatus, JournalStore};
 use crate::license::{Capability, LicenseService, C09};
 use crate::path::{protected_by, try_normalize, ProtectedDir};
@@ -608,6 +608,154 @@ pub fn undo_plan(
     journal: &mut dyn JournalStore,
 ) -> Result<UndoOutcome, KernelError> {
     undo_plan_with_ports(plan_id, fs, license, journal, UndoPorts::default())
+}
+
+/// C06 回滚预演（方案 §7.8"回滚前重新做冲突检测，目标被占用则逐条跳过并报告"）：
+/// 按 Journal 逆序检查每条 applied 记录的 reverse 落点，只读 stat、零副作用。
+/// 恢复目标已存在 → conflict（执行时按策略跳过并报告）；源/备份缺失 → missing；
+/// 其余 → ok。预演结果不写 Journal、不改文件状态。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UndoDryRunStatus {
+    Ok,
+    Conflict,
+    Missing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoDryRunEntry {
+    pub entry_id: String,
+    pub status: UndoDryRunStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoDryRun {
+    pub plan_id: String,
+    pub entries: Vec<UndoDryRunEntry>,
+    pub conflict_count: usize,
+    pub missing_count: usize,
+}
+
+pub fn undo_dry_run(
+    plan_id: &str,
+    journal: &mut dyn JournalStore,
+    fs: &dyn FsAdapter,
+) -> Result<UndoDryRun, KernelError> {
+    let entries = journal.entries_for_plan(plan_id)?;
+    let mut preview = Vec::new();
+    let mut conflict_count = 0;
+    let mut missing_count = 0;
+    for entry in entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.status == JournalStatus::Applied)
+    {
+        let (status, code, detail) = match &entry.reverse {
+            // rename 还原与"产物进隔离目录"（reverse=Quarantine）都是两点位移：
+            // 落点被占 → conflict；源已缺失 → missing。
+            FsOp::Rename { from, to } | FsOp::Quarantine { from, to } => {
+                if fs.stat(to).is_ok() {
+                    conflict_count += 1;
+                    (
+                        UndoDryRunStatus::Conflict,
+                        Some("E2007".to_string()),
+                        Some(format!("restore target already exists: {to}")),
+                    )
+                } else if fs.stat(from).is_err() {
+                    missing_count += 1;
+                    (
+                        UndoDryRunStatus::Missing,
+                        Some("E2001".to_string()),
+                        Some(format!("source no longer exists: {from}")),
+                    )
+                } else {
+                    (UndoDryRunStatus::Ok, None, None)
+                }
+            }
+            // 覆盖写还原：备份在即可还原；目标缺失时还原会重建（提示预演事实）。
+            FsOp::WriteAtomic {
+                path,
+                data_ref: Some(backup),
+            } => {
+                if fs.stat(backup).is_err() {
+                    missing_count += 1;
+                    (
+                        UndoDryRunStatus::Missing,
+                        Some("E2001".to_string()),
+                        Some(format!("backup no longer exists: {backup}")),
+                    )
+                } else if fs.stat(path).is_err() {
+                    (
+                        UndoDryRunStatus::Ok,
+                        None,
+                        Some(format!("target missing; restore will recreate: {path}")),
+                    )
+                } else {
+                    (UndoDryRunStatus::Ok, None, None)
+                }
+            }
+            FsOp::WriteAtomic { data_ref: None, .. } => (
+                UndoDryRunStatus::Missing,
+                Some("E9001".to_string()),
+                Some("write_atomic reverse has no backup dataRef".to_string()),
+            ),
+            FsOp::Copy { .. } => (
+                UndoDryRunStatus::Missing,
+                Some("E9001".to_string()),
+                Some("copy is not a reversible journal op".to_string()),
+            ),
+            // CreateDir 的逆是"删空目录"：目录在且为空 → ok；目录已不在 → missing；
+            // 目录非空 → conflict（撤销只删空目录，F11 语义）。
+            FsOp::RemoveDir { path } => {
+                if fs.stat(path).is_err() {
+                    missing_count += 1;
+                    (
+                        UndoDryRunStatus::Missing,
+                        Some("E2001".to_string()),
+                        Some(format!("directory no longer exists: {path}")),
+                    )
+                } else {
+                    match fs.list_dir(path, &ScanFilter::default()) {
+                        Ok(entries) if entries.is_empty() => (UndoDryRunStatus::Ok, None, None),
+                        Ok(_) => (
+                            UndoDryRunStatus::Conflict,
+                            Some("E2007".to_string()),
+                            Some(format!("directory is not empty: {path}")),
+                        ),
+                        Err(error) => (
+                            UndoDryRunStatus::Missing,
+                            Some(error.code),
+                            Some(error.message),
+                        ),
+                    }
+                }
+            }
+            // reverse 集中不会出现 CreateDir（它只是 RemoveDir 的逆表达）。
+            FsOp::CreateDir { .. } => (
+                UndoDryRunStatus::Missing,
+                Some("E9001".to_string()),
+                Some("create_dir is not a reversible journal op".to_string()),
+            ),
+        };
+        preview.push(UndoDryRunEntry {
+            entry_id: entry.entry_id.clone(),
+            status,
+            code,
+            detail,
+        });
+    }
+    Ok(UndoDryRun {
+        plan_id: plan_id.to_string(),
+        entries: preview,
+        conflict_count,
+        missing_count,
+    })
 }
 
 pub fn undo_plan_with_ports(
@@ -1381,5 +1529,96 @@ mod tests {
         );
         assert!(fs.exists("b"));
         assert!(!fs.exists("a"));
+    }
+
+    #[test]
+    fn undo_dry_run_flags_conflicts_and_missing_without_touching_files() {
+        // 已应用的 rename a→b（直接构造 Journal），文件态 = {b}：
+        // ① 恢复点 a 空闲、源 b 在 → Ok；② 重建 a → Conflict；③ 源缺失 → Missing。
+        let mut journal = TestJournal::default();
+        journal
+            .append(
+                PLAN_ID,
+                "e1",
+                "2026-10-30T00:00:00Z",
+                FsOp::Rename {
+                    from: "a".to_string(),
+                    to: "b".to_string(),
+                },
+                FsOp::Rename {
+                    from: "b".to_string(),
+                    to: "a".to_string(),
+                },
+            )
+            .unwrap();
+
+        let fs = TestFs::with_files(&["b"]);
+        let preview = undo_dry_run(PLAN_ID, &mut journal, &fs).unwrap();
+        assert_eq!(preview.entries.len(), 1);
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Ok);
+        assert_eq!((preview.conflict_count, preview.missing_count), (0, 0));
+        assert!(fs.exists("b"));
+        assert!(!fs.exists("a"), "dry run must not touch files");
+
+        let fs = TestFs::with_files(&["a", "b"]);
+        let preview = undo_dry_run(PLAN_ID, &mut journal, &fs).unwrap();
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Conflict);
+        assert_eq!(preview.entries[0].code.as_deref(), Some("E2007"));
+        assert_eq!(preview.conflict_count, 1);
+
+        let fs = TestFs::with_files(&[]);
+        let preview = undo_dry_run(PLAN_ID, &mut journal, &fs).unwrap();
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Missing);
+        assert_eq!(preview.entries[0].code.as_deref(), Some("E2001"));
+        assert_eq!(preview.missing_count, 1);
+    }
+
+    #[test]
+    fn undo_dry_run_checks_quarantine_reverses_and_empty_dirs() {
+        // reverse=Quarantine（新建产物撤销）：产物在、隔离落点空闲 → Ok。
+        let mut journal = TestJournal::default();
+        journal
+            .append(
+                PLAN_ID,
+                "e1",
+                "2026-10-30T00:00:00Z",
+                FsOp::WriteAtomic {
+                    path: "/out/part-1.csv".to_string(),
+                    data_ref: None,
+                },
+                FsOp::Quarantine {
+                    from: "/out/part-1.csv".to_string(),
+                    to: "/quarantine/part-1.csv".to_string(),
+                },
+            )
+            .unwrap();
+        let fs = TestFs::with_files(&["/out/part-1.csv"]);
+        let preview = undo_dry_run(PLAN_ID, &mut journal, &fs).unwrap();
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Ok);
+
+        // 隔离落点被占 → Conflict。
+        let fs = TestFs::with_files(&["/out/part-1.csv", "/quarantine/part-1.csv"]);
+        let preview = undo_dry_run(PLAN_ID, &mut journal, &fs).unwrap();
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Conflict);
+
+        // RemoveDir 逆：目录非空 → Conflict（撤销只删空目录）。
+        let mut journal2 = TestJournal::default();
+        // F11 的 forward=CreateDir、reverse=RemoveDir（撤销删空目录）。
+        journal2
+            .append(
+                PLAN_ID,
+                "e2",
+                "2026-10-30T00:00:00Z",
+                FsOp::CreateDir {
+                    path: "/data/created".to_string(),
+                },
+                FsOp::RemoveDir {
+                    path: "/data/created".to_string(),
+                },
+            )
+            .unwrap();
+        let fs = TestFs::with_files(&["/data/created"]);
+        let preview = undo_dry_run(PLAN_ID, &mut journal2, &fs).unwrap();
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Ok);
     }
 }

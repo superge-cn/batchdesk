@@ -3469,3 +3469,230 @@ fn c04_invalid_regex_and_missing_capture_are_rejected() {
     ]);
     assert!(!empty_find.status.success());
 }
+
+#[test]
+fn c05_preview_reports_counts_labels_and_zero_side_effects() {
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f12 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    // c05 的输入是计划文件：给计划注入一条 existing 冲突（标注逻辑本身由
+    // kernel preview 单测覆盖），验证 CLI→kernel 的报告链路。
+    let mut document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    document["entries"][0]["conflict"] = serde_json::json!({
+        "kind": "existing",
+        "riskLevel": "caution"
+    });
+    document["entries"][0]["resolution"] = serde_json::json!("skip");
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let preview = batchdesk(&["c05", "--plan", path_text(&plan_path), "--json"]);
+    assert!(
+        preview.status.success(),
+        "c05 preview failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&preview.stdout),
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(report["kind"], "f12");
+    assert_eq!(report["counts"]["toProcess"], 0);
+    assert_eq!(report["counts"]["conflicts"], 1);
+    let rows = report["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], "conflict");
+    assert_eq!(rows[0]["oldPath"], path_text(&root.join("a.txt")));
+    assert!(
+        report["highlights"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("default policy is skip")),
+        "highlights: {report}"
+    );
+    // 预览零副作用：文件与目录保持原状（§7.4 预览不落盘）。
+    assert!(root.join("a.txt").exists());
+    assert!(!root.join("new_a.txt").exists());
+}
+
+#[test]
+fn c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped() {
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("b.txt"), b"b").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    assert!(root.join("new_a.txt").exists());
+
+    // 回滚预演：全部可还原、零副作用（方案 §7.8"回滚前重新做冲突检测"）。
+    let dry = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--dry-run",
+        "--json",
+    ]);
+    assert!(
+        dry.status.success(),
+        "undo dry-run failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dry.stdout),
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&dry.stdout).unwrap();
+    assert_eq!(report["conflictCount"], 0);
+    assert_eq!(report["missingCount"], 0);
+    assert_eq!(report["entries"].as_array().unwrap().len(), 2);
+    assert!(root.join("new_a.txt").exists(), "dry run must not rename");
+    assert!(!root.join("a.txt").exists(), "dry run must not rename");
+
+    // 占用恢复点后：预演标 conflict，实际撤销逐条跳过并报告（状态不变）。
+    fs::write(root.join("a.txt"), b"occupied").unwrap();
+    let dry_conflict = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--dry-run",
+        "--json",
+    ]);
+    assert!(dry_conflict.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&dry_conflict.stdout).unwrap();
+    assert_eq!(report["conflictCount"], 1);
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        !undo.status.success(),
+        "occupied restore targets must surface failures"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(report["reverted"], 1, "only the unoccupied entry reverts");
+    assert_eq!(report["failed"].as_array().unwrap().len(), 1);
+    // 被占用条目状态不变，其余条目已还原（方案 §7.8"逐条跳过并报告"）。
+    assert!(root.join("new_a.txt").exists());
+    assert!(root.join("a.txt").exists());
+    assert!(root.join("b.txt").exists());
+    assert!(!root.join("new_b.txt").exists());
+}
+
+#[test]
+fn c06_undo_is_terminal_and_the_plan_can_be_reapplied() {
+    // TC C06 RBK：回滚为终态不可二次回滚；撤销后可重新执行原计划（§7.8、11.6-22）。
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let plan_path = dir.0.join("plan.json");
+    let quarantine_path = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    let apply_args = [
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine_path),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ];
+    assert!(batchdesk(&apply_args).status.success());
+    assert!(root.join("new_a.txt").exists());
+
+    let undo_args = [
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ];
+    let undo = batchdesk(&undo_args);
+    assert!(undo.status.success());
+    assert!(root.join("a.txt").exists());
+
+    // 二次撤销：applied 条目为零（幂等跳过），回滚为终态。
+    let undo_again = batchdesk(&undo_args);
+    assert!(undo_again.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&undo_again.stdout).unwrap();
+    assert_eq!(report["reverted"], 0);
+    assert_eq!(report["entries"].as_array().unwrap().len(), 0);
+
+    // 撤销后再执行：原计划重新生效（§7.8"由用户重新预览并执行原操作"）。
+    assert!(batchdesk(&apply_args).status.success());
+    assert!(root.join("new_a.txt").exists());
+}

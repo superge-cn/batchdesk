@@ -9,7 +9,9 @@
 use std::env;
 use std::path::PathBuf;
 
-use kernel::apply::{apply_plan, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome};
+use kernel::apply::{
+    apply_plan, undo_dry_run, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome,
+};
 use kernel::archive::{
     apply_archive_plan, plan_c10, plan_c10_compress, ArchiveApplyContext, ArchiveCompression,
     ArchiveService, PlanC10CompressInput, PlanC10Input, C10_KIND,
@@ -110,6 +112,7 @@ const USAGE: &str = "usage:
   batchdesk c04 --dir <dir> --find <text> [--replace <text>]
                 [--mode plain|regex] [--scope full|stem|ext]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
+  batchdesk c05 --plan <plan.json> [--json]
   batchdesk f01 --file <path>... --target-bytes N --output-dir <dir>
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk f02 --file <path>... --lines N --output-dir <dir>
@@ -474,6 +477,9 @@ fn main() {
     }
     if args[1] == "c03" {
         std::process::exit(run_c03(&args));
+    }
+    if args[1] == "c05" {
+        std::process::exit(run_c05(&args));
     }
     if args[1] == "c04" {
         std::process::exit(run_c04(&args));
@@ -5067,6 +5073,7 @@ fn run_undo(args: &[String]) -> i32 {
     let mut journal_path = None;
     let mut retention_days = DEFAULT_RETENTION_DAYS;
     let mut json = false;
+    let mut dry_run = false;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -5094,6 +5101,7 @@ fn run_undo(args: &[String]) -> i32 {
                     Err(message) => return input_error(message),
                 };
             }
+            "--dry-run" => dry_run = true,
             "--json" => json = true,
             other => return input_error(format!("E1002: unknown undo argument: {other}")),
         }
@@ -5129,6 +5137,25 @@ fn run_undo(args: &[String]) -> i32 {
         return 1;
     }
     let adapter = CliFsAdapter::new(None);
+    if dry_run {
+        // C06 回滚预演（方案 §7.8"回滚前重新做冲突检测"）：只读 stat，零副作用。
+        let preview = match undo_dry_run(&plan_id, &mut journal, &adapter) {
+            Ok(preview) => preview,
+            Err(error) => return print_kernel_error(&error),
+        };
+        if json {
+            match serde_json::to_string(&preview) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("E9001: failed to serialize undo dry-run report: {error}");
+                    return 1;
+                }
+            }
+        } else {
+            print_undo_dry_run_human(&preview);
+        }
+        return 0;
+    }
     let license = AlwaysAllowLicense;
     match undo_plan(&plan_id, &adapter, &license, &mut journal) {
         Ok(outcome) => {
@@ -5309,6 +5336,113 @@ fn print_undo_human(plan_id: &str, outcome: &UndoOutcome) {
             failure.entry_id, failure.error.code, failure.error.message
         );
     }
+}
+
+fn print_undo_dry_run_human(preview: &kernel::apply::UndoDryRun) {
+    println!(
+        "undo dry-run plan={} entries={} conflicts={} missing={}",
+        preview.plan_id,
+        preview.entries.len(),
+        preview.conflict_count,
+        preview.missing_count
+    );
+    // Journal reverse 的语义即"新名→旧名"（方案 §5.5 最小记录字段）。
+    for entry in &preview.entries {
+        let mut line = format!("  {} {:?}", entry.entry_id, entry.status);
+        if let Some(code) = &entry.code {
+            line.push_str(&format!(" ({code})"));
+        }
+        if let Some(detail) = &entry.detail {
+            line.push_str(&format!(" — {detail}"));
+        }
+        println!("{line}");
+    }
+}
+
+fn run_c05(args: &[String]) -> i32 {
+    let mut plan_path = None;
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--plan" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: c05 requires --plan <plan.json>");
+                };
+                plan_path = Some(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c05 argument: {other}")),
+        }
+        index += 1;
+    }
+    let Some(plan_path) = plan_path else {
+        return input_error("E1001: c05 requires --plan <plan.json>");
+    };
+    let contents = match std::fs::read_to_string(&plan_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            eprintln!(
+                "E1004: plan file is not readable ({}): {error}",
+                plan_path.display()
+            );
+            return 2;
+        }
+    };
+    let plan: PlanDocument = match serde_json::from_str(&contents) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!(
+                "E1004: plan file is not valid PlanDocument JSON ({}): {error}",
+                plan_path.display()
+            );
+            return 2;
+        }
+    };
+    let preview = match kernel::preview::rename_preview(&plan) {
+        Ok(preview) => preview,
+        Err(error) => return print_kernel_error(&error),
+    };
+    if json {
+        match serde_json::to_string(&preview) {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("E9001: failed to serialize preview report: {error}");
+                return 1;
+            }
+        }
+        return 0;
+    }
+    println!(
+        "preview plan={} kind={} to-process={} skipped={} conflicts={} blocked={}",
+        preview.plan_id,
+        preview.kind,
+        preview.counts.to_process,
+        preview.counts.skipped,
+        preview.counts.conflicts,
+        preview.counts.blocked
+    );
+    for row in &preview.rows {
+        let mut line = format!(
+            "  {:?}{} {} → {}",
+            row.status,
+            if row.two_phase { " (two-phase)" } else { "" },
+            row.old_path,
+            row.new_path
+        );
+        if let Some(detail) = &row.detail {
+            line.push_str(&format!(" — {detail}"));
+        }
+        println!("{line}");
+    }
+    if !preview.highlights.is_empty() {
+        println!("highlights:");
+        for highlight in &preview.highlights {
+            println!("  - {highlight}");
+        }
+    }
+    0
 }
 
 fn input_error(message: impl Into<String>) -> i32 {

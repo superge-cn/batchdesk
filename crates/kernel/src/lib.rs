@@ -32,6 +32,7 @@ pub mod name_replace;
 pub mod path;
 pub mod plan;
 pub mod preflight;
+pub mod preview;
 pub mod progress;
 pub mod recipe;
 pub mod regex_rename;
