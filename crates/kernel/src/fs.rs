@@ -243,6 +243,30 @@ pub trait FsAdapter: Send + Sync {
             false,
         ))
     }
+    /// 两路径是否位于同一卷（跨盘移动需"复制→校验→删源"，同盘改名即可）。
+    /// 缺省返回 `false`（保守：按跨盘处理，走校验复制路径）。
+    fn same_volume(&self, _a: &str, _b: &str) -> bool {
+        false
+    }
+    /// 逐级创建目录（含全部缺失父级；移动/复制的目标目录自动创建，方案 §5.8）。
+    fn create_dir_all(&self, _path: &str) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "create_dir_all is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+    /// 删除单个文件（仅供跨盘移动在校验通过后移除源；数据已存在于目标，
+    /// 属移动语义的后半步而非内容删除——方案 §5.8"校验不通过绝不删源"）。
+    fn remove_file(&self, _path: &str) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "remove_file is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
     fn list_dir(&self, path: &str, filter: &ScanFilter) -> Result<Vec<DirEntryInfo>, KernelError>;
     fn stat(&self, path: &str) -> Result<StatInfo, KernelError>;
     fn canonicalize(&self, path: &str) -> Result<String, KernelError>;

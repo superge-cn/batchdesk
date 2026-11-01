@@ -220,6 +220,19 @@ impl FsAdapter for CliFsAdapter {
         fs::create_dir(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
     }
 
+    fn same_volume(&self, a: &str, b: &str) -> bool {
+        crate::preflight::same_volume(Path::new(a), Path::new(b))
+    }
+
+    fn remove_file(&self, path: &str) -> Result<(), KernelError> {
+        fs::remove_file(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
+    }
+
+    fn create_dir_all(&self, path: &str) -> Result<(), KernelError> {
+        fs::create_dir_all(fs_path(Path::new(path)))
+            .map_err(|error| io_error(&error, Path::new(path)))
+    }
+
     fn remove_dir_if_empty(&self, path: &str) -> Result<(), KernelError> {
         fs::remove_dir(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
     }

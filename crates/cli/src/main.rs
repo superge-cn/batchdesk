@@ -16,6 +16,7 @@ use kernel::archive::{
     apply_archive_plan, plan_c10, plan_c10_compress, ArchiveApplyContext, ArchiveCompression,
     ArchiveService, PlanC10CompressInput, PlanC10Input, C10_KIND,
 };
+use kernel::c07::{plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input, PlanC07Row};
 use kernel::create_dirs::{
     normalize_list_path, plan_f11, target_for_list_path, PlanF11Input, PlanF11Row,
 };
@@ -117,6 +118,9 @@ const USAGE: &str = "usage:
                 [--mode plain|regex] [--scope full|stem|ext]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c05 --plan <plan.json> [--json]
+  batchdesk c07 --manifest <csv> --source-root <dir> --target-root <dir>
+                --operation move|copy [--missing skip|error] [--delimiter <d>]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c14 (--split-column <name> | --split-column-index <n>)
                 (--split-separator <text> | --split-regex <pattern>)
                 | (--merge-column <name> | --merge-column-index <n>)...
@@ -491,6 +495,9 @@ fn main() {
     }
     if args[1] == "c03" {
         std::process::exit(run_c03(&args));
+    }
+    if args[1] == "c07" {
+        std::process::exit(run_c07(&args));
     }
     if args[1] == "c14" {
         std::process::exit(run_c14(&args));
@@ -5906,6 +5913,234 @@ fn run_c14(args: &[String]) -> i32 {
         protected_dirs,
         case_sense,
         files: plan_files,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+fn run_c07(args: &[String]) -> i32 {
+    let mut manifest = None;
+    let mut source_root = None;
+    let mut target_root = None;
+    let mut operation = None;
+    let mut missing = MissingPolicy::Skip;
+    let mut delimiter = None;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --manifest requires a CSV file");
+                };
+                manifest = Some(PathBuf::from(value));
+            }
+            "--source-root" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source-root requires a directory");
+                };
+                source_root = Some(PathBuf::from(value));
+            }
+            "--target-root" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target-root requires a directory");
+                };
+                target_root = Some(PathBuf::from(value));
+            }
+            "--operation" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --operation requires move|copy");
+                };
+                operation = Some(match value.as_str() {
+                    "move" => C07Operation::Move,
+                    "copy" => C07Operation::Copy,
+                    other => {
+                        return input_error(format!(
+                            "E1002: --operation must be move or copy: {other}"
+                        ))
+                    }
+                });
+            }
+            "--missing" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --missing requires skip|error");
+                };
+                missing = match value.as_str() {
+                    "skip" => MissingPolicy::Skip,
+                    "error" => MissingPolicy::Error,
+                    other => {
+                        return input_error(format!(
+                            "E1002: --missing must be skip or error: {other}"
+                        ))
+                    }
+                };
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires a value");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c07 argument: {other}")),
+        }
+        index += 1;
+    }
+    let Some(manifest_path) = manifest else {
+        return input_error("E1001: c07 requires --manifest <csv>");
+    };
+    let Some(source_root) = source_root else {
+        return input_error("E1001: c07 requires --source-root <dir>");
+    };
+    let Some(target_root) = target_root else {
+        return input_error("E1001: c07 requires --target-root <dir>");
+    };
+    let Some(operation) = operation else {
+        return input_error("E1001: c07 requires --operation move|copy");
+    };
+    let manifest_absolute = make_absolute(&manifest_path);
+    let manifest_size = match std::fs::metadata(&manifest_absolute) {
+        Ok(metadata) => metadata.len().max(1),
+        Err(error) => {
+            eprintln!(
+                "E2001: manifest is not readable ({}): {error}",
+                manifest_absolute.display()
+            );
+            return 2;
+        }
+    };
+    // 清单解析编码感知（方案 §5.8"清单解析（编码感知）"）：整份清单全量读取
+    // （清单很小；采样窗口取文件大小）。
+    let scan = CsvMergeScanOptions {
+        delimiter,
+        has_header: false,
+        sample_window_bytes: manifest_size,
+        sample_blocks: 1,
+        platform_prior: PlatformPrior::Other,
+        source_encoding: None,
+    };
+    let inspected = match csv_dedup_inspect(&manifest_absolute, scan) {
+        Ok(inspected) => inspected,
+        Err(error) => {
+            eprintln!(
+                "E1004: manifest is not parseable ({}): {error}",
+                manifest_absolute.display()
+            );
+            return 2;
+        }
+    };
+    let source_root = make_absolute(&source_root);
+    let target_root = make_absolute(&target_root);
+    if !source_root.is_dir() || !target_root.is_dir() {
+        eprintln!(
+            "E1003: source-root and target-root must be existing directories ({} / {})",
+            source_root.display(),
+            target_root.display()
+        );
+        return 2;
+    }
+
+    let mut rows = Vec::new();
+    let mut facts = Vec::new();
+    for record in &inspected.records {
+        if record.len() < 2 {
+            eprintln!(
+                "E1004: manifest row must have two columns (name, target sub-directory): {record:?}"
+            );
+            return 2;
+        }
+        let name = record[0].trim();
+        let sub_dir = record[1].trim();
+        // 事实采集：shell 与 kernel 用同一相对拼接规则（root/relative）。
+        let source = source_root.join(name);
+        let source_meta = std::fs::metadata(&source);
+        let target_dir = if sub_dir.is_empty() {
+            target_root.clone()
+        } else {
+            target_root.join(sub_dir)
+        };
+        let target = target_dir.join(
+            std::path::Path::new(name)
+                .file_name()
+                .map(|value| value.to_os_string())
+                .unwrap_or_else(|| name.into()),
+        );
+        rows.push(PlanC07Row {
+            name: name.to_string(),
+            sub_dir: sub_dir.to_string(),
+        });
+        facts.push(PlanC07Fact {
+            exists: source_meta
+                .as_ref()
+                .is_ok_and(|metadata| metadata.is_file()),
+            size: source_meta
+                .as_ref()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0),
+            target_occupied: target.exists(),
+        });
+    }
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c07"));
+    let planned = plan_c07(PlanC07Input {
+        plan_id,
+        operation,
+        missing,
+        source_root: source_root.to_string_lossy().into_owned(),
+        target_root: target_root.to_string_lossy().into_owned(),
+        rows,
+        facts,
+        protected_dirs,
+        case_sense,
+        long_path_supported,
     });
     match planned {
         Ok(plan) => {

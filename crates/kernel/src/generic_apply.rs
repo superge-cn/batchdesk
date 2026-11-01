@@ -1136,14 +1136,64 @@ fn perform(
             }
             PlanAction::Move => {
                 let target = target.expect("validated: move requires a target");
-                let outcome = view.fs.move_path(&entry.source, target, policy)?;
-                to_performed(outcome, |final_path| FsOp::Rename {
-                    from: entry.source.clone(),
-                    to: final_path,
-                })
+                ensure_target_dir(view, target)?;
+                if view.fs.same_volume(&entry.source, target) {
+                    // 同盘：改名即完成（瞬间）。
+                    let outcome = view.fs.move_path(&entry.source, target, policy)?;
+                    to_performed(outcome, |final_path| FsOp::Rename {
+                        from: entry.source.clone(),
+                        to: final_path,
+                    })
+                } else {
+                    // 跨盘移动＝复制→校验大小与哈希→删源；校验不通过绝不删源（§5.8）。
+                    let outcome = view.fs.copy(&entry.source, target, policy)?;
+                    if outcome.outcome == PathOutcomeKind::Skipped {
+                        let final_path = outcome.final_path.clone();
+                        return Ok(Performed {
+                            skipped: true,
+                            replaced: false,
+                            final_path: final_path.clone(),
+                            forward: FsOp::Rename {
+                                from: entry.source.clone(),
+                                to: final_path.clone(),
+                            },
+                            reverse: FsOp::Rename {
+                                from: final_path,
+                                to: entry.source.clone(),
+                            },
+                        });
+                    }
+                    if let Err(error) =
+                        verify_move_integrity(view, &entry.source, &outcome.final_path)
+                    {
+                        // 校验不通过绝不删源；坏副本尽力清除后按失败条目报告（§5.8）。
+                        let _ = view.fs.remove_file(&outcome.final_path);
+                        return Err(error);
+                    }
+                    view.fs.remove_file(&entry.source)?;
+                    let final_path = outcome.final_path.clone();
+                    let forward = FsOp::Rename {
+                        from: entry.source.clone(),
+                        to: final_path.clone(),
+                    };
+                    let reverse = forward.inverse().ok_or_else(|| {
+                        KernelError::internal(
+                            "move reverse is not expressible",
+                            format!("{forward:?}"),
+                        )
+                    })?;
+                    Ok(Performed {
+                        skipped: false,
+                        replaced: outcome.outcome == PathOutcomeKind::Replaced,
+                        final_path,
+                        forward,
+                        reverse,
+                    })
+                }
             }
             PlanAction::Copy => {
                 let target = target.expect("validated: copy requires a target");
+                ensure_target_dir(view, target)?;
                 // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
                 let backup = if overwrite {
                     Some(view.fs.backup_to_quarantine(target)?)
@@ -1576,6 +1626,49 @@ fn perform_csv_columns(
         },
         reverse,
     })
+}
+
+/// 目标子目录自动创建（§5.8"目标目录不存在→按配置自动创建"）。
+/// 目录创建是移动/复制的实现细节：不单独记 Journal，撤销后空目录残留可接受
+/// （§7.8 回滚语义不含目录删除）。
+fn ensure_target_dir(view: &WorkerView<'_>, target: &str) -> Result<(), KernelError> {
+    match target.rfind(['/', '\\']) {
+        Some(index) if index > 0 => view.fs.create_dir_all(&target[..index]),
+        _ => Ok(()),
+    }
+}
+
+/// 跨盘移动的完整性校验（§5.8"复制→校验大小与哈希→删除源"）：
+/// 大小必须一致；两侧适配器都能提供 blake3 时进一步比对哈希——任一侧不可
+/// 哈希则退化为大小校验（ADR-0036）。失败返回 E3005，调用方绝不删源。
+fn verify_move_integrity(
+    view: &WorkerView<'_>,
+    source: &str,
+    target: &str,
+) -> Result<(), KernelError> {
+    let source_size = view.fs.stat(source)?.size;
+    let target_size = view.fs.stat(target)?.size;
+    if source_size != target_size {
+        return Err(KernelError::new(
+            "E3005",
+            "cross-volume move verification failed: size mismatch; source is kept",
+            Some(format!("{source} → {target}")),
+            true,
+        ));
+    }
+    let source_hash = view.fs.content_hash(source, "blake3")?;
+    let target_hash = view.fs.content_hash(target, "blake3")?;
+    if let (Some(source_hash), Some(target_hash)) = (source_hash, target_hash) {
+        if source_hash != target_hash {
+            return Err(KernelError::new(
+                "E3005",
+                "cross-volume move verification failed: hash mismatch; source is kept",
+                Some(format!("{source} → {target}")),
+                true,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn to_performed(
@@ -2884,6 +2977,10 @@ mod tests {
         files: Mutex<HashMap<String, Vec<u8>>>,
         next: Mutex<u64>,
         read_bytes_calls: AtomicU64,
+        /// 模拟跨盘：`true` 时 same_volume 返回 false（走校验复制路径）。
+        cross_volume: Mutex<bool>,
+        /// 故障注入：`true` 时 copy 落盘损坏内容（校验失败路径测试）。
+        copy_corrupts: Mutex<bool>,
     }
 
     impl TestFs {
@@ -2911,6 +3008,14 @@ mod tests {
 
         fn read_file(&self, path: &str) -> Vec<u8> {
             self.files.lock().unwrap().get(path).cloned().unwrap()
+        }
+
+        fn set_cross_volume(&self, value: bool) {
+            *self.cross_volume.lock().unwrap() = value;
+        }
+
+        fn set_copy_corrupts(&self, value: bool) {
+            *self.copy_corrupts.lock().unwrap() = value;
         }
 
         fn read_bytes_calls(&self) -> u64 {
@@ -2975,10 +3080,14 @@ mod tests {
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
             let mut files = self.files.lock().unwrap();
-            let data = files
+            let corrupts = *self.copy_corrupts.lock().unwrap();
+            let mut data = files
                 .get(from)
                 .cloned()
                 .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            if corrupts {
+                data.push(b'!');
+            }
             if files.contains_key(to) {
                 if policy == ConflictPolicy::Overwrite {
                     files.insert(to.to_string(), data);
@@ -3174,6 +3283,39 @@ mod tests {
             Ok(path.to_string())
         }
 
+        fn same_volume(&self, _a: &str, _b: &str) -> bool {
+            !*self.cross_volume.lock().unwrap()
+        }
+
+        fn remove_file(&self, path: &str) -> Result<(), KernelError> {
+            self.files
+                .lock()
+                .unwrap()
+                .remove(path)
+                .map(|_| ())
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))
+        }
+
+        fn create_dir_all(&self, path: &str) -> Result<(), KernelError> {
+            // 内存文件系统：目录不参与查找，仅接受合法路径。
+            if path.is_empty() {
+                return Err(KernelError::new("E1003", "empty directory", None, false));
+            }
+            Ok(())
+        }
+
+        fn content_hash(&self, path: &str, algorithm: &str) -> Result<Option<String>, KernelError> {
+            if algorithm != "blake3" {
+                return Ok(None);
+            }
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .map(|data| Some(format!("h:{}", String::from_utf8_lossy(data))))
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))
+        }
+
         fn case_sensitivity(&self) -> CaseSense {
             CaseSense::Sensitive
         }
@@ -3334,6 +3476,59 @@ mod tests {
             content_rewriter: None,
             directory_lister: None,
         }
+    }
+
+    #[test]
+    fn cross_volume_move_copies_verifies_removes_source_and_undoes() {
+        let fs = TestFs::with_files(&["a"]);
+        fs.set_cross_volume(true);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry("e1", "a", Some("b"), PlanAction::Move)]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert!(fs.exists("b"), "copy landed on the target volume");
+        assert!(!fs.exists("a"), "source removed only after verified copy");
+        // Journal 语义仍是移动：撤销＝反向移动（§5.8）。
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert!(fs.exists("a") && !fs.exists("b"));
+    }
+
+    #[test]
+    fn cross_volume_move_verification_failure_keeps_the_source() {
+        let fs = TestFs::with_files(&["a"]);
+        fs.set_cross_volume(true);
+        fs.set_copy_corrupts(true);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry("e1", "a", Some("b"), PlanAction::Move)]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Failed);
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+        assert_eq!(
+            outcome.report.entries[0].error.as_ref().unwrap().code,
+            "E3005",
+            "hash mismatch must surface as verification failure"
+        );
+        // "校验不通过绝不删源"：源保留；坏副本尽力清除。
+        assert!(fs.exists("a"));
+        assert!(!fs.exists("b"), "the corrupt copy is cleaned up");
     }
 
     #[test]

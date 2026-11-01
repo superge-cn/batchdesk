@@ -4093,3 +4093,161 @@ fn c14_rejects_invalid_regex_and_conflicting_modes() {
     );
     assert!(!dir.0.join("out").join("a.csv").exists());
 }
+
+#[test]
+fn c07_move_plan_apply_and_undo_via_manifest() {
+    let dir = TempDir::new();
+    let source_root = dir.0.join("src");
+    let target_root = dir.0.join("dst");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&target_root).unwrap();
+    fs::write(source_root.join("a.txt"), b"a").unwrap();
+    fs::write(source_root.join("b.txt"), b"b").unwrap();
+    let manifest_path = dir.0.join("manifest.csv");
+    fs::write(&manifest_path, b"a.txt,archive/2026\nb.txt,\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c07",
+        "--manifest",
+        path_text(&manifest_path),
+        "--source-root",
+        path_text(&source_root),
+        "--target-root",
+        path_text(&target_root),
+        "--operation",
+        "move",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c07 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c07");
+    assert_eq!(document["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(document["entries"][0]["action"], "move");
+    assert_eq!(
+        document["entries"][0]["target"],
+        json!(path_text(&target_root.join("archive/2026/a.txt"))),
+        "target sub-directory is resolved against the target root"
+    );
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c07 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    // 目标子目录不存在 → 执行期自动创建（方案 §5.8"按配置自动创建"）。
+    assert!(target_root.join("archive/2026/a.txt").exists());
+    assert!(target_root.join("b.txt").exists());
+    assert!(!source_root.join("a.txt").exists());
+    assert!(!source_root.join("b.txt").exists());
+
+    // 撤销＝反向移动（§5.8）。
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(source_root.join("a.txt").exists());
+    assert!(source_root.join("b.txt").exists());
+    assert!(!target_root.join("archive/2026/a.txt").exists());
+}
+
+#[test]
+fn c07_missing_sources_skip_or_error_and_copy_keeps_source() {
+    let dir = TempDir::new();
+    let source_root = dir.0.join("src");
+    let target_root = dir.0.join("dst");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&target_root).unwrap();
+    fs::write(source_root.join("a.txt"), b"a").unwrap();
+    let manifest_path = dir.0.join("manifest.csv");
+    // gone.txt 缺失：skip 策略 → 条目标记 E2001 并跳过；copy 保留源。
+    fs::write(&manifest_path, b"a.txt,keep\ngone.txt,keep\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c07",
+        "--manifest",
+        path_text(&manifest_path),
+        "--source-root",
+        path_text(&source_root),
+        "--target-root",
+        path_text(&target_root),
+        "--operation",
+        "copy",
+        "--missing",
+        "skip",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["action"], "copy");
+    assert_eq!(document["entries"][1]["blocked"]["code"], "E2001");
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    // 复制保留源（§5.8 复制类）。
+    assert!(source_root.join("a.txt").exists());
+    assert!(target_root.join("keep/a.txt").exists());
+
+    // error 策略：任一缺失 → 整单 E2001 拒绝。
+    let error_plan = batchdesk(&[
+        "c07",
+        "--manifest",
+        path_text(&manifest_path),
+        "--source-root",
+        path_text(&source_root),
+        "--target-root",
+        path_text(&target_root),
+        "--operation",
+        "copy",
+        "--missing",
+        "error",
+        "--json",
+    ]);
+    assert!(!error_plan.status.success());
+    assert!(
+        String::from_utf8_lossy(&error_plan.stderr).contains("E2001"),
+        "stderr: {}",
+        String::from_utf8_lossy(&error_plan.stderr)
+    );
+}

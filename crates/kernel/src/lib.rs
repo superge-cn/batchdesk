@@ -8,6 +8,7 @@
 pub mod apply;
 pub mod archive;
 pub mod binary;
+pub mod c07;
 pub mod config;
 pub mod conflict;
 pub mod create_dirs;
