@@ -162,6 +162,7 @@
 
 ### Fixed
 
+- **功能视图 F02/F03 在导航中不可达（2026-11-01）**：`web/src/App.tsx` 的「TXT 分割 F01–03」按钮 `onClick` 只置 `f01`，已注册的 F02（按行数分割）与 F03（按份数分割）两个视图在界面上无法进入。拆成三个独立导航项后，23 个功能视图逐一可达（＋C09 主页共 24 项导航）；`pnpm build`（tsc＋vite）通过。
 - **Windows 测试临时目录重名偶发失败（2026-10-31）**：CI run 41097251230 的 windows-latest 在 `config_store::tests::export_returns_v3_json` 的 `save_recipe` 处 panic；`config_store` 测试 `TempDir` 仅用纳秒时间戳命名，Windows 时钟分辨率较粗时并行测试可能撞名，后建者 `Drop` 删除先建者目录。改为 PID＋进程内原子序号并补唯一性回归；platform 86 项、`cargo test --workspace` **407 项**；**CI 七 job 全绿（run 41099022906，2026-10-31，head 17a8ce0）**。
 - **F06 T07/T08 提示/显式告警（2026-10-30）**：`plan_f06` 对无表头按列序号对齐发 `no-header-positional`、表头 BOM/trim 规范化发 `header-normalized`、重复规范化列名发 `duplicate-column-names`（均 Caution、不阻断）；`f06` CLI 人类输出原样展示 warning，新增壳层提示断言。T07/T08 语料断言由 partial 转 **asserted**（24 条台账 11 asserted／5 partial／8 pending）；kernel `csv_merge` +1 单测、CLI `apply_flow` +1；`cargo test --workspace` **344 项**；设计 01 v1.15、ADR-0018 §2.5。验证：fmt/clippy -D warnings/check_docs/check_scope 全绿（本地）；**CI 七 job 全绿（run 41067636244，2026-10-30，head 2b64429）**。
 - **桌面壳终态任务的恢复快照剪枝顺序（2026-11-01）**：`tasks.rs finish()` 原顺序为「内存置终态 → 推 `task://state`/`task://done` → 写恢复快照」，存在“内存已终态、快照仍含该任务”的可观测窗口；新增壳层测试带来的并行负载使既有断言 `apply_and_undo_run_through_the_queue_with_events` 偶发失败（复现 1/13 轮，单测 10/10 绿）。改为**快照剪枝先于终态事件**（设计 01 v1.37 追加式条款、ADR-0042），并把测试断言改为有界等待 `wait_snapshot_pruned`（≤5 s）覆盖余下的毫秒级窗口。壳层 15 项全绿。
