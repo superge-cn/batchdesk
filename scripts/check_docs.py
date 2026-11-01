@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文档一致性门禁：链接/锚点、版本锚点、expected.md、错误码白名单。
+"""文档一致性门禁：链接/锚点、版本锚点、expected.md、错误码白名单、用例覆盖映射表。
 
 只使用标准库；CI 的 lint job 必跑。规则以“当前锚点”为准，不检查历史修订记录
 （CHANGELOG、基线修订表、ADR 正文中的历史版本引用允许保留）。
@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import re
 import sys
@@ -44,6 +45,13 @@ BASELINE_ROW_RE = re.compile(
 )
 README_ROW_RE = re.compile(r"^\|\s*《([^》]+)》\s*\|\s*([^|]+?)\s*\|")
 CODE_RE = re.compile(r"\bE\d{4}\b")
+# E4（任务控制）✅ 行必须引用的取消类锚点（kernel 臂级回滚／壳层队列状态机／真 WebView E2E）。
+CANCEL_ANCHOR_KEYS = (
+    "cancel_rolls_back",
+    "cancel_mid_batch",
+    "task_state_events_cover_pause_resume_and_queued_cancel",
+    "e2e-tauri",
+)
 
 
 def md_files() -> list[Path]:
@@ -230,6 +238,50 @@ def check_baseline_hashes(errors: list[str]) -> None:
         errors.append("docs/baseline/MANIFEST.md: 未解析到基线哈希表")
 
 
+def check_case_map(errors: list[str]) -> None:
+    """用例覆盖映射表 CSV 的自校验：条数对账、锚点实名、状态与缺口/载体一致。"""
+    path = ROOT / "docs/testing/用例覆盖映射表-v0.2.csv"
+    if not path.is_file():
+        errors.append("缺少用例覆盖映射表 CSV：docs/testing/用例覆盖映射表-v0.2.csv")
+        return
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    if len(rows) != 296:
+        errors.append(f"用例覆盖映射表 CSV：行数 {len(rows)}≠TC §3.1 的 296")
+    ids = [row["实例ID"] for row in rows]
+    if len(set(ids)) != len(ids):
+        errors.append("用例覆盖映射表 CSV：实例 ID 有重复")
+
+    def fns(rel: str) -> set[str]:
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        return set(re.findall(r"(?m)^\s*(?:#\[[^\]]*\]\s*)?fn ([a-z0-9_]+)\(\)", source))
+
+    tables = {
+        "generic_apply::tests": fns("crates/kernel/src/generic_apply.rs"),
+        "apply_flow": fns("crates/cli/tests/apply_flow.rs"),
+        "corpus.rs": fns("crates/kernel/tests/corpus.rs"),
+    }
+    for row in rows:
+        instance, cell = row["实例ID"], row["自动化锚点"]
+        if "…" in cell:
+            errors.append(f"{instance}: 自动化锚点含省略式写法，须写实名测试")
+        for prefix, names in tables.items():
+            for name in re.findall(rf"{re.escape(prefix)}::([a-z0-9_]+)", cell):
+                if name not in names:
+                    errors.append(f"{instance}: 锚点 {prefix}::{name} 在源码中不存在")
+        if row["状态"] == "🔶" and "WebDriver" not in row["载体"]:
+            errors.append(f"{instance}: 🔶 行的载体列须注明 WebDriver")
+        if row["状态"] == "⛔" and row["载体"].startswith("CI"):
+            errors.append(f"{instance}: ⛔（人工/受控/待裁决）行不得标 CI 载体")
+        if row["状态"] in ("✅", "◐") and "真人工" in row["载体"]:
+            errors.append(f"{instance}: 自动化行（✅／◐）的载体不得记真人工，须记已有锚点的运行位置")
+        if row["状态"] == "✅" and row["缺口 / 待办"]:
+            errors.append(f"{instance}: ✅ 表示自动化闭环，不得同时挂缺口（应降为 ◐）")
+        if row["配方"] == "E4" and row["状态"] == "✅" and not any(
+            key in cell for key in CANCEL_ANCHOR_KEYS
+        ):
+            errors.append(f"{instance}: E4（任务控制）✅ 行须引用取消/暂停回滚断言")
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -238,6 +290,7 @@ def main() -> int:
     check_corpus_expected(errors, versions["test"])
     check_error_codes(errors)
     check_baseline_hashes(errors)
+    check_case_map(errors)
 
     if errors:
         print("文档一致性检查失败：")
@@ -246,7 +299,8 @@ def main() -> int:
         return 1
 
     print(
-        "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、错误码白名单。"
+        "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
+        "错误码白名单、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）。"
     )
     return 0
 

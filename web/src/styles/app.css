@@ -630,6 +630,12 @@ button {
   color: var(--status-safe-fg);
 }
 
+.banner-warn {
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-surface);
+  color: var(--status-warn-fg);
+}
+
 .banner code {
   font-family: var(--font-mono);
 }

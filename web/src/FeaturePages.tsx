@@ -603,6 +603,8 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
   const [error, setError] = useState<IpcError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
+  /** 上次成功预览时锁定的表单快照：任一字段变化即视为旧计划失效（T 配方 P4）。 */
+  const [plannedForm, setPlannedForm] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
 
   const setField = (name: string, value: string) =>
@@ -655,9 +657,11 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     setPreview(null);
     setDryRun(null);
     setCanUndo(false);
+    setPlannedForm(null);
     try {
       const next = await planOperationFor(view, form);
       setPlan(next);
+      setPlannedForm(JSON.stringify(form));
       if (view === "f12") {
         try {
           setPreview(await renamePreview(next.planId));
@@ -767,6 +771,10 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
 
   const active = task !== null && !["completed", "partial-failed", "failed", "cancelled"].includes(task.state);
   const terminalOk = task !== null && ["completed", "partial-failed"].includes(task.state);
+  // 参数改动后旧计划立即失效：执行／撤销／回滚预演都不得沿用旧 planId。
+  // 内核侧仍有 E2010 指纹与保护名单 E1002 兜底，这里是入口层阻断（方案 §7.3）。
+  const stale =
+    plan !== null && plannedForm !== null && JSON.stringify(form) !== plannedForm;
 
   const field = (
     label: string,
@@ -840,6 +848,12 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
               )}
             </div>
 
+            {stale && (
+              <div className="banner banner-warn" role="status" data-testid="plan-stale">
+                <div>参数已改动，旧计划预览失效：请重新生成计划再执行。</div>
+              </div>
+            )}
+
             <div className="toolbar">
               <span className="hint">plan 命令即干跑预览（C18）：零落盘、重复预览幂等。</span>
               <button
@@ -899,7 +913,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 className="button button-primary"
                 type="button"
                 onClick={onApply}
-                disabled={!plan || busy !== null || active || plan.entries.length === 0}
+                disabled={
+                  !plan || busy !== null || active || plan.entries.length === 0 || stale
+                }
               >
                 {busy === "apply" ? <Loader2 size={16} className="spin" /> : null}
                 {active ? "执行中…" : "执行"}
@@ -933,7 +949,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 className="button button-secondary"
                 type="button"
                 onClick={onUndoDryRun}
-                disabled={!plan}
+                disabled={!plan || stale}
               >
                 回滚预演
               </button>
@@ -941,7 +957,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 className="button button-secondary"
                 type="button"
                 onClick={onUndo}
-                disabled={!plan || busy !== null || active}
+                disabled={!plan || busy !== null || active || stale}
               >
                 {busy === "undo" ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
                 撤销

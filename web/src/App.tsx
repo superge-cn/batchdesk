@@ -192,6 +192,8 @@ function App() {
   const [quickWindow, setQuickWindow] = useState("");
   const [protectedText, setProtectedText] = useState("");
   const [plan, setPlan] = useState<PlanDocument | null>(null);
+  /** 上次成功预览所依据的参数快照；任一参数变化即判定旧计划失效（T 配方 P4）。 */
+  const [plannedSnapshot, setPlannedSnapshot] = useState<string | null>(null);
   const [taskViews, setTaskViews] = useState<Record<string, TaskView>>({});
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [undoTaskId, setUndoTaskId] = useState<string | null>(null);
@@ -309,6 +311,16 @@ function App() {
   const taskActive = isActive(applyTask) || isActive(undoTask);
   const hasBlocked = (plan?.stats.blocked ?? 0) > 0;
   const deletableCount = plan?.entries.filter((entry) => !entry.blocked).length ?? 0;
+  const planSignature = JSON.stringify({
+    root: root.trim(),
+    keep,
+    quickWindowBytes: quickWindow.trim(),
+    protectedDirs
+  });
+  // 参数改动 → 旧计划立即失效：执行/撤销入口全部关闭，须重新生成预览。
+  // 内核侧仍有 plan→apply 指纹（E2010）与保护名单变更（E1002）兜底，这里是入口层阻断（方案 §7.3）。
+  const planStale =
+    plan !== null && plannedSnapshot !== null && plannedSnapshot !== planSignature;
   const canApply =
     Boolean(plan) &&
     deletableCount > 0 &&
@@ -316,6 +328,7 @@ function App() {
     !undoTask &&
     !taskActive &&
     busy === null &&
+    !planStale &&
     confirmed;
   const applyHasApplied = Boolean(
     applyTask?.report?.entries.some(
@@ -324,6 +337,7 @@ function App() {
   );
   const canUndo =
     Boolean(applyTask) &&
+    !planStale &&
     !undoTask &&
     !taskActive &&
     busy === null &&
@@ -359,6 +373,7 @@ function App() {
     setUndoTaskId(null);
     setCleanupOutcome(null);
     setConfirmed(false);
+    setPlannedSnapshot(null);
     try {
       const next = await planOperation({
         kind: "c09",
@@ -370,6 +385,7 @@ function App() {
         sourcePaths: [root.trim()]
       });
       setPlan(next);
+      setPlannedSnapshot(planSignature);
       setNotice(`计划已生成：${next.entries.length} 条待清理，${next.stats.blocked} 条受阻。请核对预览后执行。`);
       try {
         setPreflight(await preflightPlan(next.planId));
@@ -1137,13 +1153,19 @@ function App() {
                     </div>
                   )}
 
+                  {planStale && (
+                    <div className="banner banner-warn" role="status" data-testid="plan-stale">
+                      <div>参数已改动，旧计划预览失效：请重新生成计划再执行。</div>
+                    </div>
+                  )}
+
                   <label className="check" htmlFor="confirm">
                     <input
                       id="confirm"
                       type="checkbox"
                       checked={confirmed}
                       onChange={(event) => setConfirmed(event.target.checked)}
-                      disabled={!plan || Boolean(applyTask) || taskActive || busy !== null}
+                      disabled={!plan || Boolean(applyTask) || taskActive || busy !== null || planStale}
                     />
                     我已核对预览，确认将 {deletableCount} 条文件移入隔离目录
                   </label>

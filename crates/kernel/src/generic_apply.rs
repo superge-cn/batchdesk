@@ -3144,6 +3144,41 @@ mod tests {
             }
         }
 
+        fn write_atomic_with(
+            &self,
+            path: &str,
+            write: &mut dyn FnMut(&mut dyn std::io::Write) -> Result<(), KernelError>,
+        ) -> Result<(), KernelError> {
+            if self
+                .fail_writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|blocked| blocked == path)
+            {
+                return Err(KernelError::new(
+                    "E5001",
+                    "injected write failure",
+                    None,
+                    true,
+                ));
+            }
+            struct Sink(Vec<u8>);
+            impl std::io::Write for Sink {
+                fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                    self.0.extend_from_slice(buffer);
+                    Ok(buffer.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let mut sink = Sink(Vec::new());
+            write(&mut sink)?;
+            self.files.lock().unwrap().insert(path.to_string(), sink.0);
+            Ok(())
+        }
+
         fn rename(
             &self,
             from: &str,
@@ -5287,6 +5322,273 @@ mod tests {
         .unwrap();
         assert_eq!(undo.reverted, 1, "撤销只回滚已应用条目，不因失败条目报错");
         assert!(!fs.exists("/o/a.txt"));
+    }
+
+    struct UpperRewriter;
+
+    impl ContentRewriter for UpperRewriter {
+        fn rewrite(
+            &self,
+            _entry: &crate::plan::PlanEntry,
+            input: &mut dyn std::io::Read,
+            output: &mut dyn std::io::Write,
+        ) -> Result<(), KernelError> {
+            let mut buffer = Vec::new();
+            input
+                .read_to_end(&mut buffer)
+                .map_err(|error| KernelError::new("E5001", error.to_string(), None, false))?;
+            let upper: Vec<u8> = buffer
+                .iter()
+                .map(|byte| byte.to_ascii_uppercase())
+                .collect();
+            output
+                .write_all(&upper)
+                .map_err(|error| KernelError::new("E5001", error.to_string(), None, false))?;
+            Ok(())
+        }
+    }
+
+    struct TwoRowLister;
+
+    impl crate::listing::DirectoryLister for TwoRowLister {
+        fn write_listing(
+            &self,
+            root: &str,
+            _options: &crate::listing::ListingOptions,
+            out: &mut dyn std::io::Write,
+        ) -> Result<crate::listing::ListingStats, KernelError> {
+            out.write_all(format!("相对路径,名称,类型\n{root},a.txt,文件\n").as_bytes())
+                .map_err(|error| KernelError::new("E5001", error.to_string(), None, false))?;
+            Ok(crate::listing::ListingStats {
+                files: 1,
+                dirs: 0,
+                placeholders: 0,
+                skipped: 0,
+                max_depth: 1,
+            })
+        }
+    }
+
+    #[test]
+    fn cancel_rolls_back_the_batch_and_streaming_write_arms() {
+        // F 类补齐：merge／csv-merge（N:1 单条目）、csv-rows、csv-range（区间读）、
+        // ContentRewriter（c02/c03 流式重写）与 listing（流式写出）各臂的取消回滚。
+        let license = crate::license::AlwaysAllowLicense;
+
+        // ① merge（N:1 产物）
+        {
+            let fs = TestFs::default();
+            fs.write_file("/d/a1.txt", b"A\n");
+            fs.write_file("/d/a2.txt", b"B\n");
+            fs.write_file("/d/b1.txt", b"C\n");
+            fs.write_file("/d/b2.txt", b"D\n");
+            let plan = plan(vec![
+                merge_entry(
+                    "e1",
+                    "/o/one.txt",
+                    TargetEncoding::Utf8 { bom: false },
+                    vec![
+                        ("/d/a1.txt", SourceEncoding::Utf8, 2),
+                        ("/d/a2.txt", SourceEncoding::Utf8, 2),
+                    ],
+                ),
+                merge_entry(
+                    "e2",
+                    "/o/two.txt",
+                    TargetEncoding::Utf8 { bom: false },
+                    vec![
+                        ("/d/b1.txt", SourceEncoding::Utf8, 2),
+                        ("/d/b2.txt", SourceEncoding::Utf8, 2),
+                    ],
+                ),
+            ]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "merge");
+            assert!(!fs.exists("/o/one.txt"), "已合并产物随取消进隔离目录");
+            assert!(fs.exists("/d/a1.txt"), "merge 不动源");
+        }
+
+        // ② csv-merge（F06 载荷同走 Merge 臂）
+        {
+            let fs = TestFs::default();
+            fs.write_file("/d/a.csv", b"id,name\n1,Alice\n");
+            fs.write_file("/d/b.csv", b"name,extra\nBob,x\n");
+            fs.write_file("/d/c.csv", b"id,name\n2,Bob\n");
+            fs.write_file("/d/d.csv", b"name,extra\nCara,y\n");
+            let build = |id: &str, target: &str, first: &str, second: &str, columns: &[&str]| {
+                csv_merge_entry(
+                    id,
+                    target,
+                    vec![
+                        csv_file(first, 16, columns, Some("a.csv")),
+                        csv_file(second, 17, columns, Some("b.csv")),
+                    ],
+                    vec!["id", "name", "extra"],
+                    true,
+                    3,
+                    None,
+                )
+            };
+            let plan = plan(vec![
+                build("e1", "/o/one.csv", "/d/a.csv", "/d/b.csv", &["id", "name"]),
+                build("e2", "/o/two.csv", "/d/c.csv", "/d/d.csv", &["id", "name"]),
+            ]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "csv-merge");
+            assert!(!fs.exists("/o/one.csv"), "合并 CSV 随取消进隔离目录");
+        }
+
+        // ③ csv-rows（前/后 N 行）
+        {
+            let fs = TestFs::default();
+            fs.write_file("/d/one.csv", b"id,name\n1,A\n2,B\n");
+            fs.write_file("/d/two.csv", b"id,name\n3,C\n4,D\n");
+            let plan = plan(vec![
+                csv_rows_entry(
+                    "e1",
+                    "/d/one.csv",
+                    "/o/one.csv",
+                    15,
+                    true,
+                    &["id", "name"],
+                    2,
+                    2,
+                    "first",
+                    1,
+                ),
+                csv_rows_entry(
+                    "e2",
+                    "/d/two.csv",
+                    "/o/two.csv",
+                    15,
+                    true,
+                    &["id", "name"],
+                    2,
+                    2,
+                    "first",
+                    1,
+                ),
+            ]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "csv-rows");
+            assert!(!fs.exists("/o/one.csv"));
+        }
+
+        // ④ csv-range（只读表头＋选中区间）
+        {
+            let fs = TestFs::default();
+            let data = b"id,name\n1,Alice\n2,Bob\n3,Cara\n";
+            fs.write_file("/d/one.csv", data);
+            fs.write_file("/d/two.csv", data);
+            let build = |id: &str, source: &str, target: &str| {
+                csv_range_entry(
+                    id,
+                    source,
+                    target,
+                    data.len() as u64,
+                    true,
+                    &["id", "name"],
+                    2,
+                    3,
+                    2,
+                    3,
+                    Some((0, 8)),
+                    Some((8, data.len() as u64)),
+                    2,
+                )
+            };
+            let plan = plan(vec![
+                build("e1", "/d/one.csv", "/o/one.csv"),
+                build("e2", "/d/two.csv", "/o/two.csv"),
+            ]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "csv-range");
+            assert!(!fs.exists("/o/one.csv"));
+            assert_eq!(fs.read_file("/d/one.csv"), data.to_vec(), "区间读不改源");
+        }
+
+        // ⑤ ContentRewriter 流式重写（c02/c03 的编辑通道）
+        {
+            let fs = TestFs::default();
+            fs.write_file("/d/one.txt", b"abc\n");
+            fs.write_file("/d/two.txt", b"def\n");
+            let plan = plan(vec![
+                action_entry("e1", "/d/one.txt", None, PlanAction::EditContent),
+                action_entry("e2", "/d/two.txt", None, PlanAction::EditContent),
+            ]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let rewriter = UpperRewriter;
+            ctx.content_rewriter = Some(&rewriter);
+            let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "content-rewriter");
+            assert_eq!(
+                fs.read_file("/d/one.txt"),
+                b"abc\n",
+                "重写取消后按备份还原原字节"
+            );
+        }
+
+        // ⑥ listing（流式写出）
+        {
+            let fs = TestFs::default();
+            let listing_plan = |root: &str, target: &str| {
+                crate::listing::plan_f10(crate::listing::PlanF10Input {
+                    plan_id: PLAN_ID.to_string(),
+                    protected_dirs: Vec::new(),
+                    case_sense: CaseSense::Sensitive,
+                    files: vec![crate::listing::PlanF10File {
+                        root: root.to_string(),
+                        canonical_root: None,
+                        target: target.to_string(),
+                        target_occupied: false,
+                        files: 1,
+                        dirs: 0,
+                        placeholders: 0,
+                        skipped: 0,
+                        max_depth: 1,
+                    }],
+                })
+                .unwrap()
+            };
+            // 两个根目录＝两条 listing 条目，才有条目边界的取消窗口
+            let mut merged = listing_plan("/d/one", "/o/one.csv");
+            let second = listing_plan("/d/two", "/o/two.csv");
+            merged.entries.extend(second.entries.clone());
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let lister = TwoRowLister;
+            ctx.directory_lister = Some(&lister);
+            let outcome = apply_generic_plan(&merged, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "listing");
+            assert!(!fs.exists("/o/one.csv"), "已写清单随取消进隔离目录");
+        }
     }
 
     struct QuotaLicense {

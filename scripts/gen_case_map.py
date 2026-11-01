@@ -74,6 +74,7 @@ def rows_for(spec):
         recipe = "E○1" if meta.get("simple") and index == 1 else (
             "E○2" if meta.get("simple") and index == 2 else exe_recipe[min(index - 1, 4)]
         )
+        recipe = recipe_for("EXE", fid, slot, recipe)
         status, carrier, anchor, gap = meta["exe_slots"].get(
             index, ("✅", CI, meta["exe1"], "")
         )
@@ -91,9 +92,93 @@ def rows_for(spec):
     return out
 
 
+# 配方按 TC §3 行的**槽位内容**判定（TC 的列举顺序并不总是与 §2.3 的 E1…E5 对齐，
+# 例如 F06/F07/F08/F10/F11/F12/F13/C02 把"取消"放在最后一槽）。此表只列与序号默认值
+# （E1/E2/E3/E4/E5）不同的槽位；PRE/RBK 按 §2.2/§2.4 的默认顺序。
+EXE_RECIPE = {
+    "F03": {3: "E1"},
+    "F05": {3: "E2", 4: "E4", 5: "E5"},
+    "F06": {4: "E3", 5: "E4"},
+    "F07": {4: "E3", 5: "E4"},
+    "F08": {2: "E1", 3: "E1", 4: "E2", 5: "E4"},
+    "F09": {2: "E2", 3: "E3", 4: "E4", 5: "E5"},
+    "F10": {2: "E2", 3: "E3", 4: "E4", 5: "E5"},
+    "F11": {2: "E2", 3: "E3", 4: "E3", 5: "E4"},
+    "F12": {2: "E2", 3: "E2", 4: "E2", 5: "E4"},
+    "F13": {2: "E3", 3: "E1", 4: "E3", 5: "E4"},
+    "C01": {2: "E2", 3: "E2", 4: "E2", 5: "E5"},
+    "C02": {2: "E2", 3: "E3", 5: "E5"},
+    "C03": {2: "E1", 3: "E2", 4: "E2", 5: "E5"},
+    "C06": {2: "E2", 3: "E3", 4: "E3", 5: "E5"},
+    "C07": {2: "E1", 3: "E2", 4: "E2", 5: "E2"},
+    "C09": {2: "E2", 3: "E2", 4: "E4", 5: "E5"},
+    "C10": {2: "E2", 3: "E2", 4: "E3", 5: "E4"},
+    "C15": {2: "E1", 3: "E4", 4: "E4", 5: "E4"},
+}
+
+# 功能 → 其 apply 实际走的 generic_apply 执行臂（按 plan 构建器里的 PlanAction 实测：
+# csv.rs:616 F05=Split、plan.rs:982 C01=EditContent、line_endings.rs:477／replace_content.rs:461
+# =EditContent＋rewriter、plan.rs:758 C09=Delete、archive.rs C10=专用执行器）。
+# 值为 None 的臂尚无条目级取消回滚断言，不得据此升级状态。
+ARM = {
+    "F01": "split", "F02": "split", "F03": "split", "F05": "split",
+    "F04": "merge", "F06": "csv-merge", "F07": "csv-extract",
+    "F08": "csv-rows", "F09": "csv-range", "F10": "listing", "F11": "create-dir",
+    "F12": "rename", "F13": "rename",
+    "C01": "edit-content", "C02": "content-rewriter", "C03": "content-rewriter",
+    "C07": "copy",
+    "C09": None,   # Delete（隔离目录）臂未做条目级取消断言；现有载体＝壳层队列＋e2e-tauri
+    "C10": None,   # Archive/Extract 专用执行器；取消只在条目边界由壳层队列覆盖
+    "C15": None,   # 队列本体；载体＝壳层测试
+    "C18": None,   # 横切预览；载体＝壳层测试
+}
+# 每个臂的断言所在测试（写进锚点列，便于逐条复核）。
+ARM_TEST = {
+    "split": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
+    "merge": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
+    "csv-merge": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
+    "csv-extract": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
+    "csv-rows": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
+    "csv-range": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
+    "listing": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
+    "create-dir": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
+    "rename": "generic_apply::tests::cancel_mid_batch_rolls_back_applied_entries",
+    "edit-content": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
+    "content-rewriter": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
+    "copy": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
+}
+
+
+def recipe_for(kind, fid, slot, default_recipe):
+    if kind == "EXE":
+        return EXE_RECIPE.get(fid, {}).get(int(slot.split("-")[1]), default_recipe)
+    return default_recipe
+
+
+def add_arm_anchor(row, fid):
+    """把该功能执行臂的条目级取消回滚断言写进锚点列；状态与缺口由逐槽数据决定。"""
+    arm = ARM.get(fid)
+    if arm is None:
+        return
+    test = ARM_TEST[arm]
+    if test in row["自动化锚点"]:
+        return
+    row["自动化锚点"] = row["自动化锚点"] + f"＋{test}（{arm} 臂）"
+
+
 def row(fid, meta, slot, recipe, point, status, carrier, anchor, gap):
     kind, number = slot.split("-")
-    return {
+    if status == "✅" and gap:
+        # 「X 台账＝asserted」是信息性注记，挪进锚点列；真实缺口必须把状态降为 ◐，不许两者并存。
+        segments = [seg for seg in gap.split("；") if seg]
+        ledger = [seg for seg in segments if "台账＝asserted" in seg]
+        rest = [seg for seg in segments if seg not in ledger]
+        if not rest:
+            anchor = anchor + "（语料台账：" + "／".join(ledger) + "）"
+            gap = ""
+        else:
+            raise ValueError(f"TC-{fid}-{kind}-{number}: ✅ 行仍挂真实缺口 {rest}，请改为 ◐")
+    built = {
         "功能编号": fid,
         "功能名": meta["name"],
         "适用阶段": meta["stage"],
@@ -109,6 +194,9 @@ def row(fid, meta, slot, recipe, point, status, carrier, anchor, gap):
         "自动化锚点": anchor,
         "缺口 / 待办": gap,
     }
+    if kind == "EXE" and recipe == "E4":
+        add_arm_anchor(built, fid)
+    return built
 
 
 def d(pre, exe, rbk, name, stage, prio, src, plan_tests, exe1, rbk1,
@@ -127,7 +215,7 @@ def default_pre_slots(harness, plan_tests, boundary, conflict_gap, expire_gap):
     slots = {
         1: ("✅" if harness else "◐", CI, plan_tests,
             "" if harness else "零落盘与重复预览幂等未纳入 c18 harness"),
-        2: ("✅", CI, boundary[0], boundary[1]),
+        2: ("◐" if boundary[1] else "✅", CI, boundary[0], boundary[1]),
         3: ("◐", CI, conflict_gap[0], conflict_gap[1]),
         4: ("◐", CI, expire_gap[0], expire_gap[1]),
     }
@@ -173,8 +261,7 @@ add("F01",
             "corpus.rs::t03_overlong_line_occupies_its_own_part_and_is_flagged；t06_no_newline_file_is_hard_cut_with_warning",
             corpus_cell(["T03", "T06"])[1]),
         3: ("◐", CI, "kernel `conflict` sequence 命名单测", "C19 四策略逐项执行未落（C19 属阶段 1）"),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel；retry_reruns_only_failed_entries_under_a_new_task_id；progress_bursts_are_coalesced_and_flushed_on_phase_change",
-            "队列层已测；本功能在真实执行中的取消点核对仅 C09 有 WebView E2E"),
+        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel；retry_reruns_only_failed_entries_under_a_new_task_id；progress_bursts_are_coalesced_and_flushed_on_phase_change", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::split_layout` 流式实现（64 KiB 分块）",
             "C-2 实测未跑（OQ-16 基准台账空）"),
     },
@@ -253,7 +340,8 @@ add("F04",
         2: (corpus_cell(["K03", "K08"])[0], CI,
             "crates/kernel/tests/corpus.rs::k03_bom_wins_and_target_bom_follows_caller；k08_utf16_bom_sample_detects_and_transcodes_clean",
             corpus_cell(["K03", "K08"])[1] + "；F04 每片/产物 BOM 策略在 F05 侧仍 partial"),
-        4: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
+        4: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
+        # ↑ merge／csv-range 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
         5: ("⛔", MANUAL_CARRIER, "generic_apply Merge 分支（整文件读入内存）",
             "实现缺口：大文件流式合并未做（内存 O(产物)）；进度仅到单条 entry"),
     },
@@ -308,8 +396,9 @@ add("F06",
         2: (corpus_cell(["T07"])[0], CI, "corpus.rs::t07_headerless_sample_aligns_by_column_position＋apply_flow::f06_plan_surfaces_headerless_and_header_normalization_warnings",
             corpus_cell(["T07"])[1]),
         3: (corpus_cell(["T08"])[0], CI, "corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing（表头规范化与重复列名）", corpus_cell(["T08"])[1]),
-        4: ("✅", CI, "kernel `generic_apply` 40 项（含冲突二次裁决）", "C19 四策略逐项未测（阶段 1）"),
-        5: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
+        4: ("◐", CI, "kernel `generic_apply` 40 项（含冲突二次裁决）", "C19 四策略逐项执行未落（C19 属阶段 1）"),
+        5: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
+        # ↑ csv-merge／csv-rows 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
@@ -332,7 +421,7 @@ add("F07",
         ("kernel `csv_extract` 同列重复选择 E1002 单测", "面板失效语义待 UI")),
     exe_slots={
         2: (corpus_cell(["T08"])[0], CI, "corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing", corpus_cell(["T08"])[1]),
-        4: ("✅", CI, "kernel `conflict` 9 项（existing-target→skip）", "C19 四策略逐项未测（阶段 1）"),
+        4: ("◐", CI, "kernel `conflict` 9 项（existing-target→skip）", "C19 四策略逐项执行未落（C19 属阶段 1）"),
         5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
@@ -357,7 +446,8 @@ add("F08",
         2: ("✅", CI, "apply_flow::f08_last_window_keeps_the_tail", ""),
         3: ("✅", CI, "apply_flow::f08_zero_rows_writes_only_the_header", ""),
         4: (corpus_cell(["T04"])[0], CI, "corpus.rs::t04_column_drift_is_counted_without_correction", corpus_cell(["T04"])[1]),
-        5: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
+        5: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
+        # ↑ csv-merge／csv-rows 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
@@ -381,7 +471,8 @@ add("F09",
     exe_slots={
         2: (corpus_cell(["T02"])[0], CI, "corpus.rs::t02_quoted_newlines_do_not_split_records", corpus_cell(["T02"])[1]),
         3: ("✅", CI, "apply_flow::f09_range_beyond_rows_warns_and_clamps_the_output", ""),
-        4: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
+        4: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
+        # ↑ merge／csv-range 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
         5: ("◐", CI, "FsAdapter::read_ranges 单测＋kernel range apply 断言不调用 read_bytes",
             "选中区间仍读入内存后转码；C-2 级实测未跑（OQ-16）"),
     },
@@ -407,7 +498,7 @@ add("F10",
     exe_slots={
         2: ("⛔", MANUAL_CARRIER, "kernel `listing` 占位跳过计数已实现", "E02 属人工语料（manual-only.txt）→ Windows 实机日"),
         3: ("◐", CI, "platform `listing` 不可读目录跳过计数单测", "真无权限环境断言未跑"),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级流式取消待 e2e"),
+        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", ""),
         5: ("⛔", MANUAL_CARRIER, "FsDirectoryLister 流式写出（write_atomic_with）", "C-1 十万级实测未跑（OQ-16）"),
     },
     rbk_slots={
@@ -432,7 +523,7 @@ add("F11",
     exe_slots={
         2: ("⛔", MANUAL_CARRIER, "kernel `preflight` 9 项（磁盘/权限判定）", "E04 属人工语料（manual-only.txt）"),
         4: ("✅", CI, "apply_flow::f11_existing_target_is_skipped", ""),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "取消后空目录残留待 e2e 核对"),
+        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", ""),
     },
     rbk_slots={
         2: ("✅", CI, "kernel `create_dirs` 撤销逆序只删空目录单测", ""),
@@ -455,12 +546,12 @@ add("F12",
          "「未选策略执行入口阻断」待 UI；序号/模板规则属 F13/阶段 1"),
         ("kernel `rename` 批内冲突去重单测", "面板失效语义待 UI")),
     exe_slots={
-        2: ("◐", MANUAL_CARRIER, "corpus.rs::r02_case_only_targets_conflict_only_on_case_insensitive_hosts（台账 asserted）",
-            "文件系统层不敏感行为需 Windows/macOS 实机（C06-EXE-02 同源）→ Windows 实机日"),
-        3: (corpus_cell(["R01"])[0], CI, "kernel `rename` 长路径三级（200/259/260×开关）单测＋corpus R01 asserted",
-            "UNC canonicalize 行为矩阵待实机"),
+        2: ("◐", CI, "corpus.rs::r02_case_only_targets_conflict_only_on_case_insensitive_hosts（台账 asserted，计划层折叠判定已断言）",
+            "文件系统层大小写不敏感行为需 Windows/macOS 实机核对（C06-EXE-02 同源）→ Windows 实机日"),
+        3: ("◐", CI, "kernel `rename` 长路径三级（200/259/260×开关）单测＋corpus.rs::r01_long_path_samples_follow_path_length_tiers",
+            "UNC canonicalize 行为矩阵待实机（Windows 实机日）"),
         4: ("⛔", MANUAL_CARRIER, "kernel `generic_apply` E2007 占用语义", "E03 只读语料台账＝pending，且占用/只读属实机"),
-        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
+        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
         1: ("✅", CI, "apply_flow::f12_prefix_plan_apply_and_undo_renames_files_and_directories", ""),
@@ -485,7 +576,7 @@ add("F13",
         2: ("✅", CI, "apply_flow::f13_rejects_invalid_regex_and_missing_capture_references", ""),
         3: ("✅", CI, "apply_flow::f13_no_match_creates_no_entries_and_writes_nothing", ""),
         4: ("✅", CI, "kernel `rename` 10 项（两阶段编排共用）", ""),
-        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
+        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（同族载体）", "本功能部分失败注入未测"),
@@ -510,7 +601,7 @@ add("C01",
         2: (corpus_cell(["K01"])[0], CI, "corpus.rs::k01_gbk_sample_detects_as_gb18030_and_transcodes_clean", corpus_cell(["K01"])[1]),
         3: (corpus_cell(["K06"])[0], CI, "corpus.rs::k06_binary_magic_is_rejected_by_c02_plan", corpus_cell(["K06"])[1]),
         4: (corpus_cell(["K07"])[0], CI, "corpus.rs::k07_mixed_encoding_is_flagged_not_repaired", corpus_cell(["K07"])[1]),
-        5: ("⛔", MANUAL_CARRIER, "generic_apply edit-content 分支（整文件读入）",
+        5: ("⛔", MANUAL_CARRIER, "generic_apply edit-content 分支（整文件读入）＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm（edit-content 臂，覆盖本行「执行中取消」部分）",
             "实现缺口：>10 MB 流式转码与替换计数上报未做；C-2 实测未跑"),
     },
     rbk_slots={
@@ -535,7 +626,7 @@ add("C02",
         2: (corpus_cell(["T02"])[0], CI, "apply_flow::c02_csv_keeps_quoted_newlines_when_converting_records",
             corpus_cell(["T02"])[1]),
         3: ("✅", CI, "kernel `binary` 2 项＋plan_c02 UTF-16/未确认 E3001 单测", ""),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "mid-stream 取消未做（登记缺口）"),
+        4: ("◐", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "条目边界取消已测（content-rewriter 臂）；单条内部 mid-stream 取消未做（流式重写中途不中断）"),
         5: ("⛔", MANUAL_CARRIER, "FsAdapter::rewrite_atomic_with 流式（设计 04 v1.8）", "C-2 级实测未跑（OQ-16）"),
     },
     rbk_slots={
@@ -559,9 +650,9 @@ add("C03",
     exe_slots={
         2: ("✅", CI, "apply_flow::c03_regex_capture_replace_plan_apply_and_undo", ""),
         3: (corpus_cell(["K06"])[0], CI, "corpus.rs::K06（C02 接入的魔数管道）", corpus_cell(["K06"])[1]),
-        4: (corpus_cell(["T01"])[0], CI, "apply_flow::c03_csv_cell_mode_preserves_quoted_newlines",
-            corpus_cell(["T01"])[1] + "；CSV 单元格会规范化记录终止符为 LF（缺口）"),
-        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 整段变换", "实现缺口：流式重叠窗口与行区间未做"),
+        4: ("◐", CI, "apply_flow::c03_csv_cell_mode_preserves_quoted_newlines（T01 台账＝asserted）",
+            "CSV 单元格模式会把记录终止符规范化为 LF，源 CRLF 未保留"),
+        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 整段变换＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂，覆盖本行「执行中取消」部分）", "实现缺口：流式重叠窗口与行区间未做"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply", "本功能部分失败注入未测"),
@@ -589,7 +680,7 @@ add("C07",
         5: ("⛔", MANUAL_CARRIER, "无", "R05 断线属人工语料且阶段末执行（fixtures/corpus/manual-results.md）"),
     },
     rbk_slots={
-        2: ("✅", CI, "apply_flow::c07_missing_sources_skip_or_error_and_copy_keeps_source", "跨盘 Windows 实机核对待实机日"),
+        2: ("◐", CI, "apply_flow::c07_missing_sources_skip_or_error_and_copy_keeps_source", "跨盘移动在 Windows 实机的核对待实机日"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -611,7 +702,7 @@ add("C09",
         2: (corpus_cell(["T05"])[0], CI, "corpus.rs::t05_empty_file_is_reported_without_parts", corpus_cell(["T05"])[1]),
         3: ("⛔", MANUAL_CARRIER, "platform `scan` 10 项（占位探测）", "E02 OneDrive 占位属人工 → Windows 实机日"),
         4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel＋scripts/e2e-tauri.mjs（执行中取消回滚）", ""),
-        5: ("◐", MANUAL_CARRIER, "C-6 断言（本地手动）", "C-1 大集归入正式基准（OQ-16）；C-6 进 CI 已登记为小缺口"),
+        5: ("⛔", MANUAL_CARRIER, "fixtures/bench C-6 的 assert_c09.py（本地手动脚本，不在 CI）", "C-6 断言未进 CI；C-1 大集归入正式基准（OQ-16）→ 受控环境"),
     },
     rbk_slots={
         1: ("✅", CI, "apply_flow::apply_and_undo_restore_files＋壳层队列测试", ""),
@@ -634,14 +725,14 @@ add("C10",
         ("corpus.rs 的 Z02 断言（apply_flow::c10_z02_rejects_traversal_entries_but_extracts_the_safe_one）", "UI 呈现待 WebDriver"),
         ("kernel `archive` 自包含/已存在处理单测", "面板失效语义待 UI")),
     exe_slots={
-        2: (corpus_cell(["Z01"])[0], CI, "apply_flow::c10_z01_gbk_name_extracts_and_undo_removes_the_product",
-            corpus_cell(["Z01"])[1] + "；GBK 名「写入」未实现（阶段缺口）"),
+        2: ("◐", CI, "apply_flow::c10_z01_gbk_name_extracts_and_undo_removes_the_product（Z01 台账＝asserted）",
+            "GBK 名「写入」侧未实现（压缩时不写 bit11/GB18030 标志）"),
         3: (corpus_cell(["Z02"])[0], CI, "apply_flow::c10_z02_rejects_traversal_entries_but_extracts_the_safe_one",
             corpus_cell(["Z02"])[1]),
         4: ("⛔", MANUAL_CARRIER, "无（zip 加密条目仅上报 encrypted 字段）",
             "实现缺口：密码包/密码错误未做（ADR-0029 登记）"),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel",
-            "逐文件报告导出未做；桌面执行走 apply_archive_plan 专用执行器（ADR-0044）"),
+        5: ("◐", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel",
+            "archive 臂（apply_archive_plan 专用执行器）的条目级取消回滚未断言；逐文件报告导出未做（ADR-0044）"),
     },
     rbk_slots={
         1: ("✅", SHELL, "zip_compress_plan_executes_through_the_desktop_queue_and_undoes", ""),
@@ -671,7 +762,7 @@ add("C15",
     },
     rbk_slots={
         1: ("✅", SHELL, "recover_rollback_restores_applied_entries_and_cancels_the_original_task", ""),
-        2: ("✅", SHELL, "retry_reruns_only_failed_entries_under_a_new_task_id＋retry_after_orchestration_failure_requeues_all_entries",
+        2: ("◐", SHELL, "retry_reruns_only_failed_entries_under_a_new_task_id＋retry_after_orchestration_failure_requeues_all_entries",
             "E2E 未覆盖重试场景（需可复现失败注入）"),
         3: ("◐", SHELL, "restart_marks_unfinished_tasks_interrupted_and_resume_skips_applied_entries", "占用场景属实机"),
     })
@@ -687,7 +778,7 @@ add("C18",
     rbk=["干跑零副作用", "失效即阻断"],
     simple=True,
     pre_slots={
-        1: ("✅", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
+        1: ("◐", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
             "harness 覆盖 c01/c04/c07/c08/c09/c13/c14/f01/f12；其余命令待纳入（守门规则已写入 ADR-0039）"),
         2: ("✅", CI, "kernel `preview` 4 项（四类固定计数＋高危汇总）", ""),
         3: ("✅", CI, "c18 harness 的 stdout 逐字节一致断言（derived_ulid 确定性派生）", ""),
@@ -808,8 +899,8 @@ add("S02",
         1: ("✅", CI, "各功能计划在空名单下零 blocked（split/rename/csv_* 单测隐含）", ""),
         2: ("✅", CI, "kernel::preflight::tests::protected_literal_and_canonical_hits_block_the_entry", ""),
         3: ("✅", CI, "同上＋generic_apply::protected_path_hit", ""),
-        4: ("✅", SHELL, "protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes",
-            "端到端重算待 e2e"),
+        4: ("◐", SHELL, "protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes",
+            "端到端重算待 e2e（壳层单测已断言比较逻辑）"),
         5: ("◐", CI, "platform `preflight` is_network_path 与 probe 单测", "名单×UNC 组合断言未写；真环境归实机日"),
         6: ("⛔", "待实现（前端无二次确认入口）", "无",
             "界面上不存在保护命中的二次确认弹窗，故本条无法测；需先实现（方案 §9.2 命中即禁止含二次确认）"),
@@ -832,7 +923,7 @@ C17A = [
      "oplog entries_for_plan 单测", "与 Journal 的逐字段一致性断言待补（已登记小缺口）"),
     ("TC-C17a-XCT-03", "P/XCT", "脱敏开关生效且不影响回滚", "✅", SHELL,
      "oplog::full_paths_follow_the_log_full_paths_switch", ""),
-    ("TC-C17a-XCT-04", "P/XCT", "日志不含文件内容、与完整日志分轨", "✅", CI,
+    ("TC-C17a-XCT-04", "P/XCT", "日志不含文件内容、与完整日志分轨", "◐", CI,
      "operation_log schema 无内容列（结构保证）＋design 10 v0.2 分轨", "CLI 侧操作日志未做（OQ-30）"),
 ]
 

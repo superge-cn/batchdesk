@@ -112,6 +112,24 @@ describe("功能视图的任务控制与撤销", () => {
     await waitFor(() => expect(undoPlan).toHaveBeenCalledWith("01PLAN"));
   });
 
+  it("改参数后旧计划立即失效：提示出现且执行/撤销被禁用（T 配方 P4）", async () => {
+    const user = userEvent.setup();
+    render(<FeaturePages view="f12" onBack={() => undefined} />);
+    await planThrough(user);
+    // 刚生成时可用
+    expect(screen.getByRole("button", { name: /^执行$/ })).toBeEnabled();
+    // 改动任一参数 → 旧 planId 不得再被执行入口使用
+    await user.type(screen.getByLabelText(/作用范围/), "x");
+    expect(screen.getByTestId("plan-stale")).toBeVisible();
+    expect(screen.getByRole("button", { name: /^执行$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^撤销$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /回滚预演/ })).toBeDisabled();
+    // 重新生成后恢复
+    await user.click(screen.getByRole("button", { name: /生成计划预览/ }));
+    await waitFor(() => expect(screen.queryByTestId("plan-stale")).toBeNull());
+    expect(screen.getByRole("button", { name: /^执行$/ })).toBeEnabled();
+  });
+
   it("计划失败时呈现 06 码位而非自由文本", async () => {
     vi.mocked(planOperation).mockRejectedValueOnce({ code: "E3004", message: "列不存在" });
     const user = userEvent.setup();
