@@ -34,6 +34,7 @@ use kernel::csv_filter::{plan_c12, FilterOp, PlanC12File, PlanC12Input};
 use kernel::csv_merge::{parse_records, plan_f06, PlanF06File, PlanF06Input};
 use kernel::csv_range::{plan_f09, PlanF09File, PlanF09Input};
 use kernel::csv_rows::{plan_f08, PlanF08File, PlanF08Input, RowWindow};
+use kernel::csv_sort::{infer_key_kind, plan_c13, PlanC13File, PlanC13Input, SortOrder};
 use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
 };
@@ -130,6 +131,14 @@ const USAGE: &str = "usage:
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
                 （rule 类型：ext:jpg,png ／ mtime:2025-01-01..2025-12-31 ／
                   size:1048576.. ／ name:report）
+  batchdesk c13 --file <path>... --sort-column <name>
+                (--sort-column-index <n> ...) [--order asc|desc]
+                [--external-chunk-rows <n>] --output <file> | --output-dir <dir>
+                --target <encoding> --sample-bytes <n> [--sample-blocks <n>]
+                [--delimiter <d>] [--no-header] [--source <encoding>]
+                [--invalid replace-and-count|abort]
+                [--platform-prior chinese-windows|other]
+                [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c14 (--split-column <name> | --split-column-index <n>)
                 (--split-separator <text> | --split-regex <pattern>)
                 | (--merge-column <name> | --merge-column-index <n>)...
@@ -510,6 +519,9 @@ fn main() {
     }
     if args[1] == "c08" {
         std::process::exit(run_c08(&args));
+    }
+    if args[1] == "c13" {
+        std::process::exit(run_c13(&args));
     }
     if args[1] == "c14" {
         std::process::exit(run_c14(&args));
@@ -6370,6 +6382,366 @@ fn run_c08(args: &[String]) -> i32 {
         protected_dirs,
         case_sense,
         long_path_supported,
+    });
+    match planned {
+        Ok(plan) => {
+            if json {
+                print_plan_json(&plan);
+            } else {
+                print_plan_human(&plan);
+            }
+            0
+        }
+        Err(error) => print_kernel_error(&error),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_c13(args: &[String]) -> i32 {
+    let mut files = Vec::new();
+    let mut keys = Vec::new();
+    let mut order = SortOrder::Asc;
+    let mut external_chunk_rows = None;
+    let mut output = None;
+    let mut output_dir = None;
+    let mut target = None;
+    let mut source = None;
+    let mut delimiter = None;
+    let mut invalid = InvalidSequencePolicy::ReplaceAndCount;
+    let mut prior = PlatformPrior::Other;
+    let mut sample_window = None;
+    let mut sample_blocks = 0usize;
+    let mut has_header = true;
+    let mut plan_id = None;
+    let mut protected_dirs = Vec::new();
+    let mut json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--file" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --file requires a path");
+                };
+                files.push(PathBuf::from(value));
+            }
+            "--sort-column" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sort-column requires a header name");
+                };
+                keys.push(ColumnPick::Name(value.clone()));
+            }
+            "--sort-column-index" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sort-column-index requires a 1-based index");
+                };
+                match value.parse::<u64>() {
+                    Ok(parsed) if parsed > 0 => keys.push(ColumnPick::Index(parsed)),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sort-column-index must be a positive integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--order" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --order requires asc|desc");
+                };
+                let Some(parsed) = SortOrder::parse(value) else {
+                    return input_error(format!("E1002: unknown order: {value}"));
+                };
+                order = parsed;
+            }
+            "--external-chunk-rows" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --external-chunk-rows requires a row count");
+                };
+                match value.parse::<u64>() {
+                    Ok(rows) if rows > 0 => external_chunk_rows = Some(rows),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --external-chunk-rows must be a positive integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output requires a path");
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--output-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --output-dir requires a path");
+                };
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--target" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --target requires an encoding");
+                };
+                let Some(parsed) = TargetEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown target encoding: {value}"));
+                };
+                target = Some(parsed);
+            }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source = Some(parsed);
+            }
+            "--delimiter" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --delimiter requires a value");
+                };
+                match Delimiter::parse(value) {
+                    Some(parsed) => delimiter = Some(parsed),
+                    None => {
+                        return input_error(format!(
+                            "E1002: --delimiter must be one of , ; tab | pipe: {value}"
+                        ))
+                    }
+                }
+            }
+            "--invalid" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --invalid requires a policy");
+                };
+                let Some(parsed) = InvalidSequencePolicy::parse(value) else {
+                    return input_error(format!("E1002: unknown invalid-sequence policy: {value}"));
+                };
+                invalid = parsed;
+            }
+            "--platform-prior" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --platform-prior requires a value");
+                };
+                let Some(parsed) = PlatformPrior::parse(value) else {
+                    return input_error(format!("E1002: unknown platform prior: {value}"));
+                };
+                prior = parsed;
+            }
+            "--sample-bytes" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-bytes requires a window size");
+                };
+                match value.parse::<u64>() {
+                    Ok(bytes) if bytes > 0 => sample_window = Some(bytes),
+                    _ => {
+                        return input_error(format!(
+                            "E1002: --sample-bytes must be a positive byte count: {value}"
+                        ))
+                    }
+                }
+            }
+            "--sample-blocks" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --sample-blocks requires a count");
+                };
+                match value.parse::<usize>() {
+                    Ok(blocks) => sample_blocks = blocks,
+                    Err(_) => {
+                        return input_error(format!(
+                            "E1002: --sample-blocks must be a non-negative integer: {value}"
+                        ))
+                    }
+                }
+            }
+            "--no-header" => has_header = false,
+            "--plan-id" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --plan-id requires a ULID");
+                };
+                plan_id = Some(value.clone());
+            }
+            "--protected-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --protected-dir requires a path");
+                };
+                protected_dirs.push(PathBuf::from(value));
+            }
+            "--json" => json = true,
+            other => return input_error(format!("E1002: unknown c13 argument: {other}")),
+        }
+        index += 1;
+    }
+    if files.is_empty() {
+        return input_error("E1001: c13 requires at least one --file <path>");
+    }
+    if keys.is_empty() {
+        return input_error(
+            "E1001: c13 requires at least one --sort-column or --sort-column-index",
+        );
+    }
+    let Some(target) = target else {
+        return input_error("E1001: c13 requires --target <encoding>");
+    };
+    let Some(sample_window) = sample_window else {
+        return input_error(
+            "E1001: c13 requires --sample-bytes <n> (方案 §5.2 sets no numeric window)",
+        );
+    };
+    if output.is_some() && output_dir.is_some() {
+        return input_error("E1001: use either --output or --output-dir, not both");
+    }
+    let targets: Vec<PathBuf> = match (output, output_dir) {
+        (Some(output), None) => {
+            if files.len() != 1 {
+                return input_error("E1002: --output requires exactly one --file");
+            }
+            vec![make_absolute(&output)]
+        }
+        (None, Some(dir)) => {
+            let dir = make_absolute(&dir);
+            files
+                .iter()
+                .map(|path| {
+                    let name = path
+                        .file_name()
+                        .map(|value| value.to_os_string())
+                        .unwrap_or_else(|| "output.csv".into());
+                    dir.join(name)
+                })
+                .collect()
+        }
+        _ => return input_error("E1001: c13 requires --output <file> or --output-dir <dir>"),
+    };
+
+    let protected_dirs = match protected_dirs_from_paths(&protected_dirs) {
+        Ok(protected_dirs) => protected_dirs,
+        Err(error) => {
+            eprintln!("{}: {}", error.code, error.message);
+            return 2;
+        }
+    };
+    let adapter = CliFsAdapter::new(None);
+    let case_sense = adapter.case_sensitivity();
+    let mut plan_files = Vec::with_capacity(files.len());
+    for (path, target_path) in files.iter().zip(targets.iter()) {
+        let absolute = make_absolute(path);
+        let metadata = match std::fs::metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot read file metadata ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        if !metadata.is_file() {
+            eprintln!("E1002: c13 requires regular files: {}", absolute.display());
+            return 2;
+        }
+        // 类型感知输入：全量解析键列取值（C13 数据在 apply 期会整读，计划期同源）。
+        let dedup = match csv_dedup_inspect(
+            &absolute,
+            CsvMergeScanOptions {
+                delimiter,
+                has_header,
+                sample_window_bytes: sample_window,
+                sample_blocks,
+                platform_prior: prior,
+                source_encoding: source,
+            },
+        ) {
+            Ok(dedup) => dedup,
+            Err(error) => {
+                eprintln!(
+                    "E1004: cannot inspect CSV for sorting ({}): {error}",
+                    absolute.display()
+                );
+                return 2;
+            }
+        };
+        let inspection = dedup.inspection;
+        let canonical_path = if protected_dirs.is_empty() {
+            None
+        } else {
+            platform::fs::canonicalize_display(&absolute)
+        };
+        // 键列取值：先用 kernel resolve_column 解析序号（首个文件），再逐行抽取。
+        let key_values: Vec<String> = if dedup.records.is_empty() {
+            Vec::new()
+        } else {
+            // 借助 infer_key_kind 前先抽列：用第一条记录确定键列存在性由计划层阻断；
+            // 这里按 name/index 简单解析。
+            let columns = inspection
+                .columns
+                .iter()
+                .map(|column| column.trim_start_matches('\u{feff}').trim().to_string())
+                .collect::<Vec<_>>();
+            let resolved = keys.iter().find_map(|pick| match pick {
+                ColumnPick::Name(name) => columns
+                    .iter()
+                    .position(|column| column == name)
+                    .map(|position| position + 1),
+                ColumnPick::Index(index) => Some(*index as usize),
+            });
+            // 有表头时首行是表头：键列取值只统计数据行（表头值污染类型推断）。
+            let data_rows: &[Vec<String>] = if has_header {
+                dedup.records.get(1..).unwrap_or(&[])
+            } else {
+                &dedup.records[..]
+            };
+            match resolved {
+                Some(column) => data_rows
+                    .iter()
+                    .filter_map(|row| row.get(column.saturating_sub(1)).cloned())
+                    .collect(),
+                None => Vec::new(),
+            }
+        };
+        plan_files.push(PlanC13File {
+            path: absolute.to_string_lossy().into_owned(),
+            canonical_path,
+            file_size: inspection.file_size,
+            source_encoding: inspection.source_encoding,
+            delimiter: inspection.delimiter,
+            has_header,
+            columns: inspection.columns,
+            column_count: inspection.column_count,
+            data_rows: inspection.data_rows,
+            dirty_rows: inspection.dirty_rows,
+            key_values,
+            target: target_path.to_string_lossy().into_owned(),
+            target_occupied: target_path.exists(),
+        });
+    }
+    let _ = infer_key_kind(&[]);
+
+    let plan_id = plan_id.unwrap_or_else(|| new_ulid("c13"));
+    let planned = plan_c13(PlanC13Input {
+        plan_id,
+        keys,
+        order,
+        external_chunk_rows,
+        target_encoding: target,
+        invalid,
+        protected_dirs,
+        case_sense,
+        files: plan_files,
     });
     match planned {
         Ok(plan) => {

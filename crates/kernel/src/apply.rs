@@ -1144,6 +1144,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 

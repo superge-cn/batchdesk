@@ -4403,3 +4403,164 @@ fn c08_rejects_unsafe_rules_and_reports_hit_statistics() {
         "warnings: {document}"
     );
 }
+
+#[test]
+fn c13_numeric_sort_plan_apply_and_undo() {
+    let dir = TempDir::new();
+    let source = dir.0.join("a.csv");
+    let out_dir = dir.0.join("out");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&out_dir).unwrap();
+    fs::write(&source, b"name,value\nbeta,10\nalpha,2\ngamma,7\n").unwrap();
+
+    let plan = batchdesk(&[
+        "c13",
+        "--file",
+        path_text(&source),
+        "--sort-column",
+        "value",
+        "--order",
+        "asc",
+        "--output-dir",
+        path_text(&out_dir),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c13 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "c13");
+    assert_eq!(document["entries"][0]["action"], "csv-sort");
+    assert_eq!(
+        document["entries"][0]["csvSort"]["keys"][0]["kind"], "numeric",
+        "类型感知：全数值采样推断 numeric"
+    );
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c13 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let text = fs::read_to_string(out_dir.join("a.csv")).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "name,value");
+    // 数值序：2 < 7 < 10（字典序会得到 10 < 2 < 7）。
+    assert_eq!(lines[1], "alpha,2");
+    assert_eq!(lines[2], "gamma,7");
+    assert_eq!(lines[3], "beta,10");
+
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(undo.status.success());
+    assert!(!out_dir.join("a.csv").exists());
+}
+
+#[test]
+fn c13_external_merge_sort_with_small_chunks() {
+    let dir = TempDir::new();
+    let source = dir.0.join("big.csv");
+    let out_dir = dir.0.join("out");
+    let quarantine = dir.0.join("quarantine");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::create_dir_all(&out_dir).unwrap();
+    let mut body = String::from("value\n");
+    // 6 行数据、阈值 2 → 3 块外排归并。
+    for value in [42, 7, 99, 1, 55, 3] {
+        body.push_str(&format!("{value}\n"));
+    }
+    fs::write(&source, body).unwrap();
+
+    let plan = batchdesk(&[
+        "c13",
+        "--file",
+        path_text(&source),
+        "--sort-column-index",
+        "1",
+        "--external-chunk-rows",
+        "2",
+        "--output-dir",
+        path_text(&out_dir),
+        "--target",
+        "utf-8",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(
+        document["entries"][0]["csvSort"]["externalChunkRows"], 2,
+        "外排阈值显式传入（OQ-28 同口径）"
+    );
+    assert!(
+        document["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["kind"] == "external-sort"),
+        "warnings: {document}"
+    );
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "c13 external apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let text = fs::read_to_string(out_dir.join("big.csv")).unwrap();
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        vec!["value", "1", "3", "7", "42", "55", "99"],
+        "multi-chunk merge produces globally sorted output"
+    );
+    // 临时分块文件已清理。
+    let leftovers: Vec<_> = fs::read_dir(&out_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".sort-chunk-"))
+        .collect();
+    assert!(leftovers.is_empty(), "chunk temp files must be cleaned up");
+}

@@ -584,6 +584,7 @@ pub fn plan_f06(input: PlanF06Input) -> Result<PlanDocument, KernelError> {
         csv_dedup: None,
         csv_filter: None,
         csv_columns: None,
+        csv_sort: None,
     };
     let entries = vec![entry];
 

@@ -106,6 +106,7 @@ pub enum PlanAction {
     /// F07 CSV 抽取指定列产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvExtract,
     CsvColumns,
+    CsvSort,
     /// F08/F09 CSV 行抽取产物（1:1，每个输入一条 entry；方案 §5.15）。
     CsvRows,
     /// F10 目录清单产物（1:1，每个根目录一条 entry；方案 §5.15）。
@@ -132,6 +133,7 @@ impl PlanAction {
             Self::Merge => "merge",
             Self::CsvExtract => "csv-extract",
             Self::CsvColumns => "csv-columns",
+            Self::CsvSort => "csv-sort",
             Self::CsvRows => "csv-rows",
             Self::Listing => "listing",
             Self::CsvDedup => "csv-dedup",
@@ -472,6 +474,43 @@ pub struct PlanCsvColumns {
     pub dirty_rows: u64,
 }
 
+/// C13 排序键（类型感知，计划期由采样值推断）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvSortKey {
+    /// 1-based 源列序号。
+    pub index: u64,
+    /// 有表头时的规范化列名。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `asc` / `desc`。
+    pub order: String,
+    /// `numeric` / `date` / `lexicographic`（采样推断；执行期解析失败回退字典序）。
+    pub kind: String,
+}
+
+/// C13 CSV 排序的载荷（仅 `csv-sort` 动作使用）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCsvSort {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<crate::encoding::SourceEncoding>,
+    pub size: u64,
+    pub delimiter: String,
+    pub has_header: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<String>,
+    pub column_count: u64,
+    /// 排序键（声明顺序即优先级）。
+    pub keys: Vec<PlanCsvSortKey>,
+    /// 外排分块阈值（数据行数；`None`＝内存排序）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_chunk_rows: Option<u64>,
+    pub target_encoding: String,
+    pub invalid: String,
+    pub dirty_rows: u64,
+}
+
 /// F08/F09 CSV 行抽取的载荷（仅 `csv-rows` 动作使用）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -563,6 +602,9 @@ pub struct PlanEntry {
     /// 追加式可选字段：C14 列拆分/合并的模式与源结构（仅 `csv-columns` 条目使用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv_columns: Option<PlanCsvColumns>,
+    /// 追加式可选字段：C13 CSV 排序的键与外排阈值（仅 `csv-sort` 条目使用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv_sort: Option<PlanCsvSort>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -738,6 +780,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
                 csv_dedup: None,
                 csv_filter: None,
                 csv_columns: None,
+                csv_sort: None,
             });
         }
     }
@@ -956,6 +999,7 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         });
     }
 

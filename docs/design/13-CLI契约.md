@@ -72,3 +72,4 @@ batchdesk config get|set|reset [--scope <scope>] [--json]
 | v0.17 | 2026-11-01 | 追加 C14 `c14`（`--split-column/--split-separator/--split-regex` 拆分与 `--merge-column/--join-with/--merge-name` 合并两模式，1:1 产物＋同一 `apply` 路由）实验命令；§2.1 清单扩展加入 C14；`undo` 未知 planId 由静默 reverted=0 改为 E1001 映射缺失提示（PRE-○2）。 |
 | v0.18 | 2026-11-01 | 追加 C07 `c07`（`--manifest`/`--source-root`/`--target-root`/`--operation move\|copy`/`--missing skip\|error`）清单驱动移动/复制切片实验命令；§2.1 清单扩展加入 C07。 |
 | v0.19 | 2026-11-01 | 追加 C08 `c08`（`--rule <subdir>\|<type>:<params>` 判定器链、`--recursive`、`--unclassified-dir`）按规则归档切片实验命令；§2.1 清单扩展加入 C08。 |
+| v0.20 | 2026-11-01 | 追加 C13 `c13`（`--sort-column/--sort-column-index/--order/--external-chunk-rows`）CSV 排序切片实验命令；§2.1 清单扩展加入 C13。 |

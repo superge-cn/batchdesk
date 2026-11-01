@@ -411,6 +411,7 @@ pub fn plan_c14(input: PlanC14Input) -> Result<PlanDocument, KernelError> {
                 invalid: input.invalid.as_str().to_string(),
                 dirty_rows: file.dirty_rows,
             }),
+            csv_sort: None,
         });
     }
 

@@ -21,6 +21,7 @@ pub mod csv_filter;
 pub mod csv_merge;
 pub mod csv_range;
 pub mod csv_rows;
+pub mod csv_sort;
 pub mod duplicate;
 pub mod encoding;
 pub mod error;

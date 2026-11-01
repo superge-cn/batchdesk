@@ -649,6 +649,7 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
                 csv_dedup: None,
                 csv_filter: None,
                 csv_columns: None,
+                csv_sort: None,
             });
         }
     }

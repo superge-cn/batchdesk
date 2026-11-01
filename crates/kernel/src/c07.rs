@@ -255,6 +255,7 @@ pub fn plan_c07(input: PlanC07Input) -> Result<PlanDocument, KernelError> {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         };
         if missing_entry && blocked.is_none() {
             entry.blocked = Some(PlanBlocked {

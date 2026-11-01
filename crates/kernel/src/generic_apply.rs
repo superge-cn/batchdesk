@@ -33,7 +33,7 @@ use crate::listing::{DirectoryLister, ListingOptions};
 use crate::path::{is_under, protected_by, try_normalize, ProtectedDir};
 use crate::plan::{
     PlanAction, PlanCsvColumns, PlanCsvDedup, PlanCsvExtract, PlanCsvFilter, PlanCsvMerge,
-    PlanCsvRows, PlanDocument, PlanParamValue, PlanResolution,
+    PlanCsvRows, PlanCsvSort, PlanDocument, PlanParamValue, PlanResolution,
 };
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
@@ -102,6 +102,7 @@ pub fn apply_generic_plan(
             | PlanAction::CsvDedup
             | PlanAction::CsvFilter
             | PlanAction::CsvColumns
+            | PlanAction::CsvSort
             | PlanAction::Listing
             | PlanAction::CreateDir => {}
             other => {
@@ -129,6 +130,7 @@ pub fn apply_generic_plan(
             | PlanAction::Merge
             | PlanAction::CsvExtract
             | PlanAction::CsvColumns
+            | PlanAction::CsvSort
             | PlanAction::CsvRows
             | PlanAction::Listing
             | PlanAction::CreateDir
@@ -213,6 +215,12 @@ pub fn apply_generic_plan(
                     KernelError::invalid_params("csv-columns entries require a csvColumns payload")
                 })?;
                 validate_csv_columns(payload)?;
+            }
+            PlanAction::CsvSort => {
+                let payload = entry.csv_sort.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-sort entries require a csvSort payload")
+                })?;
+                validate_csv_sort(payload)?;
             }
             PlanAction::CsvRows => {
                 let payload = entry.csv_rows.as_ref().ok_or_else(|| {
@@ -615,6 +623,7 @@ fn precheck_entry(
             | PlanAction::Merge
             | PlanAction::CsvExtract
             | PlanAction::CsvColumns
+            | PlanAction::CsvSort
             | PlanAction::CsvRows
             | PlanAction::Listing
             | PlanAction::CreateDir
@@ -997,13 +1006,13 @@ fn resolve_target(
 }
 
 /// 单条执行结果：是否被策略跳过、是否替换了既有目标、落点与 Journal 操作对。
-struct Performed {
-    skipped: bool,
-    replaced: bool,
+pub(crate) struct Performed {
+    pub(crate) skipped: bool,
+    pub(crate) replaced: bool,
     #[allow(dead_code)]
-    final_path: String,
-    forward: FsOp,
-    reverse: FsOp,
+    pub(crate) final_path: String,
+    pub(crate) forward: FsOp,
+    pub(crate) reverse: FsOp,
 }
 
 /// 执行单条动作并推导 Journal 的 forward/reverse（设计 01 §8）：
@@ -1046,8 +1055,8 @@ fn listing_options(plan: &PlanDocument) -> Result<ListingOptions, KernelError> {
 /// 条目执行的工作视图：perform 家族实际使用的字段子集（设计 01 §5.1）。
 /// 并发路径把它交给工作线程共享（全部字段 `Send + Sync`）；
 /// Journal、配额与进度记账只留在主线程（`&mut` 借用不可跨线程）。
-struct WorkerView<'a> {
-    fs: &'a dyn FsAdapter,
+pub(crate) struct WorkerView<'a> {
+    pub(crate) fs: &'a dyn FsAdapter,
     case_sense: CaseSense,
     content_editor: Option<ContentEditor<'a>>,
     content_rewriter: Option<&'a dyn ContentRewriter>,
@@ -1358,6 +1367,13 @@ fn perform(
                     KernelError::invalid_params("csv-columns entries require a csvColumns payload")
                 })?;
                 perform_csv_columns(view, &entry.source, target, overwrite, payload)
+            }
+            PlanAction::CsvSort => {
+                let target = target.expect("validated: csv-sort requires a target");
+                let payload = entry.csv_sort.as_ref().ok_or_else(|| {
+                    KernelError::invalid_params("csv-sort entries require a csvSort payload")
+                })?;
+                crate::csv_sort::perform_csv_sort(view, &entry.source, target, overwrite, payload)
             }
             PlanAction::CsvRows => {
                 let target = target.expect("validated: csv-rows requires a target");
@@ -1887,6 +1903,45 @@ fn validate_csv_merge(payload: &PlanCsvMerge) -> Result<(), KernelError> {
             return Err(KernelError::invalid_params(format!(
                 "csvMerge source has no header columns: {}",
                 file.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_csv_sort(payload: &PlanCsvSort) -> Result<(), KernelError> {
+    if payload.encoding.is_none() {
+        return Err(KernelError::new(
+            "E3001",
+            "source encoding requires manual confirmation",
+            None,
+            false,
+        ));
+    }
+    if payload.keys.is_empty() {
+        return Err(KernelError::invalid_params(
+            "csvSort payload requires at least one sort key",
+        ));
+    }
+    for key in &payload.keys {
+        if key.index == 0 || key.index > payload.column_count {
+            return Err(KernelError::new(
+                "E3004",
+                format!("sort key column out of range: {}", key.index),
+                None,
+                false,
+            ));
+        }
+        if key.order != "asc" && key.order != "desc" {
+            return Err(KernelError::invalid_params(format!(
+                "unsupported sort order: {}",
+                key.order
+            )));
+        }
+        if key.kind != "numeric" && key.kind != "date" && key.kind != "lexicographic" {
+            return Err(KernelError::invalid_params(format!(
+                "unsupported sort key kind: {}",
+                key.kind
             )));
         }
     }
@@ -3443,6 +3498,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 
@@ -4130,6 +4186,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 
@@ -4380,6 +4437,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 
@@ -4438,6 +4496,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 
@@ -4485,6 +4544,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 
@@ -4530,6 +4590,7 @@ mod tests {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         }
     }
 

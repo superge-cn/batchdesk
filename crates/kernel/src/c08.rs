@@ -230,6 +230,7 @@ pub fn plan_c08(input: PlanC08Input) -> Result<PlanDocument, KernelError> {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         };
         entries.push(entry);
     }

@@ -494,6 +494,7 @@ pub fn plan_c02(input: PlanC02Input) -> Result<PlanDocument, KernelError> {
             csv_dedup: None,
             csv_filter: None,
             csv_columns: None,
+            csv_sort: None,
         });
     }
 

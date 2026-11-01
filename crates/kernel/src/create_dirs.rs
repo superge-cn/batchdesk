@@ -122,6 +122,7 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
                 csv_dedup: None,
                 csv_filter: None,
                 csv_columns: None,
+                csv_sort: None,
             });
         }
     }
