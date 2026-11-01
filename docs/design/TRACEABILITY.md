@@ -32,7 +32,7 @@
 - **C09**：CLI scan/plan/apply/undo + S02 + cleanup，以及 Tauri 任务队列/事件/React UI；apply 只处理 C09 delete，移入隔离目录、逐条写 Journal、AlwaysAllow 授权；取消在条目边界回滚并终态 `cancelled`；快速窗口由调用方显式传入（OQ-28 待确认）；保留策略默认 `earliest`（OQ-29 已确认，待基线收编）。
 - **C37 处理模板/持久化**：ConfigDocument/UiState/Recipe 类型、存储与 12 条壳层命令已建（见 03 行）；C37 Phase A/B 的 plan/apply 与 UI、设置 UI 未实现。
 - **F15/授权/队列/日志/撤销**：AlwaysAllow 已建（壳层装配点注入 seam 已建，商业实现未开始）；任务队列已建（S03 持久化/恢复、`retryTask` 手动重试、进度合帧已建）；**C17a 最小操作日志已落地（ADR-0013）**；诊断日志、商业授权、F15 UI 未实现；Journal 为 CLI JSONL + 桌面 undo（含可选 planKind）。
-- **测试**：语料断言 harness（`crates/kernel/tests/corpus.rs` 覆盖 K01–K08＋T01–T08＋R01–R04/R06，24 条台账中 19 条 asserted／4 条 partial／1 条 pending，见 `assertions.tsv`）；TC v0.3 已展开 C37/B9 实例；**阶段 0 的 296 条实例（TC §3.1 对账口径）已逐条映射到执行载体**——`docs/testing/用例覆盖映射表-v0.2.csv`＋同名 md（✅157／◐98／⛔35／🔶6，自动化可达 255 条），功能阶段归属以 T §2.2 为准（C04/C08/C11–C14 属阶段 1，不在该 296 条内）；C-6 覆盖只读/预览，`apply_flow.rs` 覆盖 apply/undo/保留期；shell 测试覆盖事件/暂停/取消状态与中断恢复三决策；`scripts/e2e-tauri.mjs` 覆盖真实 WebView apply→undo 与取消回滚；不能把 CI 绿灯表述为功能验收。
+- **测试**：语料断言 harness（`crates/kernel/tests/corpus.rs` 覆盖 K01–K08＋T01–T08＋R01–R04/R06，24 条台账中 19 条 asserted／4 条 partial／1 条 pending，见 `assertions.tsv`）；TC v0.3 已展开 C37/B9 实例；**阶段 0 的 296 条实例（TC §3.1 对账口径）已逐条映射到执行载体**——`docs/testing/用例覆盖映射表-v0.2.csv`＋同名 md（✅157／◐98／⛔36／🔶5，自动化可达 255 条），功能阶段归属以 T §2.2 为准（C04/C08/C11–C14 属阶段 1，不在该 296 条内）；C-6 覆盖只读/预览，`apply_flow.rs` 覆盖 apply/undo/保留期；shell 测试覆盖事件/暂停/取消状态与中断恢复三决策；`scripts/e2e-tauri.mjs` 覆盖真实 WebView apply→undo 与取消回滚；不能把 CI 绿灯表述为功能验收。
 
 ## 3. 状态口径
 

@@ -278,7 +278,7 @@ S01,执行前预检,阶段 0,P0,TC-S01-PRE-04,PRE,04,P6,环境变化重算,方�
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-05,PRE,05,P6,UNC 不可达降级不阻塞,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --workspace --all-features）,kernel UNC 超时降级单测＋platform 2 秒探测,真 UNC 环境归 Windows 实机日
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-06,PRE,06,P6,报告可读,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,PreflightReport DTO（web 已呈现报告）,可读性（人话/分层）待 UI 断言
 S01,执行前预检,阶段 0,P0,TC-S01-EXE-01,EXE,01,E○1,预检通过→执行,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层阻断与 apply 测试,端到端组合待 e2e
-S01,执行前预检,阶段 0,P0,TC-S01-EXE-02,EXE,02,E○2,预检中取消,方案 §3.3、§4.9、§9.1、11.6-12,🔶,CI（cargo test --workspace --all-features）,无,「预检中取消」语义未定义：预检为同步快照 → 需人类澄清（OPEN-QUESTIONS 候选）
+S01,执行前预检,阶段 0,P0,TC-S01-EXE-02,EXE,02,E○2,预检中取消,方案 §3.3、§4.9、§9.1、11.6-12,⛔,待人类裁决（TC §5.1 阻塞类型＝裁决）,无,「预检中取消」语义未定义：预检是同步快照、不存在中途可取消态；需人类走方案 §11.6 澄清后再定用例（v0.1 已登记为 OQ 候选）
 S01,执行前预检,阶段 0,P0,TC-S01-RBK-01,RBK,01,R○1,不通过零副作用,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,applyPlan E2004 返回且零变更（实现）,断言待补（同 PRE-03）
 S01,执行前预检,阶段 0,P0,TC-S01-RBK-02,RBK,02,R○2,无「跳过预检」入口,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,默认无该入口（实现事实）,UI 层断言待建
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-01,PRE,01,P6,默认空名单不误拦,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,各功能计划在空名单下零 blocked（split/rename/csv_* 单测隐含）,
