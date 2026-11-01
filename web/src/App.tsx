@@ -207,7 +207,7 @@ function App() {
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
   const [activeView, setActiveView] = useState<
-    "c09" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f11" | "f12"
+    "c09" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f06" | "f07" | "f08" | "f09" | "f10" | "f11" | "f12"
   >("c09");
 
   useEffect(() => {
@@ -610,6 +610,56 @@ function App() {
                   <Files size={16} /> CSV 分割
                 </span>
                 <span className="soon">F05</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f06" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f06")}
+              >
+                <span>
+                  <Files size={16} /> CSV 合并
+                </span>
+                <span className="soon">F06</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f07" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f07")}
+              >
+                <span>
+                  <Files size={16} /> CSV 抽取列
+                </span>
+                <span className="soon">F07</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f08" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f08")}
+              >
+                <span>
+                  <Files size={16} /> CSV 前后 N 行
+                </span>
+                <span className="soon">F08</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f09" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f09")}
+              >
+                <span>
+                  <Files size={16} /> CSV 行区间
+                </span>
+                <span className="soon">F09</span>
+              </button>
+              <button
+                className={`nav-item${activeView === "f10" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("f10")}
+              >
+                <span>
+                  <Files size={16} /> 目录清单
+                </span>
+                <span className="soon">F10</span>
               </button>
               <button
                 className={`nav-item${activeView === "f11" ? " active" : ""}`}

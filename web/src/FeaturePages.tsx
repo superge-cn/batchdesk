@@ -32,6 +32,11 @@ type View =
   | "c02"
   | "c03"
   | "f05"
+  | "f06"
+  | "f07"
+  | "f08"
+  | "f09"
+  | "f10"
   | "f11"
   | "f12";
 type Busy = "plan" | "apply" | "undo" | null;
@@ -58,6 +63,59 @@ function planOperationFor(
         ...(form.targetBytes ? { targetBytes: Number(form.targetBytes) } : {}),
         ...(form.rows ? { rows: Number(form.rows) } : {}),
         ...(form.delimiter ? { delimiter: form.delimiter } : {})
+      },
+      sourcePaths: []
+    } as never);
+  }
+  if (view === "f06" || view === "f07" || view === "f08" || view === "f09") {
+    const csvParams: Record<string, unknown> = {
+      files: form.files ? form.files.split("\n").filter(Boolean) : [],
+      target: form.target,
+      sampleWindow: Number(form.sampleWindow || 4096),
+      sampleBlocks: Number(form.sampleBlocks || 0)
+    };
+    if (form.delimiter) csvParams.delimiter = form.delimiter;
+    if (form.source) csvParams.source = form.source;
+    if (isNoHeader(form.header)) csvParams.hasHeader = false;
+    if (view === "f06") {
+      csvParams.output = form.output;
+      if (form.sourceColumnName) {
+        csvParams.sourceColumn = true;
+        csvParams.sourceColumnName = form.sourceColumnName;
+      }
+      if (form.strict) csvParams.strict = true;
+    } else {
+      if (form.output) csvParams.output = form.output;
+      if (form.outputDir) csvParams.outputDir = form.outputDir;
+    }
+    if (view === "f07") {
+      csvParams.columns = form.columns
+        ? form.columns.split(",").map((value) => value.trim()).filter(Boolean)
+        : [];
+      csvParams.columnIndexes = form.columnIndexes
+        ? form.columnIndexes
+            .split(",")
+            .map((value) => Number(value.trim()))
+            .filter((value) => Number.isFinite(value) && value > 0)
+        : [];
+    }
+    if (view === "f08") {
+      csvParams.window = form.window === "last" ? "last" : "first";
+      csvParams.count = Number(form.count || 0);
+    }
+    if (view === "f09") {
+      csvParams.startRow = Number(form.startRow || 0);
+      csvParams.endRow = Number(form.endRow || 0);
+    }
+    return planOperation({ kind: view, params: csvParams, sourcePaths: [] } as never);
+  }
+  if (view === "f10") {
+    return planOperation({
+      kind: "f10",
+      params: {
+        roots: form.roots ? form.roots.split("\n").filter(Boolean) : [],
+        ...(form.output ? { output: form.output } : {}),
+        ...(form.outputDir ? { outputDir: form.outputDir } : {})
       },
       sourcePaths: []
     } as never);
@@ -148,6 +206,11 @@ function planOperationFor(
   } as never);
 }
 
+function isNoHeader(value: string | undefined) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return normalized === "无" || normalized === "no" || normalized === "false";
+}
+
 function statusBadge(status: string) {
   if (status === "normal") return <span className="badge badge-safe">正常</span>;
   if (status === "conflict") return <span className="badge badge-danger">冲突</span>;
@@ -166,6 +229,11 @@ const FEATURE_TITLES: Record<View, string> = {
   c02: "换行符转换（C02）",
   c03: "查找替换（C03）",
   f05: "CSV 分割（F05）",
+  f06: "CSV 合并（F06）",
+  f07: "CSV 抽取指定列（F07）",
+  f08: "CSV 抽取前/后 N 行（F08）",
+  f09: "CSV 抽取位置行区间（F09）",
+  f10: "生成目录清单（F10）",
   f11: "清单建档（F11）",
   f12: "批量改名（F12）"
 };
@@ -229,6 +297,56 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     { name: "rows", label: "分片行数（二选一）", placeholder: "留空则用字节" },
     { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
     { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," }
+  ],
+  f06: [
+    FILE_LIST,
+    { name: "output", label: "合并产物路径", placeholder: "/path/merged.csv", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
+    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
+    { name: "sourceColumnName", label: "来源列名（留空则不加来源列）", placeholder: "来源文件", wide: true },
+    { name: "strict", label: "严格列对齐 strict", placeholder: "填 yes 启用" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  f07: [
+    FILE_LIST,
+    { name: "columns", label: "列名（逗号分隔，按选择顺序）", placeholder: "姓名,部门", wide: true },
+    { name: "columnIndexes", label: "列序号（逗号分隔，1-based）", placeholder: "1,3" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
+    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  f08: [
+    FILE_LIST,
+    { name: "window", label: "窗口 first|last", placeholder: "first" },
+    { name: "count", label: "行数 N（0 合法）", placeholder: "10" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
+    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  f09: [
+    FILE_LIST,
+    { name: "startRow", label: "起始数据行 X（1-based）", placeholder: "2" },
+    { name: "endRow", label: "结束数据行 Y（≥X）", placeholder: "5" },
+    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
+    { name: "target", label: "目标编码", placeholder: "utf-8" },
+    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
+    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
+    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+  ],
+  f10: [
+    {
+      name: "roots",
+      label: "根目录（每行一个）",
+      kind: "textarea",
+      placeholder: "/path/root-a\n/path/root-b\n",
+      hint: "UTF-8 BOM CSV，列：相对路径/名称/类型/大小/修改时间/层级；不读文件内容。"
+    },
+    { name: "outputDir", label: "清单输出目录", placeholder: "/path/out", wide: true }
   ],
   f11: [
     { name: "root", label: "目标根目录", placeholder: "/path/root", wide: true },

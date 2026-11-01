@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use kernel::apply::ApplyOptions;
+use kernel::csv::Delimiter;
 use kernel::duplicate::{group_duplicates, DuplicateCandidate, GroupingMode, GroupingOptions};
 use kernel::error::KernelError;
 use kernel::fs::FsAdapter;
 use kernel::path::ProtectedDir;
-use kernel::csv::Delimiter;
 use kernel::plan::{
     plan_c09, KeepPolicy, PlanAction, PlanC09Input, PlanDocument, PlanFile, PlanResolution,
 };
@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{Emitter, Manager, State};
 
+mod plan_csv;
 mod plan_kinds;
 mod tasks;
 
@@ -199,22 +200,18 @@ fn planOperation(
         "f11" => return plan_f11_shell(&state, params, source_paths),
         "f12" => return plan_f12_shell(&state, params, source_paths),
         "f01" | "f02" | "f03" => {
-            return plan_kinds::plan_split_shell(&state, &kind, params)
-                .map_err(IpcError::from)
+            return plan_kinds::plan_split_shell(&state, &kind, params).map_err(IpcError::from)
         }
-        "f04" => {
-            return plan_kinds::plan_merge_shell(&state, params).map_err(IpcError::from)
-        }
-        "c01" => {
-            return plan_kinds::plan_transcode_shell(&state, params).map_err(IpcError::from)
-        }
+        "f04" => return plan_kinds::plan_merge_shell(&state, params).map_err(IpcError::from),
+        "c01" => return plan_kinds::plan_transcode_shell(&state, params).map_err(IpcError::from),
         "c02" => {
-            return plan_kinds::plan_line_endings_shell(&state, params)
-                .map_err(IpcError::from)
+            return plan_kinds::plan_line_endings_shell(&state, params).map_err(IpcError::from)
         }
-        "c03" => {
-            return plan_kinds::plan_replace_shell(&state, params).map_err(IpcError::from)
+        "c03" => return plan_kinds::plan_replace_shell(&state, params).map_err(IpcError::from),
+        "f06" | "f07" | "f08" | "f09" => {
+            return plan_csv::plan_csv_shell(&state, &kind, params).map_err(IpcError::from)
         }
+        "f10" => return plan_csv::plan_listing_shell(&state, params).map_err(IpcError::from),
         other => {
             return Err(IpcError::new(
                 "E1002",
@@ -856,9 +853,10 @@ fn plan_f05_shell(
         }
     };
     let delimiter = match params.delimiter.as_deref() {
-        Some(value) => Some(Delimiter::parse(value).ok_or_else(|| {
-            IpcError::new("E1002", format!("invalid delimiter: {value}"))
-        })?),
+        Some(value) => Some(
+            Delimiter::parse(value)
+                .ok_or_else(|| IpcError::new("E1002", format!("invalid delimiter: {value}")))?,
+        ),
         None => None,
     };
     let absolute = make_absolute(Path::new(&params.file));
@@ -1024,7 +1022,10 @@ fn plan_f12_shell(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         existing.push(path.to_string_lossy().into_owned());
-        items.push(kernel::rename::PlanF12Item { path: path.to_string_lossy().into_owned(), name });
+        items.push(kernel::rename::PlanF12Item {
+            path: path.to_string_lossy().into_owned(),
+            name,
+        });
     }
     let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f12"));
     let plan = kernel::rename::plan_f12(kernel::rename::PlanF12Input {
@@ -1075,11 +1076,11 @@ fn renamePreview(state: State<'_, AppState>, plan_id: String) -> Result<Value, I
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 fn undoDryRun(state: State<'_, AppState>, plan_id: String) -> Result<Value, IpcError> {
-    let mut journal = FileJournal::open(state.paths.journal_path.clone())
-        .map_err(IpcError::from)?;
+    let mut journal =
+        FileJournal::open(state.paths.journal_path.clone()).map_err(IpcError::from)?;
     let adapter = CliFsAdapter::new(None);
-    let preview = kernel::apply::undo_dry_run(&plan_id, &mut journal, &adapter)
-        .map_err(IpcError::from)?;
+    let preview =
+        kernel::apply::undo_dry_run(&plan_id, &mut journal, &adapter).map_err(IpcError::from)?;
     serde_json::to_value(preview).map_err(|error| IpcError::new("E9001", error.to_string()))
 }
 

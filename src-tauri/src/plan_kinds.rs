@@ -7,20 +7,28 @@
 use std::path::{Path, PathBuf};
 
 use kernel::csv::Delimiter;
-use kernel::encoding::{detect, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding};
+use kernel::encoding::{
+    detect, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+};
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
-use kernel::plan::{PlanC01File, PlanDocument};
-use kernel::line_endings::{plan_c02, LineEnding, LineEndingStructureMode, PlanC02File, PlanC02Input};
+use kernel::line_endings::{
+    plan_c02, LineEnding, LineEndingStructureMode, PlanC02File, PlanC02Input,
+};
 use kernel::merge::{plan_f04, PlanF04File, PlanF04Input};
-use kernel::replace_content::{plan_c03, CsvMode, ReplaceMode, PlanC03File, PlanC03Input};
-use kernel::split::{plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input};
+use kernel::plan::{PlanC01File, PlanDocument};
+use kernel::replace_content::{plan_c03, CsvMode, PlanC03File, PlanC03Input, ReplaceMode};
+use kernel::split::{
+    plan_f01, plan_f02, plan_f03, PlanF01File, PlanF01Input, PlanF02Input, PlanF03Input,
+};
 use platform::ids::{derived_ulid, new_ulid};
-use platform::text::{sample_bytes, split_layout, split_layout_by_lines, split_layout_by_parts, SampleSpec};
+use platform::text::{
+    sample_bytes, split_layout, split_layout_by_lines, split_layout_by_parts, SampleSpec,
+};
 
 use crate::{AppState, ProtectedSource, StoredPlan};
 
-fn store(state: &tauri::State<'_, AppState>, plan: &PlanDocument) {
+pub(crate) fn store(state: &tauri::State<'_, AppState>, plan: &PlanDocument) {
     state.plans.lock().unwrap().insert(
         plan.plan_id.clone(),
         StoredPlan {
@@ -32,14 +40,9 @@ fn store(state: &tauri::State<'_, AppState>, plan: &PlanDocument) {
     );
 }
 
-fn require_file(path: &Path) -> Result<PathBuf, KernelError> {
+pub(crate) fn require_file(path: &Path) -> Result<PathBuf, KernelError> {
     let metadata = std::fs::metadata(path).map_err(|error| {
-        KernelError::new(
-            "E2001",
-            format!("{}: {error}", path.display()),
-            None,
-            false,
-        )
+        KernelError::new("E2001", format!("{}: {error}", path.display()), None, false)
     })?;
     if !metadata.is_file() {
         return Err(KernelError::new(
@@ -79,28 +82,25 @@ fn split_layout_for(
 ) -> Result<kernel::split::SplitLayout, KernelError> {
     match kind {
         "f01" => {
-            let bytes = params.target_bytes.ok_or_else(|| {
-                KernelError::missing_param("f01 requires targetBytes")
-            })?;
-            split_layout(absolute, bytes).map_err(|error| {
-                KernelError::new("E1004", error.to_string(), None, false)
-            })
+            let bytes = params
+                .target_bytes
+                .ok_or_else(|| KernelError::missing_param("f01 requires targetBytes"))?;
+            split_layout(absolute, bytes)
+                .map_err(|error| KernelError::new("E1004", error.to_string(), None, false))
         }
         "f02" => {
-            let lines = params.lines_per_part.ok_or_else(|| {
-                KernelError::missing_param("f02 requires linesPerPart")
-            })?;
-            split_layout_by_lines(absolute, lines).map_err(|error| {
-                KernelError::new("E1004", error.to_string(), None, false)
-            })
+            let lines = params
+                .lines_per_part
+                .ok_or_else(|| KernelError::missing_param("f02 requires linesPerPart"))?;
+            split_layout_by_lines(absolute, lines)
+                .map_err(|error| KernelError::new("E1004", error.to_string(), None, false))
         }
         "f03" => {
-            let parts = params.parts.ok_or_else(|| {
-                KernelError::missing_param("f03 requires parts")
-            })?;
-            split_layout_by_parts(absolute, parts).map_err(|error| {
-                KernelError::new("E1004", error.to_string(), None, false)
-            })
+            let parts = params
+                .parts
+                .ok_or_else(|| KernelError::missing_param("f03 requires parts"))?;
+            split_layout_by_parts(absolute, parts)
+                .map_err(|error| KernelError::new("E1004", error.to_string(), None, false))
         }
         other => Err(KernelError::invalid_params(format!(
             "{other} is not a split kind"
@@ -113,7 +113,8 @@ pub fn plan_split_shell(
     kind: &str,
     params: serde_json::Value,
 ) -> Result<PlanDocument, KernelError> {
-    let params: SplitParams = serde_json::from_value(params).map_err(|error| KernelError::invalid_params(error.to_string()))?;
+    let params: SplitParams = serde_json::from_value(params)
+        .map_err(|error| KernelError::invalid_params(error.to_string()))?;
     let absolute = require_file(Path::new(&params.file))?;
     let output_dir = PathBuf::from(&params.output_dir);
     std::fs::create_dir_all(&output_dir).map_err(|error| {
@@ -194,26 +195,26 @@ pub struct MergeParams {
     pub plan_id: Option<String>,
 }
 
-fn default_invalid() -> String {
+pub(crate) fn default_invalid() -> String {
     "replace-and-count".to_string()
 }
 
-fn parse_target(value: &str) -> Result<TargetEncoding, KernelError> {
+pub(crate) fn parse_target(value: &str) -> Result<TargetEncoding, KernelError> {
     TargetEncoding::parse(value)
         .ok_or_else(|| KernelError::invalid_params(format!("unknown target encoding: {value}")))
 }
 
-fn parse_invalid(value: &str) -> Result<InvalidSequencePolicy, KernelError> {
+pub(crate) fn parse_invalid(value: &str) -> Result<InvalidSequencePolicy, KernelError> {
     InvalidSequencePolicy::parse(value).ok_or_else(|| {
         KernelError::invalid_params(format!("unknown invalid-sequence policy: {value}"))
     })
 }
 
-fn parse_source(value: &Option<String>) -> Result<Option<SourceEncoding>, KernelError> {
+pub(crate) fn parse_source(value: &Option<String>) -> Result<Option<SourceEncoding>, KernelError> {
     match value {
-        Some(value) => SourceEncoding::parse(value)
-            .map(Some)
-            .ok_or_else(|| KernelError::invalid_params(format!("unknown source encoding: {value}"))),
+        Some(value) => SourceEncoding::parse(value).map(Some).ok_or_else(|| {
+            KernelError::invalid_params(format!("unknown source encoding: {value}"))
+        }),
         None => Ok(None),
     }
 }
@@ -222,7 +223,8 @@ pub fn plan_merge_shell(
     state: &tauri::State<'_, AppState>,
     params: serde_json::Value,
 ) -> Result<PlanDocument, KernelError> {
-    let params: MergeParams = serde_json::from_value(params).map_err(|error| KernelError::invalid_params(error.to_string()))?;
+    let params: MergeParams = serde_json::from_value(params)
+        .map_err(|error| KernelError::invalid_params(error.to_string()))?;
     if params.files.is_empty() {
         return Err(KernelError::missing_param("f04 requires at least one file"));
     }
@@ -240,9 +242,7 @@ pub fn plan_merge_shell(
                 blocks: 0,
             },
         )
-        .map_err(|error| {
-            KernelError::new("E1004", error.to_string(), None, false)
-        })?;
+        .map_err(|error| KernelError::new("E1004", error.to_string(), None, false))?;
         let source_encoding = match source {
             Some(encoding) => Some(encoding),
             None => detect(&sample.bytes.clone(), PlatformPrior::Other)
@@ -293,11 +293,10 @@ pub struct TranscodeParams {
     pub plan_id: Option<String>,
 }
 
-fn parse_prior(value: &Option<String>) -> Result<PlatformPrior, KernelError> {
+pub(crate) fn parse_prior(value: &Option<String>) -> Result<PlatformPrior, KernelError> {
     match value {
-        Some(value) => PlatformPrior::parse(value).ok_or_else(|| {
-            KernelError::invalid_params(format!("unknown platform prior: {value}"))
-        }),
+        Some(value) => PlatformPrior::parse(value)
+            .ok_or_else(|| KernelError::invalid_params(format!("unknown platform prior: {value}"))),
         None => Ok(PlatformPrior::Other),
     }
 }
@@ -306,7 +305,8 @@ pub fn plan_transcode_shell(
     state: &tauri::State<'_, AppState>,
     params: serde_json::Value,
 ) -> Result<PlanDocument, KernelError> {
-    let params: TranscodeParams = serde_json::from_value(params).map_err(|error| KernelError::invalid_params(error.to_string()))?;
+    let params: TranscodeParams = serde_json::from_value(params)
+        .map_err(|error| KernelError::invalid_params(error.to_string()))?;
     if params.files.is_empty() {
         return Err(KernelError::missing_param("c01 requires at least one file"));
     }
@@ -372,7 +372,8 @@ pub fn plan_line_endings_shell(
     state: &tauri::State<'_, AppState>,
     params: serde_json::Value,
 ) -> Result<PlanDocument, KernelError> {
-    let params: LineEndingsParams = serde_json::from_value(params).map_err(|error| KernelError::invalid_params(error.to_string()))?;
+    let params: LineEndingsParams = serde_json::from_value(params)
+        .map_err(|error| KernelError::invalid_params(error.to_string()))?;
     if params.files.is_empty() {
         return Err(KernelError::missing_param("c02 requires at least one file"));
     }
@@ -395,12 +396,9 @@ pub fn plan_line_endings_shell(
             .unwrap_or_default();
         // 结构模式 → 每文件解析为具体结构（与 CLI 同源：mode.resolve）。
         let resolved = structure.resolve(&absolute.to_string_lossy());
-        let inspect = platform::line_endings::inspect_line_endings(
-            &absolute,
-            resolved,
-            params.sample_bytes,
-        )
-        .map_err(|error| KernelError::new("E1004", error.message, None, false))?;
+        let inspect =
+            platform::line_endings::inspect_line_endings(&absolute, resolved, params.sample_bytes)
+                .map_err(|error| KernelError::new("E1004", error.message, None, false))?;
         files.push(PlanC02File {
             path: absolute.to_string_lossy().into_owned(),
             canonical_path: platform::fs::canonicalize_display(&absolute),
@@ -455,7 +453,8 @@ pub fn plan_replace_shell(
     state: &tauri::State<'_, AppState>,
     params: serde_json::Value,
 ) -> Result<PlanDocument, KernelError> {
-    let params: ReplaceParams = serde_json::from_value(params).map_err(|error| KernelError::invalid_params(error.to_string()))?;
+    let params: ReplaceParams = serde_json::from_value(params)
+        .map_err(|error| KernelError::invalid_params(error.to_string()))?;
     if params.files.is_empty() {
         return Err(KernelError::missing_param("c03 requires at least one file"));
     }
@@ -468,12 +467,13 @@ pub fn plan_replace_shell(
     let csv_mode = CsvMode::parse(&params.csv_mode).ok_or_else(|| {
         KernelError::invalid_params(format!("unknown csv mode: {}", params.csv_mode))
     })?;
-    let delimiter = match &params.delimiter {
-        Some(value) => Some(Delimiter::parse(value).ok_or_else(|| {
-            KernelError::invalid_params(format!("unknown delimiter: {value}"))
-        })?),
-        None => None,
-    };
+    let delimiter =
+        match &params.delimiter {
+            Some(value) => Some(Delimiter::parse(value).ok_or_else(|| {
+                KernelError::invalid_params(format!("unknown delimiter: {value}"))
+            })?),
+            None => None,
+        };
     let source = parse_source(&params.source)?;
     let prior = parse_prior(&params.prior)?;
     let mut files = Vec::with_capacity(params.files.len());

@@ -957,11 +957,13 @@ impl Inner {
         if let Some(event) = pending {
             self.emit_progress(event);
         }
+        // 快照先于事件剪枝：一旦壳层可观测到终态（state/done），恢复快照已不含该任务；
+        // 否则读文件的调用方会看到"内存已终态、文件仍留非终态记录"的窗口。
         if changed {
+            self.persist();
             self.emit_state(task_id, next);
             self.emit(EVENT_DONE, json!({ "taskId": task_id, "summary": report }));
         }
-        self.persist();
     }
 
     fn mark_started(&self, task_id: &str, paused: bool) {
@@ -1087,8 +1089,7 @@ fn run_apply(
             content_rewriter: None,
             directory_lister: Some(&lister),
         };
-        return match kernel::generic_apply::apply_generic_plan(&plan.plan, &options, &mut context)
-        {
+        return match kernel::generic_apply::apply_generic_plan(&plan.plan, &options, &mut context) {
             Ok(outcome) => JobResult {
                 state: match outcome.state {
                     ApplyState::Completed => TaskState::Completed,
@@ -1274,9 +1275,9 @@ fn fs_op_paths(op: &FsOp) -> (String, String) {
         FsOp::Rename { from, to } | FsOp::Copy { from, to } | FsOp::Quarantine { from, to } => {
             (from.clone(), to.clone())
         }
-        FsOp::WriteAtomic { path, .. }
-        | FsOp::CreateDir { path }
-        | FsOp::RemoveDir { path } => (path.clone(), path.clone()),
+        FsOp::WriteAtomic { path, .. } | FsOp::CreateDir { path } | FsOp::RemoveDir { path } => {
+            (path.clone(), path.clone())
+        }
     }
 }
 
@@ -1618,8 +1619,7 @@ mod tests {
         fn new() -> Self {
             // Windows 的时钟分辨率较粗，并行测试可能取到同一时间戳；进程内序号 + PID
             // 保证路径唯一（同 config_store 修复）。
-            static SEQUENCE: std::sync::atomic::AtomicU64 =
-                std::sync::atomic::AtomicU64::new(0);
+            static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1679,6 +1679,23 @@ mod tests {
             entries,
             stats: PlanStats::default(),
             warnings: Vec::new(),
+        }
+    }
+
+    /// 终态剪枝落定的有界等待：内存终态先于快照写盘可见，读文件需等待收敛。
+    fn wait_snapshot_pruned(queue_path: &std::path::Path) -> PersistedQueue {
+        let start = Instant::now();
+        loop {
+            let persisted: PersistedQueue =
+                serde_json::from_str(&fs::read_to_string(queue_path).unwrap()).unwrap();
+            if persisted.tasks.is_empty() {
+                return persisted;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "terminal tasks must not be persisted for crash recovery"
+            );
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -1798,12 +1815,8 @@ mod tests {
         assert!(first.exists());
         assert!(second.exists());
 
-        let persisted: PersistedQueue =
-            serde_json::from_str(&fs::read_to_string(&queue_path).unwrap()).unwrap();
-        assert!(
-            persisted.tasks.is_empty(),
-            "terminal tasks must not be persisted for crash recovery"
-        );
+        let persisted = wait_snapshot_pruned(&queue_path);
+        assert!(persisted.tasks.is_empty());
 
         // C17a：操作日志落库——批次 start/finish、逐条 entry、undo 记 reverted；
         // logFullPaths 默认关闭时不写完整路径（ADR-0013）。
@@ -2334,7 +2347,12 @@ mod tests {
         let entries = vec![kernel::plan::PlanEntry {
             entry_id: "e1".to_string(),
             source: root.join("a.txt").to_string_lossy().into_owned(),
-            target: Some(dst.join("archived").join("a.txt").to_string_lossy().into_owned()),
+            target: Some(
+                dst.join("archived")
+                    .join("a.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             action: kernel::plan::PlanAction::Move,
             relation: None,
             reason: "c07 manifest move".to_string(),
@@ -2391,6 +2409,72 @@ mod tests {
         assert!(root.join("a.txt").exists());
     }
 
+    #[test]
+    fn listing_plan_streams_csv_through_the_desktop_queue_and_undoes() {
+        // UI 接入切片第三批：f10 目录清单经桌面队列走 DirectoryLister 流式写出。
+        let dir = TempDir::new();
+        let root = dir.0.join("tree");
+        let out = dir.0.join("out");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        fs::write(root.join("a.txt"), b"aaa").unwrap();
+        fs::write(root.join("sub/b.txt"), b"bb").unwrap();
+
+        let plan = kernel::listing::plan_f10(kernel::listing::PlanF10Input {
+            plan_id: new_ulid("f10-ui"),
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            files: vec![kernel::listing::PlanF10File {
+                root: root.to_string_lossy().into_owned(),
+                canonical_root: None,
+                target: out.join("listing.csv").to_string_lossy().into_owned(),
+                target_occupied: false,
+                files: 2,
+                dirs: 1,
+                placeholders: 0,
+                skipped: 0,
+                max_depth: 2,
+            }],
+        })
+        .expect("listing plan");
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: dir.0.join("quarantine"),
+                journal_path: dir.0.join("journal.jsonl"),
+                queue_path: dir.0.join("tasks.json"),
+                oplog_path: dir.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_, _| {}),
+        );
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan: plan.clone(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &task_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        let listing_path = out.join("listing.csv");
+        let body = fs::read(&listing_path).unwrap();
+        assert!(
+            body.starts_with(&[0xEF, 0xBB, 0xBF]),
+            "清单以 UTF-8 BOM 开头"
+        );
+        let text = String::from_utf8_lossy(&body[3..]);
+        assert!(text.contains("a.txt"), "清单含文件行");
+        assert!(text.contains("sub"), "清单含目录行");
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert!(
+            !listing_path.exists(),
+            "撤销把清单产物移入隔离目录（reverse=Quarantine）"
+        );
+    }
 
     fn insert_control_task(queue: &TaskQueue, task_id: &str) {
         let summary = TaskSummary {
