@@ -3036,6 +3036,10 @@ mod tests {
         cross_volume: Mutex<bool>,
         /// 故障注入：`true` 时 copy 落盘损坏内容（校验失败路径测试）。
         copy_corrupts: Mutex<bool>,
+        /// 故障注入：写这些路径时返回 E5001（模拟磁盘满/权限失败的条目级失败）。
+        fail_writes: Mutex<Vec<String>>,
+        /// 内存目录集合：支撑 create_dir / remove_dir_if_empty 臂（不模拟非空判定）。
+        dirs: Mutex<Vec<String>>,
     }
 
     impl TestFs {
@@ -3076,6 +3080,15 @@ mod tests {
         fn read_bytes_calls(&self) -> u64 {
             self.read_bytes_calls.load(Ordering::Relaxed)
         }
+
+        fn set_fail_writes(&self, paths: &[&str]) {
+            *self.fail_writes.lock().unwrap() =
+                paths.iter().map(|path| (*path).to_string()).collect();
+        }
+
+        fn dir_exists(&self, path: &str) -> bool {
+            self.dirs.lock().unwrap().iter().any(|dir| dir == path)
+        }
     }
 
     impl FsAdapter for TestFs {
@@ -3090,11 +3103,45 @@ mod tests {
         }
 
         fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
+            if self
+                .fail_writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|blocked| blocked == path)
+            {
+                return Err(KernelError::new(
+                    "E5001",
+                    "injected write failure",
+                    None,
+                    true,
+                ));
+            }
             self.files
                 .lock()
                 .unwrap()
                 .insert(path.to_string(), data.to_vec());
             Ok(())
+        }
+
+        fn create_dir(&self, path: &str) -> Result<(), KernelError> {
+            let mut dirs = self.dirs.lock().unwrap();
+            if dirs.iter().any(|dir| dir == path) {
+                return Err(KernelError::new("E2007", "directory exists", None, false));
+            }
+            dirs.push(path.to_string());
+            Ok(())
+        }
+
+        fn remove_dir_if_empty(&self, path: &str) -> Result<(), KernelError> {
+            let mut dirs = self.dirs.lock().unwrap();
+            match dirs.iter().position(|dir| dir == path) {
+                Some(index) => {
+                    dirs.remove(index);
+                    Ok(())
+                }
+                None => Err(KernelError::new("E2001", "no such directory", None, false)),
+            }
         }
 
         fn rename(
@@ -3134,6 +3181,20 @@ mod tests {
             to: &str,
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
+            if self
+                .fail_writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|blocked| blocked == to)
+            {
+                return Err(KernelError::new(
+                    "E5001",
+                    "injected write failure",
+                    None,
+                    true,
+                ));
+            }
             let mut files = self.files.lock().unwrap();
             let corrupts = *self.copy_corrupts.lock().unwrap();
             let mut data = files
@@ -4982,6 +5043,250 @@ mod tests {
         assert!(fs.exists("/data/b.txt"));
         assert!(!fs.exists("/data/a1.txt"));
         assert_eq!(journal.entries[0].status, JournalStatus::Reverted);
+    }
+
+    /// 取消在第几条条目进度上报后触发（Ports.cancel_after 的语义）。
+    fn cancel_ports(after: u64) -> Ports {
+        let ports = Ports::default();
+        *ports.cancel_after.lock().unwrap() = Some(after);
+        ports
+    }
+
+    fn assert_cancelled(outcome: &ApplyOutcome, arm: &str) {
+        assert_eq!(
+            outcome.state,
+            ApplyState::Cancelled,
+            "{arm} 臂应在条目边界取消"
+        );
+    }
+
+    #[test]
+    fn cancel_rolls_back_applied_entries_in_each_write_arm() {
+        // E4（任务控制）此前只在 Rename 与并发池上有断言；本测试把"取消后已完成条目回滚"
+        // 逐执行臂钉住：copy / move / edit-content / split(1:N) / csv-extract(1:1 产物) / create-dir。
+        let license = crate::license::AlwaysAllowLicense;
+
+        // ① copy：新建产物的逆向是移入隔离目录
+        {
+            let fs = TestFs::with_files(&["/d/a.txt", "/d/b.txt"]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(
+                &plan(vec![
+                    action_entry("e1", "/d/a.txt", Some("/o/a.txt"), PlanAction::Copy),
+                    action_entry("e2", "/d/b.txt", Some("/o/b.txt"), PlanAction::Copy),
+                ]),
+                &ApplyOptions::default(),
+                &mut ctx,
+            )
+            .unwrap();
+            assert_cancelled(&outcome, "copy");
+            assert!(!fs.exists("/o/a.txt"), "取消不留半成品产物");
+            assert!(
+                fs.exists("/d/a.txt") && fs.exists("/d/b.txt"),
+                "copy 不动源"
+            );
+            assert!(
+                !journal
+                    .entries
+                    .iter()
+                    .any(|entry| entry.status == JournalStatus::Applied),
+                "取消后不得残留已应用状态的记账"
+            );
+        }
+
+        // ② move：改名语义的逆向是反向移动
+        {
+            let fs = TestFs::with_files(&["/d/c.txt", "/d/d.txt"]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(
+                &plan(vec![
+                    action_entry("e1", "/d/c.txt", Some("/o/c.txt"), PlanAction::Move),
+                    action_entry("e2", "/d/d.txt", Some("/o/d.txt"), PlanAction::Move),
+                ]),
+                &ApplyOptions::default(),
+                &mut ctx,
+            )
+            .unwrap();
+            assert_cancelled(&outcome, "move");
+            assert!(fs.exists("/d/c.txt"), "已移动的首条目被还原回源路径");
+            assert!(!fs.exists("/o/c.txt"));
+        }
+
+        // ③ edit-content：先备份再改写，逆向是按 dataRef 还原
+        {
+            let fs = TestFs::default();
+            fs.write_file("/d/e.txt", b"abc");
+            fs.write_file("/d/f.txt", b"def");
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            ctx.content_editor = Some(&|data: &[u8]| {
+                Ok(data
+                    .iter()
+                    .map(|byte| byte.to_ascii_uppercase())
+                    .collect::<Vec<u8>>())
+            });
+            let outcome = apply_generic_plan(
+                &plan(vec![
+                    action_entry("e1", "/d/e.txt", None, PlanAction::EditContent),
+                    action_entry("e2", "/d/f.txt", None, PlanAction::EditContent),
+                ]),
+                &ApplyOptions::default(),
+                &mut ctx,
+            )
+            .unwrap();
+            assert_cancelled(&outcome, "edit-content");
+            assert_eq!(fs.read_file("/d/e.txt"), b"abc", "内容改写取消后按备份还原");
+        }
+
+        // ④ split：一个源文件产 1:N 条目，取消发生在第 1 片之后
+        {
+            let fs = TestFs::default();
+            fs.write_file("/d/big.txt", b"aaa\nbbb\nccc\n");
+            let mut accumulator = SplitAccumulator::new(6).unwrap();
+            for _ in 0..3 {
+                accumulator.push_line(4, true);
+            }
+            let plan = plan_f01(PlanF01Input {
+                plan_id: PLAN_ID.to_string(),
+                target_bytes: 6,
+                output_dir: "/o".to_string(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                existing_targets: Vec::new(),
+                files: vec![PlanF01File {
+                    path: "/d/big.txt".to_string(),
+                    canonical_path: None,
+                    group_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_string(),
+                    layout: accumulator.finish(12),
+                }],
+            })
+            .unwrap();
+            assert_eq!(plan.entries.len(), 2, "两条分片条目才有取消空间");
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+            assert_cancelled(&outcome, "split");
+            assert!(!fs.exists("/o/big.1.txt"), "已写分片随取消进隔离目录");
+            assert!(!fs.exists("/o/big.2.txt"));
+        }
+
+        // ⑤ csv-extract：1:1 产物臂（与 csv-rows/csv-dedup/csv-filter/csv-columns/csv-sort 同管道）
+        {
+            let fs = TestFs::default();
+            let first = b"id,name\n1,Alice\n";
+            let second = b"id,name\n2,Bob\n";
+            fs.write_file("/d/a.csv", first);
+            fs.write_file("/d/b.csv", second);
+            let build = |id: &str, source: &str, target: &str, size: u64| {
+                csv_extract_entry(
+                    id,
+                    source,
+                    target,
+                    size,
+                    true,
+                    &["id", "name"],
+                    2,
+                    vec![(1, Some("name"))],
+                )
+            };
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(
+                &plan(vec![
+                    build("e1", "/d/a.csv", "/o/a.csv", first.len() as u64),
+                    build("e2", "/d/b.csv", "/o/b.csv", second.len() as u64),
+                ]),
+                &ApplyOptions::default(),
+                &mut ctx,
+            )
+            .unwrap();
+            assert_cancelled(&outcome, "csv-extract");
+            assert!(!fs.exists("/o/a.csv"), "抽取产物随取消进隔离目录");
+            assert_eq!(fs.read_file("/d/a.csv"), first.to_vec(), "源 CSV 未被改写");
+        }
+
+        // ⑥ create-dir：目录链的逆向是只删空目录
+        {
+            let fs = TestFs::default();
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(
+                &plan(vec![
+                    action_entry("e1", "/d", Some("/o/one"), PlanAction::CreateDir),
+                    action_entry("e2", "/d", Some("/o/two"), PlanAction::CreateDir),
+                ]),
+                &ApplyOptions::default(),
+                &mut ctx,
+            )
+            .unwrap();
+            assert_cancelled(&outcome, "create-dir");
+            assert!(!fs.dir_exists("/o/one"), "已建目录随取消删除");
+        }
+    }
+
+    #[test]
+    fn a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries() {
+        // RBK-02（部分失败）：条目级失败不把整单变成"已应用"，撤销只回滚成功条目。
+        let fs = TestFs::default();
+        fs.write_file("/d/a.txt", b"aaa");
+        fs.write_file("/d/b.txt", b"bbb");
+        fs.set_fail_writes(&["/o/b.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/d/a.txt", Some("/o/a.txt"), PlanAction::Copy),
+                action_entry("e2", "/d/b.txt", Some("/o/b.txt"), PlanAction::Copy),
+            ]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::PartialFailed);
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(outcome.report.entries[1].status, ApplyStatus::Failed);
+        assert!(fs.exists("/o/a.txt"), "成功条目已落盘，等待撤销或重试");
+        assert!(!fs.exists("/o/b.txt"), "失败条目不得留下半成品");
+        assert_eq!(
+            journal
+                .entries
+                .iter()
+                .filter(|entry| entry.status == JournalStatus::Applied)
+                .count(),
+            1,
+            "只有成功条目进入 Journal"
+        );
+
+        let undo = crate::apply::undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1, "撤销只回滚已应用条目，不因失败条目报错");
+        assert!(!fs.exists("/o/a.txt"));
     }
 
     struct QuotaLicense {

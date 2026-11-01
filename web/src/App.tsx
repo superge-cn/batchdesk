@@ -885,7 +885,7 @@ function App() {
           </header>
 
           <div className="content">
-            {activeView === "c09" && (
+            {activeView === "c09" ? (
             <div style={{ display: "contents" }}>
             {error && (
               <div className="banner banner-danger" role="alert">
@@ -1289,6 +1289,8 @@ function App() {
               </div>
             </div>
             </div>
+            ) : (
+              <FeaturePages view={activeView} onBack={() => setActiveView("c09")} />
             )}
           </div>
         </main>

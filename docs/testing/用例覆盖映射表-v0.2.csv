@@ -18,10 +18,10 @@ F02,TXT 按行数分割,阶段 0,P0★,TC-F02-PRE-04,PRE,04,P4,改 N 后旧预�
 F02,TXT 按行数分割,阶段 0,P0★,TC-F02-EXE-01,EXE,01,E1,正常：每满 N 行一份、尾份保留,方案 §5.15、§7.1；T §3.2 F02,✅,CI（cargo test --workspace --all-features）,apply_flow::f02_plan_apply_and_undo_split_every_n_lines,
 F02,TXT 按行数分割,阶段 0,P0★,TC-F02-EXE-02,EXE,02,E2,@T06 无换行单片不误报硬切,方案 §5.15、§7.1；T §3.2 F02,✅,CI（cargo test --workspace --all-features）,crates/kernel/tests/corpus.rs::t06_no_newline_file_is_hard_cut_with_warning,T06 台账＝asserted
 F02,TXT 按行数分割,阶段 0,P0★,TC-F02-EXE-03,EXE,03,E3,尾份与命名冲突策略,方案 §5.15、§7.1；T §3.2 F02,✅,CI（cargo test --workspace --all-features）,apply_flow::f02_plan_apply_and_undo_split_every_n_lines,
-F02,TXT 按行数分割,阶段 0,P0★,TC-F02-EXE-04,EXE,04,E4,执行中暂停/恢复/取消,方案 §5.15、§7.1；T §3.2 F02,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F02,TXT 按行数分割,阶段 0,P0★,TC-F02-EXE-04,EXE,04,E4,执行中暂停/恢复/取消,方案 §5.15、§7.1；T §3.2 F02,✅,CI（cargo test --workspace --all-features）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,
 F02,TXT 按行数分割,阶段 0,P0★,TC-F02-EXE-05,EXE,05,E5,C-2 大文件（行数预扫描进度）,方案 §5.15、§7.1；T §3.2 F02,⛔,真人工（Windows 实机/受控环境）,platform `text::estimate_lines`/`split_layout_by_lines` 流式,行数预扫描进度与 C-2 实测未跑（OQ-16）
 F02,TXT 按行数分割,阶段 0,P0★,TC-F02-RBK-01,RBK,01,R1,撤销新增分片,方案 §5.15、§7.1；T §3.2 F02,✅,CI（cargo test --workspace --all-features）,同上,
-F02,TXT 按行数分割,阶段 0,P0★,TC-F02-RBK-02,RBK,02,R2,部分失败回滚,方案 §5.15、§7.1；T §3.2 F02,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F02,TXT 按行数分割,阶段 0,P0★,TC-F02-RBK-02,RBK,02,R2,部分失败回滚,方案 §5.15、§7.1；T §3.2 F02,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F02,TXT 按行数分割,阶段 0,P0★,TC-F02-RBK-03,RBK,03,R3,产物被占用,方案 §5.15、§7.1；T §3.2 F02,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-PRE-01,PRE,01,P1,正常 TXT 预览,方案 §5.15、§7.1；T §3.2 F03,◐,CI（cargo test --workspace --all-features）,kernel `split` 28 项（Quota 基准）,零落盘与重复预览幂等未纳入 c18 harness
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-PRE-02,PRE,02,P2,份数 1/临界/±1,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --workspace --all-features）,kernel `split` 10 行分 3 份→4/3/3 单测,
@@ -30,10 +30,10 @@ F03,TXT 按份数分割,阶段 0,P0★,TC-F03-PRE-04,PRE,04,P4,改份数后旧�
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-EXE-01,EXE,01,E1,正常均分：禁止行中断裂,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --workspace --all-features）,apply_flow::f03_plan_apply_and_undo_split_by_part_count,
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-EXE-02,EXE,02,E2,@T06 无换行,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --workspace --all-features）,crates/kernel/tests/corpus.rs::t06_no_newline_file_is_hard_cut_with_warning,T06 台账＝asserted
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-EXE-03,EXE,03,E3,余数分配与末片并入增长行,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --workspace --all-features）,apply_flow::f03_plan_apply_and_undo_split_by_part_count,
-F03,TXT 按份数分割,阶段 0,P0★,TC-F03-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F03,TXT 按份数分割,阶段 0,P0★,TC-F03-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --workspace --all-features）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-EXE-05,EXE,05,E5,超大文件双遍读盘进度,方案 §5.15、§7.1；T §3.2 F03,⛔,真人工（Windows 实机/受控环境）,platform `text::split_layout_by_parts`（预扫描＋第二遍流式）,双遍读盘进度实测未跑（C-2，OQ-16）
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-RBK-01,RBK,01,R1,撤销分片,方案 §5.15、§7.1；T §3.2 F03,✅,CI（cargo test --workspace --all-features）,同上,
-F03,TXT 按份数分割,阶段 0,P0★,TC-F03-RBK-02,RBK,02,R2,部分失败,方案 §5.15、§7.1；T §3.2 F03,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F03,TXT 按份数分割,阶段 0,P0★,TC-F03-RBK-02,RBK,02,R2,部分失败,方案 §5.15、§7.1；T §3.2 F03,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F03,TXT 按份数分割,阶段 0,P0★,TC-F03-RBK-03,RBK,03,R3,产物占用,方案 §5.15、§7.1；T §3.2 F03,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F04,TXT 合并,阶段 0,P0★,TC-F04-PRE-01,PRE,01,P1,多 TXT 正常预览,方案 §5.15、§5.2；T §3.2 F04,◐,CI（cargo test --workspace --all-features）,kernel `merge` 9 项,零落盘与重复预览幂等未纳入 c18 harness
 F04,TXT 合并,阶段 0,P0★,TC-F04-PRE-02,PRE,02,P2,目标编码与 BOM 策略组合边界,方案 §5.15、§5.2；T §3.2 F04,✅,CI（cargo test --workspace --all-features）,kernel `encoding` 11 项（BOM/置信门控）＋apply_flow::f04_detects_encodings_and_writes_one_bom,
@@ -42,10 +42,10 @@ F04,TXT 合并,阶段 0,P0★,TC-F04-PRE-04,PRE,04,P4,改编码后旧预览失�
 F04,TXT 合并,阶段 0,P0★,TC-F04-EXE-01,EXE,01,E1,正常按序合并,方案 §5.15、§5.2；T §3.2 F04,✅,CI（cargo test --workspace --all-features）,apply_flow::f04_plan_apply_and_undo_merge_with_encoding_unification,
 F04,TXT 合并,阶段 0,P0★,TC-F04-EXE-02,EXE,02,E2,@K03 BOM 只写一次；@K08 UTF-16 转码,方案 §5.15、§5.2；T §3.2 F04,◐,CI（cargo test --workspace --all-features）,crates/kernel/tests/corpus.rs::k03_bom_wins_and_target_bom_follows_caller；k08_utf16_bom_sample_detects_and_transcodes_clean,K03 台账＝asserted；K08 台账＝partial；F04 每片/产物 BOM 策略在 F05 侧仍 partial
 F04,TXT 合并,阶段 0,P0★,TC-F04-EXE-03,EXE,03,E3,非法编码组合/skip 策略,方案 §5.15、§5.2；T §3.2 F04,✅,CI（cargo test --workspace --all-features）,apply_flow::f04_plan_apply_and_undo_merge_with_encoding_unification,
-F04,TXT 合并,阶段 0,P0★,TC-F04-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.15、§5.2；T §3.2 F04,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F04,TXT 合并,阶段 0,P0★,TC-F04-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.15、§5.2；T §3.2 F04,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）
 F04,TXT 合并,阶段 0,P0★,TC-F04-EXE-05,EXE,05,E5,大文件流式合并,方案 §5.15、§5.2；T §3.2 F04,⛔,真人工（Windows 实机/受控环境）,generic_apply Merge 分支（整文件读入内存）,实现缺口：大文件流式合并未做（内存 O(产物)）；进度仅到单条 entry
 F04,TXT 合并,阶段 0,P0★,TC-F04-RBK-01,RBK,01,R1,撤销合并产物,方案 §5.15、§5.2；T §3.2 F04,✅,CI（cargo test --workspace --all-features）,同上（新建产物 reverse=Quarantine／覆盖 WriteAtomic{dataRef}）,
-F04,TXT 合并,阶段 0,P0★,TC-F04-RBK-02,RBK,02,R2,部分失败,方案 §5.15、§5.2；T §3.2 F04,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F04,TXT 合并,阶段 0,P0★,TC-F04-RBK-02,RBK,02,R2,部分失败,方案 §5.15、§5.2；T §3.2 F04,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F04,TXT 合并,阶段 0,P0★,TC-F04-RBK-03,RBK,03,R3,产物占用,方案 §5.15、§5.2；T §3.2 F04,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F05,CSV 分割,阶段 0,P0★,TC-F05-PRE-01,PRE,01,P1,正常 CSV 预览,方案 §5.3；T §3.2 F05,◐,CI（cargo test --workspace --all-features）,kernel `csv` 18 项,零落盘与重复预览幂等未纳入 c18 harness
 F05,CSV 分割,阶段 0,P0★,TC-F05-PRE-02,PRE,02,P2,分片字节/行数典型与临界,方案 §5.3；T §3.2 F05,✅,CI（cargo test --workspace --all-features）,kernel `csv` 单记录超限独占一片＋platform `csv` 6 项,
@@ -54,10 +54,10 @@ F05,CSV 分割,阶段 0,P0★,TC-F05-PRE-04,PRE,04,P4,改参数后旧预览失�
 F05,CSV 分割,阶段 0,P0★,TC-F05-EXE-01,EXE,01,E1,正常：按记录边界切分、每片保留表头,方案 §5.3；T §3.2 F05,✅,CI（cargo test --workspace --all-features）,apply_flow::f05_plan_apply_and_undo_repeats_the_csv_header,
 F05,CSV 分割,阶段 0,P0★,TC-F05-EXE-02,EXE,02,E2,@T01 引号不闭合按末条记录；@T04 列数漂移计数上报,方案 §5.3；T §3.2 F05,✅,CI（cargo test --workspace --all-features）,corpus.rs::t01_unclosed_quote_is_kept_as_last_record_with_warning；t04 列数漂移 dirty_rows=3,T01 台账＝asserted；T04 台账＝asserted
 F05,CSV 分割,阶段 0,P0★,TC-F05-EXE-03,EXE,03,E3,@T02 引号内换行不切记录,方案 §5.3；T §3.2 F05,✅,CI（cargo test --workspace --all-features）,corpus.rs::t02_quoted_newlines_do_not_split_records,T02 台账＝asserted
-F05,CSV 分割,阶段 0,P0★,TC-F05-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.3；T §3.2 F05,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F05,CSV 分割,阶段 0,P0★,TC-F05-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.3；T §3.2 F05,✅,CI（cargo test --workspace --all-features）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,
 F05,CSV 分割,阶段 0,P0★,TC-F05-EXE-05,EXE,05,E5,大文件流式（不整读）,方案 §5.3；T §3.2 F05,⛔,真人工（Windows 实机/受控环境）,platform `csv_split_layout` 流式扫描＋FsAdapter::copy_ranges_atomic,实现缺口：输出编码转换未接（源字节直通）、>10 MB 多区间流式写未做
 F05,CSV 分割,阶段 0,P0★,TC-F05-RBK-01,RBK,01,R1,撤销分片产物,方案 §5.3；T §3.2 F05,✅,CI（cargo test --workspace --all-features）,同上（copy_ranges_atomic 一次原子写，撤销进隔离目录）,
-F05,CSV 分割,阶段 0,P0★,TC-F05-RBK-02,RBK,02,R2,部分失败,方案 §5.3；T §3.2 F05,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F05,CSV 分割,阶段 0,P0★,TC-F05-RBK-02,RBK,02,R2,部分失败,方案 §5.3；T §3.2 F05,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F05,CSV 分割,阶段 0,P0★,TC-F05-RBK-03,RBK,03,R3,产物占用,方案 §5.3；T §3.2 F05,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F06,CSV 合并,阶段 0,P0★,TC-F06-PRE-01,PRE,01,P1,多 CSV 正常预览,方案 §5.4、11.6-16；T §3.2 F06,◐,CI（cargo test --workspace --all-features）,kernel `csv_merge` 14 项,零落盘与重复预览幂等未纳入 c18 harness
 F06,CSV 合并,阶段 0,P0★,TC-F06-PRE-02,PRE,02,P2,列对齐区间：strict 与非 strict,方案 §5.4、11.6-16；T §3.2 F06,✅,CI（cargo test --workspace --all-features）,kernel `csv_merge` strict 阻断 E3004 单测＋apply_flow::f06_strict_mode_blocks_a_schema_mismatch,
@@ -67,9 +67,9 @@ F06,CSV 合并,阶段 0,P0★,TC-F06-EXE-01,EXE,01,E1,正常：列名对齐缺�
 F06,CSV 合并,阶段 0,P0★,TC-F06-EXE-02,EXE,02,E2,@T07 无表头按列序号对齐,方案 §5.4、11.6-16；T §3.2 F06,✅,CI（cargo test --workspace --all-features）,corpus.rs::t07_headerless_sample_aligns_by_column_position＋apply_flow::f06_plan_surfaces_headerless_and_header_normalization_warnings,T07 台账＝asserted
 F06,CSV 合并,阶段 0,P0★,TC-F06-EXE-03,EXE,03,E3,@T08 表头规范化与重复列名比对,方案 §5.4、11.6-16；T §3.2 F06,✅,CI（cargo test --workspace --all-features）,corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing（表头规范化与重复列名）,T08 台账＝asserted
 F06,CSV 合并,阶段 0,P0★,TC-F06-EXE-04,EXE,04,E4,列不一致补空/skip 与 strict 阻断,方案 §5.4、11.6-16；T §3.2 F06,✅,CI（cargo test --workspace --all-features）,kernel `generic_apply` 40 项（含冲突二次裁决）,C19 四策略逐项未测（阶段 1）
-F06,CSV 合并,阶段 0,P0★,TC-F06-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.4、11.6-16；T §3.2 F06,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F06,CSV 合并,阶段 0,P0★,TC-F06-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.4、11.6-16；T §3.2 F06,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）
 F06,CSV 合并,阶段 0,P0★,TC-F06-RBK-01,RBK,01,R1,撤销合并产物,方案 §5.4、11.6-16；T §3.2 F06,✅,CI（cargo test --workspace --all-features）,同上,
-F06,CSV 合并,阶段 0,P0★,TC-F06-RBK-02,RBK,02,R2,部分失败,方案 §5.4、11.6-16；T §3.2 F06,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F06,CSV 合并,阶段 0,P0★,TC-F06-RBK-02,RBK,02,R2,部分失败,方案 §5.4、11.6-16；T §3.2 F06,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F06,CSV 合并,阶段 0,P0★,TC-F06-RBK-03,RBK,03,R3,产物占用,方案 §5.4、11.6-16；T §3.2 F06,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-PRE-01,PRE,01,P1,按列名/列序正常预览,方案 §5.15；T §3.2 F07,◐,CI（cargo test --workspace --all-features）,kernel `csv_extract` 12 项,零落盘与重复预览幂等未纳入 c18 harness
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-PRE-02,PRE,02,P2,列序号 1/最大/越界临界,方案 §5.15；T §3.2 F07,✅,CI（cargo test --workspace --all-features）,kernel `csv_extract` 序号越界 E3004 单测,
@@ -79,9 +79,9 @@ F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-EXE-01,EXE,01,E1,正常导出：�
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-EXE-02,EXE,02,E2,@T08 重复列名按出现序号,方案 §5.15；T §3.2 F07,✅,CI（cargo test --workspace --all-features）,corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing,T08 台账＝asserted
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-EXE-03,EXE,03,E3,列不存在/越界报错不写产物,方案 §5.15；T §3.2 F07,✅,CI（cargo test --workspace --all-features）,apply_flow::f07_plan_apply_and_undo_extracts_columns_in_order,
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-EXE-04,EXE,04,E4,重复输出目标 E1002 与 skip,方案 §5.15；T §3.2 F07,✅,CI（cargo test --workspace --all-features）,kernel `conflict` 9 项（existing-target→skip）,C19 四策略逐项未测（阶段 1）
-F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.15；T §3.2 F07,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.15；T §3.2 F07,✅,CI（cargo test --workspace --all-features）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-RBK-01,RBK,01,R1,撤销导出产物,方案 §5.15；T §3.2 F07,✅,CI（cargo test --workspace --all-features）,同上,
-F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 F07,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 F07,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F07,CSV 抽取指定列,阶段 0,P0★,TC-F07-RBK-03,RBK,03,R3,产物占用,方案 §5.15；T §3.2 F07,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-PRE-01,PRE,01,P1,正常预览,方案 §5.15；T §3.2 F08,◐,CI（cargo test --workspace --all-features）,kernel `csv_rows` 10 项,零落盘与重复预览幂等未纳入 c18 harness
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-PRE-02,PRE,02,P2,N=0/1/临界/±1/超总行数,方案 §5.15；T §3.2 F08,✅,CI（cargo test --workspace --all-features）,apply_flow::f08_zero_rows_writes_only_the_header＋kernel count-exceeds-rows 告警单测,
@@ -91,9 +91,9 @@ F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-EXE-01,EXE,01,E1,正常取前 N,�
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-EXE-02,EXE,02,E2,后 N 取尾,方案 §5.15；T §3.2 F08,✅,CI（cargo test --workspace --all-features）,apply_flow::f08_last_window_keeps_the_tail,
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-EXE-03,EXE,03,E3,N=0 仅写表头,方案 §5.15；T §3.2 F08,✅,CI（cargo test --workspace --all-features）,apply_flow::f08_zero_rows_writes_only_the_header,
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-EXE-04,EXE,04,E4,@T04 列数漂移原样输出,方案 §5.15；T §3.2 F08,✅,CI（cargo test --workspace --all-features）,corpus.rs::t04_column_drift_is_counted_without_correction,T04 台账＝asserted
-F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.15；T §3.2 F08,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.15；T §3.2 F08,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-RBK-01,RBK,01,R1,撤销产物,方案 §5.15；T §3.2 F08,✅,CI（cargo test --workspace --all-features）,同上,
-F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 F08,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 F08,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F08,CSV 抽取数量行,阶段 0,P0★,TC-F08-RBK-03,RBK,03,R3,产物占用,方案 §5.15；T §3.2 F08,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-PRE-01,PRE,01,P1,正常区间预览,方案 §5.15；T §3.2 F09,◐,CI（cargo test --workspace --all-features）,kernel `csv_range` 9 项,零落盘与重复预览幂等未纳入 c18 harness
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-PRE-02,PRE,02,P2,X=Y/Y<X/Y 超总行数/跳前段,方案 §5.15；T §3.2 F09,✅,CI（cargo test --workspace --all-features）,apply_flow::f09_rejects_an_invalid_range＋kernel range-exceeds-rows 告警单测,
@@ -102,10 +102,10 @@ F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-PRE-04,PRE,04,P4,改区间后旧�
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-EXE-01,EXE,01,E1,正常取 X–Y 且保留源 CRLF,方案 §5.15；T §3.2 F09,✅,CI（cargo test --workspace --all-features）,apply_flow::f09_plan_apply_and_undo_extracts_row_range_preserving_crlf,
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-EXE-02,EXE,02,E2,@T02 引号内换行按一条记录,方案 §5.15；T §3.2 F09,✅,CI（cargo test --workspace --all-features）,corpus.rs::t02_quoted_newlines_do_not_split_records,T02 台账＝asserted
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-EXE-03,EXE,03,E3,非法区间 E1002/E3004 不写产物,方案 §5.15；T §3.2 F09,✅,CI（cargo test --workspace --all-features）,apply_flow::f09_range_beyond_rows_warns_and_clamps_the_output,
-F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.15；T §3.2 F09,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-EXE-04,EXE,04,E4,执行中暂停/取消,方案 §5.15；T §3.2 F09,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-EXE-05,EXE,05,E5,跳过前段不整读（read_ranges）,方案 §5.15；T §3.2 F09,◐,CI（cargo test --workspace --all-features）,FsAdapter::read_ranges 单测＋kernel range apply 断言不调用 read_bytes,选中区间仍读入内存后转码；C-2 级实测未跑（OQ-16）
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-RBK-01,RBK,01,R1,撤销产物,方案 §5.15；T §3.2 F09,✅,CI（cargo test --workspace --all-features）,同上,
-F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 F09,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 F09,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 F09,CSV 抽取位置行,阶段 0,P0★,TC-F09-RBK-03,RBK,03,R3,产物占用,方案 §5.15；T §3.2 F09,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 F10,生成目录清单,阶段 0,P0★,TC-F10-PRE-01,PRE,01,P1,C-1 目录树预览（摘要计数）,方案 §5.15、§4.8；T §3.2 F10,◐,CI（cargo test --workspace --all-features）,kernel `listing` 6 项,零落盘与重复预览幂等未纳入 c18 harness
 F10,生成目录清单,阶段 0,P0★,TC-F10-PRE-02,PRE,02,P2,清单字段组合与层级边界,方案 §5.15、§4.8；T §3.2 F10,✅,CI（cargo test --workspace --all-features）,platform `listing` 4 项（层级从 1 起、目录大小 0、RFC3339）,
@@ -139,7 +139,7 @@ F12,批量重命名,阶段 0,P0★,TC-F12-EXE-01,EXE,01,E1,正常改名：无环
 F12,批量重命名,阶段 0,P0★,TC-F12-EXE-02,EXE,02,E2,@R02 大小写折叠恢复（实机）,方案 §5.13；T §3.2 F12,◐,真人工（Windows 实机/受控环境）,corpus.rs::r02_case_only_targets_conflict_only_on_case_insensitive_hosts（台账 asserted）,文件系统层不敏感行为需 Windows/macOS 实机（C06-EXE-02 同源）→ Windows 实机日
 F12,批量重命名,阶段 0,P0★,TC-F12-EXE-03,EXE,03,E3,@R01 长路径分级 200/259/260,方案 §5.13；T §3.2 F12,✅,CI（cargo test --workspace --all-features）,kernel `rename` 长路径三级（200/259/260×开关）单测＋corpus R01 asserted,UNC canonicalize 行为矩阵待实机
 F12,批量重命名,阶段 0,P0★,TC-F12-EXE-04,EXE,04,E4,@E03 只读目标,方案 §5.13；T §3.2 F12,⛔,真人工（Windows 实机/受控环境）,kernel `generic_apply` E2007 占用语义,E03 只读语料台账＝pending，且占用/只读属实机
-F12,批量重命名,阶段 0,P0★,TC-F12-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.13；T §3.2 F12,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F12,批量重命名,阶段 0,P0★,TC-F12-EXE-05,EXE,05,E5,执行中暂停/取消,方案 §5.13；T §3.2 F12,✅,CI（cargo test --workspace --all-features）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,
 F12,批量重命名,阶段 0,P0★,TC-F12-RBK-01,RBK,01,R1,映射反查恢复,方案 §5.13；T §3.2 F12,✅,CI（cargo test --workspace --all-features）,apply_flow::f12_prefix_plan_apply_and_undo_renames_files_and_directories,
 F12,批量重命名,阶段 0,P0★,TC-F12-RBK-02,RBK,02,R2,部分失败,方案 §5.13；T §3.2 F12,✅,CI（cargo test --workspace --all-features）,apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（同族）,
 F12,批量重命名,阶段 0,P0★,TC-F12-RBK-03,RBK,03,R3,目标被占用,方案 §5.13；T §3.2 F12,◐,CI（cargo test --workspace --all-features）,apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（占用落点判 E2007）,只读属性场景属实机
@@ -151,7 +151,7 @@ F13,正则重命名,阶段 0,P0★,TC-F13-EXE-01,EXE,01,E1,正常捕获组改名
 F13,正则重命名,阶段 0,P0★,TC-F13-EXE-02,EXE,02,E2,非法正则报错不写,方案 §5.5、§7.8；T §3.2 F13,✅,CI（cargo test --workspace --all-features）,apply_flow::f13_rejects_invalid_regex_and_missing_capture_references,
 F13,正则重命名,阶段 0,P0★,TC-F13-EXE-03,EXE,03,E3,无匹配不产条目,方案 §5.5、§7.8；T §3.2 F13,✅,CI（cargo test --workspace --all-features）,apply_flow::f13_no_match_creates_no_entries_and_writes_nothing,
 F13,正则重命名,阶段 0,P0★,TC-F13-EXE-04,EXE,04,E4,两阶段与冲突复用 F12,方案 §5.5、§7.8；T §3.2 F13,✅,CI（cargo test --workspace --all-features）,kernel `rename` 10 项（两阶段编排共用）,
-F13,正则重命名,阶段 0,P0★,TC-F13-EXE-05,EXE,05,E5,执行中取消,方案 §5.5、§7.8；T §3.2 F13,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,功能级取消点核对待 e2e
+F13,正则重命名,阶段 0,P0★,TC-F13-EXE-05,EXE,05,E5,执行中取消,方案 §5.5、§7.8；T §3.2 F13,✅,CI（cargo test --workspace --all-features）,壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）,
 F13,正则重命名,阶段 0,P0★,TC-F13-RBK-01,RBK,01,R1,撤销改名映射,方案 §5.5、§7.8；T §3.2 F13,✅,CI（cargo test --workspace --all-features）,同上,
 F13,正则重命名,阶段 0,P0★,TC-F13-RBK-02,RBK,02,R2,部分失败,方案 §5.5、§7.8；T §3.2 F13,◐,CI（cargo test --workspace --all-features）,apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（同族载体）,本功能部分失败注入未测
 F13,正则重命名,阶段 0,P0★,TC-F13-RBK-03,RBK,03,R3,目标占用,方案 §5.5、§7.8；T §3.2 F13,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01/E03 属人工与实机场景
@@ -177,7 +177,7 @@ C02,换行符转换,阶段 0,P0★,TC-C02-EXE-03,EXE,03,E3,二进制/UTF-16 bloc
 C02,换行符转换,阶段 0,P0★,TC-C02-EXE-04,EXE,04,E4,执行中取消,方案 §5.15；T §3.2 C02,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel,mid-stream 取消未做（登记缺口）
 C02,换行符转换,阶段 0,P0★,TC-C02-EXE-05,EXE,05,E5,大文件流式改写,方案 §5.15；T §3.2 C02,⛔,真人工（Windows 实机/受控环境）,FsAdapter::rewrite_atomic_with 流式（设计 04 v1.8）,C-2 级实测未跑（OQ-16）
 C02,换行符转换,阶段 0,P0★,TC-C02-RBK-01,RBK,01,R1,撤销还原原字节,方案 §5.15；T §3.2 C02,✅,CI（cargo test --workspace --all-features）,同上（rewrite_atomic_with 流式＋备份还原）,
-C02,换行符转换,阶段 0,P0★,TC-C02-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 C02,◐,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）,本功能部分失败注入未测
+C02,换行符转换,阶段 0,P0★,TC-C02-RBK-02,RBK,02,R2,部分失败,方案 §5.15；T §3.2 C02,◐,CI（cargo test --workspace --all-features）,generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）,本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体
 C02,换行符转换,阶段 0,P0★,TC-C02-RBK-03,RBK,03,R3,产物占用,方案 §5.15；T §3.2 C02,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 C03,批量查找替换,阶段 0,P0★,TC-C03-PRE-01,PRE,01,P1,普通与正则替换预览（匹配数/上下文）,方案 §5.14；T §3.2 C03,◐,CI（cargo test --workspace --all-features）,kernel `replace_content` 11 项,零落盘与重复预览幂等未纳入 c18 harness
 C03,批量查找替换,阶段 0,P0★,TC-C03-PRE-02,PRE,02,P2,正则捕获组与空替换边界,方案 §5.14；T §3.2 C03,✅,CI（cargo test --workspace --all-features）,kernel `replace_content` 空替换 Danger 与无匹配 skip 单测,
@@ -252,9 +252,9 @@ C18,执行前预览/干跑,阶段 0,P0★,TC-C18-RBK-02,RBK,02,R○2,失效即�
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-01,PRE,01,P1,正常输入触发预览、逐项差异可见、零落盘、可退出,方案 §5.13、§7.4；T §3.2 C05,✅,CI（cargo test --workspace --all-features）,apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects,
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-02,PRE,02,P2,参数边界（--find 空、scope 非法 E1002）,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel `name_replace`/`regex_rename` 参数校验单测,缺 CLI 层边界 ±1 断言（已登记小缺口）
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-03,PRE,03,P3,危险项标注＋未选策略阻断＋不覆盖,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled,「未选策略时执行入口阻断」属 UI 交互（F12 页已内嵌预览面板，阻断断言待 WebDriver）
-C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-04,PRE,04,P4,预览失效：改参数后旧预览失效、执行被阻断,方案 §5.13、§7.4；T §3.2 C05,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,壳层 renamePreview 命令已就位（ADR-0040）,面板语义（参数变化→旧预览失效）待 e2e 断言
+C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-04,PRE,04,P4,预览失效：改参数后旧预览失效、执行被阻断,方案 §5.13、§7.4；T §3.2 C05,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,壳层 renamePreview 命令已就位（ADR-0040）,面板语义（参数变化→旧预览失效）待 e2e 断言
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-05,PRE,05,P5,冲突矩阵抽样（existing/within-batch/case-only）,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel `rename` 冲突扫描单测,preview 层未逐类断言（可补两条参数化单测）
-C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-06,PRE,06,P6,预览刷新,方案 §5.13、§7.4；T §3.2 C05,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,同 PRE-04,预览刷新为 UI 语义
+C05,预览与冲突检测,阶段 0,P0★,TC-C05-PRE-06,PRE,06,P6,预览刷新,方案 §5.13、§7.4；T §3.2 C05,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,同 PRE-04,预览刷新为 UI 语义
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-EXE-01,EXE,01,E○1,正常标注链跑通（预览→确认→执行）,方案 §5.13、§7.4；T §3.2 C05,◐,CI（cargo test --workspace --all-features）,kernel `preview` 4 项＋CLI c05,「确认→执行」衔接待 UI/e2e
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-EXE-02,EXE,02,E○2,阻断路径零副作用,方案 §5.13、§7.4；T §3.2 C05,✅,CI（cargo test --workspace --all-features）,kernel::preview::tests::non_rename_kinds_are_rejected_with_e1002,
 C05,预览与冲突检测,阶段 0,P0★,TC-C05-RBK-01,RBK,01,R○1,映射可查（Journal/oplog 反查）,方案 §5.13、§7.4；T §3.2 C05,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,apply_and_undo_run_through_the_queue_with_events（oplog 与 Journal 反查）,
@@ -276,17 +276,17 @@ S01,执行前预检,阶段 0,P0,TC-S01-PRE-02,PRE,02,P6,磁盘余量按 §9.1 �
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-03,PRE,03,P6,命中阻断（E2004 零副作用）,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,src-tauri preflightPlan／applyPlan E2004 前置阻断（实现）,壳层阻断路径断言待补（已登记小缺口）；入口交互待 UI
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-04,PRE,04,P6,环境变化重算,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层每次 applyPlan 重跑预检,缺「两次采集不同结论」显式断言
 S01,执行前预检,阶段 0,P0,TC-S01-PRE-05,PRE,05,P6,UNC 不可达降级不阻塞,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --workspace --all-features）,kernel UNC 超时降级单测＋platform 2 秒探测,真 UNC 环境归 Windows 实机日
-S01,执行前预检,阶段 0,P0,TC-S01-PRE-06,PRE,06,P6,报告可读,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,PreflightReport DTO（web 已呈现报告）,可读性（人话/分层）待 UI 断言
+S01,执行前预检,阶段 0,P0,TC-S01-PRE-06,PRE,06,P6,报告可读,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,PreflightReport DTO（web 已呈现报告）,可读性（人话/分层）待 UI 断言
 S01,执行前预检,阶段 0,P0,TC-S01-EXE-01,EXE,01,E○1,预检通过→执行,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,壳层阻断与 apply 测试,端到端组合待 e2e
 S01,执行前预检,阶段 0,P0,TC-S01-EXE-02,EXE,02,E○2,预检中取消,方案 §3.3、§4.9、§9.1、11.6-12,⛔,待人类裁决（TC §5.1 阻塞类型＝裁决）,无,「预检中取消」语义未定义：预检是同步快照、不存在中途可取消态；需人类走方案 §11.6 澄清后再定用例（v0.1 已登记为 OQ 候选）
 S01,执行前预检,阶段 0,P0,TC-S01-RBK-01,RBK,01,R○1,不通过零副作用,方案 §3.3、§4.9、§9.1、11.6-12,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,applyPlan E2004 返回且零变更（实现）,断言待补（同 PRE-03）
-S01,执行前预检,阶段 0,P0,TC-S01-RBK-02,RBK,02,R○2,无「跳过预检」入口,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,默认无该入口（实现事实）,UI 层断言待建
+S01,执行前预检,阶段 0,P0,TC-S01-RBK-02,RBK,02,R○2,无「跳过预检」入口,方案 §3.3、§4.9、§9.1、11.6-12,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,默认无该入口（实现事实）,UI 层断言待建
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-01,PRE,01,P6,默认空名单不误拦,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,各功能计划在空名单下零 blocked（split/rename/csv_* 单测隐含）,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-02,PRE,02,P6,自定义名单命中（literal）,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,kernel::preflight::tests::protected_literal_and_canonical_hits_block_the_entry,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-03,PRE,03,P6,折叠/子路径（canonical 命中）,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,同上＋generic_apply::protected_path_hit,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-04,PRE,04,P6,名单变更重算（旧预览失效 E1002）,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes,端到端重算待 e2e
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-05,PRE,05,P6,UNC/链接路径名单,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,◐,CI（cargo test --workspace --all-features）,platform `preflight` is_network_path 与 probe 单测,名单×UNC 组合断言未写；真环境归实机日
-S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-06,PRE,06,P6,二次确认文案,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,🔶,WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）,无,二次确认文案待 UI（U v1.3 token）
+S02,保护目录执行层复核,阶段 0,P0,TC-S02-PRE-06,PRE,06,P6,二次确认文案,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,🔶,WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）,无,二次确认文案待 UI（U v1.3 token）
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-EXE-01,EXE,01,E○1,命中写入尝试被阻断并给提示,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,◐,CI（cargo test --workspace --all-features）,generic_apply::protected_target_is_skipped_before_any_change＋protected_source_is_rechecked_during_execution,提示呈现待 UI
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-EXE-02,EXE,02,E○2,默认名单态写入不误拦,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,各功能 apply_flow 集成测试均在空名单下全量成功,
 S02,保护目录执行层复核,阶段 0,P0,TC-S02-RBK-01,RBK,01,R○1,阻断零副作用,方案 §3.3、§9.2、11.6-9；T v1.12 R-T15,✅,CI（cargo test --workspace --all-features）,generic_apply::protected_target_is_skipped_before_any_change,

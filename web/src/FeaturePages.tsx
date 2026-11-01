@@ -9,6 +9,8 @@ import {
   listenTaskState,
   planOperation,
   renamePreview,
+  cancelTask,
+  retryTask,
   toIpcError,
   undoDryRun,
   undoPlan
@@ -51,6 +53,8 @@ type Busy = "plan" | "apply" | "undo" | null;
 
 interface TaskView {
   taskId: string;
+  /** apply 任务才可重试失败项；undo 任务由壳层按 E1002 拒绝。 */
+  kind: "apply" | "undo";
   state: TaskState;
   phase: ProgressPhase;
   done: number;
@@ -681,6 +685,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
       });
       setTask({
         taskId: handle.taskId,
+        kind: "apply",
         state: "queued",
         phase: "queued",
         done: 0,
@@ -703,12 +708,46 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
       const handle = await undoPlan(plan.planId);
       setTask({
         taskId: handle.taskId,
+        kind: "undo",
         state: "queued",
         phase: "queued",
         done: 0,
         total: 0
       });
       setNotice("撤销任务已加入队列；回滚进度通过 task:// 事件推送。");
+    } catch (value) {
+      setError(toIpcError(value));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onCancel = async () => {
+    if (!task) return;
+    setError(null);
+    try {
+      await cancelTask(task.taskId);
+      setNotice("已请求取消：在执行中条目边界停止并回滚已完成条目。");
+    } catch (value) {
+      setError(toIpcError(value));
+    }
+  };
+
+  const onRetryFailed = async () => {
+    if (!task) return;
+    setBusy("apply");
+    setError(null);
+    try {
+      const handle = await retryTask(task.taskId);
+      setTask({
+        taskId: handle.taskId,
+        kind: "apply",
+        state: "queued",
+        phase: "queued",
+        done: 0,
+        total: task.total
+      });
+      setNotice("重试任务已入队（新 taskId 引用原 planId，仅重跑失败条目）。");
     } catch (value) {
       setError(toIpcError(value));
     } finally {
@@ -865,6 +904,31 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 {busy === "apply" ? <Loader2 size={16} className="spin" /> : null}
                 {active ? "执行中…" : "执行"}
               </button>
+              {active && (
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  data-testid="cancel-task"
+                  onClick={onCancel}
+                  disabled={task?.state === "cancelling"}
+                >
+                  {task?.state === "cancelling" ? "取消中…" : "取消"}
+                </button>
+              )}
+              {task !== null &&
+                !active &&
+                task.kind === "apply" &&
+                ["partial-failed", "failed"].includes(task.state) && (
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    data-testid="retry-failed"
+                    onClick={onRetryFailed}
+                    disabled={busy !== null}
+                  >
+                    重试失败项
+                  </button>
+                )}
               <button
                 className="button button-secondary"
                 type="button"

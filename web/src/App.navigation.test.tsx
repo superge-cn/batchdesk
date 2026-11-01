@@ -1,0 +1,78 @@
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import App from "./App";
+
+// 导航可达性回归（ADR-0040…0044）：功能视图必须真能被点出来。
+// 抓到的历史缺陷：App import 了 FeaturePages 却从未渲染它——导航只换标题、主区渲染空白，
+// 而 `pnpm build` 与 cargo 侧测试都无法发现（tsc 不报未使用的导入分支）。
+const VIEWS: Array<[string, string]> = [
+  ["CSV 分割", "CSV 分割（F05）"],
+  ["CSV 合并", "CSV 合并（F06）"],
+  ["CSV 抽取列", "CSV 抽取指定列（F07）"],
+  ["CSV 前后 N 行", "CSV 抽取前/后 N 行（F08）"],
+  ["CSV 行区间", "CSV 抽取位置行区间（F09）"],
+  ["目录清单", "生成目录清单（F10）"],
+  ["清单建档", "清单建档（F11）"],
+  ["批量改名", "批量改名（F12）"],
+  ["TXT 按字节分割", "TXT 按字节分割（F01）"],
+  ["TXT 按行数分割", "TXT 按行数分割（F02）"],
+  ["TXT 按份数分割", "TXT 按份数分割（F03）"],
+  ["TXT 合并", "TXT 合并（F04）"],
+  ["编码转换", "编码转换（C01）"],
+  ["换行转换", "换行符转换（C02）"],
+  ["查找替换", "查找替换（C03）"],
+  ["名称查找替换", "名称查找替换（C04）"],
+  ["清单移动/复制", "清单驱动移动/复制（C07）"],
+  ["按规则归档", "按规则归档（C08）"],
+  ["ZIP 解压/压缩", "ZIP 解压/压缩（C10）"],
+  ["CSV 去重", "CSV 去重（C11）"],
+  ["CSV 过滤", "CSV 过滤（C12）"],
+  ["CSV 排序", "CSV 排序（C13）"],
+  ["CSV 列拆分/合并", "CSV 列拆分/合并（C14）"]
+];
+
+function navButton(nav: HTMLElement, label: string, code: string) {
+  const matches = within(nav)
+    .getAllByRole("button")
+    .filter(
+      (button) => {
+        const text = (button.textContent ?? "").replace(/\s+/g, " ").trim();
+        return text.startsWith(label) && text.endsWith(code);
+      }
+    );
+  expect(matches, `导航项「${label} ${code}」应存在且唯一`).toHaveLength(1);
+  return matches[0];
+}
+
+describe("功能视图导航可达", () => {
+  it("侧栏每一项都渲染出对应功能页的参数区与执行区", async () => {
+    render(<App />);
+    const nav = screen.getByRole("navigation", { name: "功能导航" });
+    const main = screen.getByRole("main");
+    for (const [label, title] of VIEWS) {
+      const code = title.match(/[（(]([^)）]+)[)）]/)?.[1] ?? "";
+      await userEvent.click(navButton(nav, label, code));
+      expect(within(main).getByText(title), `${title} 未渲染`).toBeVisible();
+      expect(
+        within(main).getByRole("button", { name: /生成计划预览/ }),
+        `${title} 缺生成计划按钮`
+      ).toBeVisible();
+      expect(
+        within(main).getByRole("button", { name: /^撤销$/ }),
+        `${title} 缺撤销按钮`
+      ).toBeVisible();
+    }
+  });
+
+  it("默认视图是 C09 工作台，且能回到它", async () => {
+    render(<App />);
+    const main = screen.getByRole("main");
+    expect(main.textContent).toContain("重复文件查找");
+    const nav = screen.getByRole("navigation", { name: "功能导航" });
+    await userEvent.click(navButton(nav, "CSV 合并", "F06"));
+    expect(within(main).getByText("CSV 合并（F06）")).toBeVisible();
+    await userEvent.click(within(main).getByRole("button", { name: /返回 C09/ }));
+    expect(main.textContent).toContain("重复文件查找");
+  });
+});

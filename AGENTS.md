@@ -32,7 +32,7 @@
 - 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成 + `crates/kernel/tests/corpus.rs` 语料断言；**K01–K08＋T01–T08＋R01–R04/R06＋Z01/Z02 已接断言（含 partial）**）
   - ⚠️ `cargo test` 不生成语料；生成脚本只准备输入，不代表回归已执行。
   - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。**断言 harness 覆盖 K01–K08＋T01–T08＋R01–R04/R06＋Z01/Z02（24 条中 19 条 asserted／4 条 partial），其余 1 条（E03）在 `crates/kernel/tests/assertions.tsv` 标 pending**：CI 绿灯仍只代表"生成 + 范围核对 + 单元测试 + 已接入的语料断言通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
-- 单 crate 测试：cargo test -p kernel / -p batchdesk-platform
+- 单 crate 测试：`cargo test -p batchdesk-kernel` / `-p batchdesk-platform`（包名带 `batchdesk-` 前缀；`kernel`/`platform` 是 `[lib]` 名，`-p kernel` 会报 package ID 不匹配）
 - Web/壳：pnpm install（根，Tauri CLI）→ (cd web && pnpm install) → pnpm build；pnpm tauri dev；cargo check --manifest-path src-tauri/Cargo.toml（独立 workspace，需 WebKitGTK/WebView2；不随根 cargo test 编译）
 - 桌面壳任务队列测试：cargo test --manifest-path src-tauri/Cargo.toml --offline
 - WebView E2E：先启动 Vite 与 tauri-driver（前置条件见 scripts/e2e-tauri.mjs 文件头），再 `node scripts/e2e-tauri.mjs`

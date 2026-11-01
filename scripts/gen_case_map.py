@@ -29,7 +29,7 @@ HARNESS = {"C01", "C04", "C07", "C08", "C09", "C13", "C14", "F01", "F12"}
 
 CI = "CI（cargo test --workspace --all-features）"
 SHELL = "CI（cargo test --manifest-path src-tauri/Cargo.toml）"
-WEBDRIVER = "WebDriver 待建（scripts/e2e-tauri.mjs 现仅覆盖 C09）"
+WEBDRIVER = "WebDriver 待建（功能视图已挂载并由 App.navigation.test.tsx 断言可达；e2e-tauri.mjs 现仅覆盖 C09）"
 MANUAL_CARRIER = "真人工（Windows 实机/受控环境）"
 
 STATUS_BY_CORPUS = {"asserted": "✅", "partial": "◐", "pending": "⛔"}
@@ -201,12 +201,12 @@ add("F02",
     exe_slots={
         2: (corpus_cell(["T06"])[0], CI, "crates/kernel/tests/corpus.rs::t06_no_newline_file_is_hard_cut_with_warning",
             corpus_cell(["T06"])[1]),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::estimate_lines`/`split_layout_by_lines` 流式",
             "行数预扫描进度与 C-2 实测未跑（OQ-16）"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -226,12 +226,12 @@ add("F03",
     exe_slots={
         2: (corpus_cell(["T06"])[0], CI, "crates/kernel/tests/corpus.rs::t06_no_newline_file_is_hard_cut_with_warning",
             corpus_cell(["T06"])[1]),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::split_layout_by_parts`（预扫描＋第二遍流式）",
             "双遍读盘进度实测未跑（C-2，OQ-16）"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -252,12 +252,12 @@ add("F04",
         2: (corpus_cell(["K03", "K08"])[0], CI,
             "crates/kernel/tests/corpus.rs::k03_bom_wins_and_target_bom_follows_caller；k08_utf16_bom_sample_detects_and_transcodes_clean",
             corpus_cell(["K03", "K08"])[1] + "；F04 每片/产物 BOM 策略在 F05 侧仍 partial"),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        4: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
         5: ("⛔", MANUAL_CARRIER, "generic_apply Merge 分支（整文件读入内存）",
             "实现缺口：大文件流式合并未做（内存 O(产物)）；进度仅到单条 entry"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -280,12 +280,12 @@ add("F05",
             "corpus.rs::t01_unclosed_quote_is_kept_as_last_record_with_warning；t04 列数漂移 dirty_rows=3",
             corpus_cell(["T01", "T04"])[1]),
         3: (corpus_cell(["T02"])[0], CI, "corpus.rs::t02_quoted_newlines_do_not_split_records", corpus_cell(["T02"])[1]),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `csv_split_layout` 流式扫描＋FsAdapter::copy_ranges_atomic",
             "实现缺口：输出编码转换未接（源字节直通）、>10 MB 多区间流式写未做"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -308,10 +308,10 @@ add("F06",
             corpus_cell(["T07"])[1]),
         3: (corpus_cell(["T08"])[0], CI, "corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing（表头规范化与重复列名）", corpus_cell(["T08"])[1]),
         4: ("✅", CI, "kernel `generic_apply` 40 项（含冲突二次裁决）", "C19 四策略逐项未测（阶段 1）"),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        5: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -332,10 +332,10 @@ add("F07",
     exe_slots={
         2: (corpus_cell(["T08"])[0], CI, "corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing", corpus_cell(["T08"])[1]),
         4: ("✅", CI, "kernel `conflict` 9 项（existing-target→skip）", "C19 四策略逐项未测（阶段 1）"),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -356,10 +356,10 @@ add("F08",
         2: ("✅", CI, "apply_flow::f08_last_window_keeps_the_tail", ""),
         3: ("✅", CI, "apply_flow::f08_zero_rows_writes_only_the_header", ""),
         4: (corpus_cell(["T04"])[0], CI, "corpus.rs::t04_column_drift_is_counted_without_correction", corpus_cell(["T04"])[1]),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        5: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -380,12 +380,12 @@ add("F09",
     exe_slots={
         2: (corpus_cell(["T02"])[0], CI, "corpus.rs::t02_quoted_newlines_do_not_split_records", corpus_cell(["T02"])[1]),
         3: ("✅", CI, "apply_flow::f09_range_beyond_rows_warns_and_clamps_the_output", ""),
-        4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        4: ("◐", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", "本执行臂的条目级取消回滚未单独断言（copy/move/edit-content/split/csv-extract/create-dir/rename 七臂已由 cancel_rolls_back_applied_entries_in_each_write_arm 钉住）"),
         5: ("◐", CI, "FsAdapter::read_ranges 单测＋kernel range apply 断言不调用 read_bytes",
             "选中区间仍读入内存后转码；C-2 级实测未跑（OQ-16）"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
@@ -459,7 +459,7 @@ add("F12",
         3: (corpus_cell(["R01"])[0], CI, "kernel `rename` 长路径三级（200/259/260×开关）单测＋corpus R01 asserted",
             "UNC canonicalize 行为矩阵待实机"),
         4: ("⛔", MANUAL_CARRIER, "kernel `generic_apply` E2007 占用语义", "E03 只读语料台账＝pending，且占用/只读属实机"),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
         1: ("✅", CI, "apply_flow::f12_prefix_plan_apply_and_undo_renames_files_and_directories", ""),
@@ -484,7 +484,7 @@ add("F13",
         2: ("✅", CI, "apply_flow::f13_rejects_invalid_regex_and_missing_capture_references", ""),
         3: ("✅", CI, "apply_flow::f13_no_match_creates_no_entries_and_writes_nothing", ""),
         4: ("✅", CI, "kernel `rename` 10 项（两阶段编排共用）", ""),
-        5: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "功能级取消点核对待 e2e"),
+        5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（同族载体）", "本功能部分失败注入未测"),
@@ -538,7 +538,7 @@ add("C02",
         5: ("⛔", MANUAL_CARRIER, "FsAdapter::rewrite_atomic_with 流式（设计 04 v1.8）", "C-2 级实测未跑（OQ-16）"),
     },
     rbk_slots={
-        2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）", "本功能部分失败注入未测"),
+        2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
         3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
     })
 
