@@ -204,7 +204,7 @@ C07,清单驱动移动,阶段 0,P0★,TC-C07-RBK-01,RBK,01,R1,撤销含删源恢
 C07,清单驱动移动,阶段 0,P0★,TC-C07-RBK-02,RBK,02,R2,部分失败,方案 §5.8；T §3.2 C07,◐,CI（cargo test --workspace --all-features）,apply_flow::c07_missing_sources_skip_or_error_and_copy_keeps_source,跨盘移动在 Windows 实机的核对待实机日
 C07,清单驱动移动,阶段 0,P0★,TC-C07-RBK-03,RBK,03,R3,撤销时占用,方案 §5.8；T §3.2 C07,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
 C09,重复文件查找,阶段 0,P0★,TC-C09-PRE-01,PRE,01,P1,C-6 重复集预览（大小分组＋两级哈希先预览）,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --workspace --all-features）,kernel `duplicate` 9 项＋C-6 assert_c09.py（本地手动）,
-C09,重复文件查找,阶段 0,P0★,TC-C09-PRE-02,PRE,02,P2,快速/全量哈希模式与 OQ-28 采样窗口边界,方案 §5.10、11.6-20；T §3.2 C09、T05,◐,CI（cargo test --workspace --all-features）,kernel `plan` 21 项（快速模式仅出候选、清理前须补全量哈希）,OQ-28 采样窗口值仍待产品确认（CLI 显式 --quick-window-bytes）
+C09,重复文件查找,阶段 0,P0★,TC-C09-PRE-02,PRE,02,P2,快速/全量哈希模式与 OQ-28 采样窗口边界,方案 §5.10、11.6-20；T §3.2 C09、T05,◐,CI（cargo test --workspace --all-features）,kernel `plan` 21 项（快速模式仅出候选、清理前须补全量哈希）,采样窗口值已确认（2026-11-02＝头尾各 64 KiB 缺省、显式值优先），待方案 §5.10 收编后把注源从 PENDING-DECISIONS 改为基线章节号
 C09,重复文件查找,阶段 0,P0★,TC-C09-PRE-03,PRE,03,P3,@T05 空文件与保护名单标注,方案 §5.10、11.6-20；T §3.2 C09、T05,◐,CI（cargo test --workspace --all-features）,corpus.rs::t05_empty_file_is_reported_without_parts；kernel S02 保护命中,E02 占位属人工语料
 C09,重复文件查找,阶段 0,P0★,TC-C09-PRE-04,PRE,04,P4,删除策略（keep=earliest 默认）与改参数后失效,方案 §5.10、11.6-20；T §3.2 C09、T05,◐,CI（cargo test --workspace --all-features）,kernel `plan` keep=earliest 默认（OQ-29 待基线收编）,面板失效语义待 UI
 C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-01,EXE,01,E1,正常三段式哈希,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --workspace --all-features）,apply_flow::apply_and_undo_restore_files,

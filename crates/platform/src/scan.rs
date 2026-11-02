@@ -28,11 +28,17 @@ pub enum ScanMode {
     Fast,
 }
 
+/// Head/tail window used by the quick-hash stage when the caller does not pass
+/// one. Value confirmed by the product owner on 2026-11-02 (`PENDING-DECISIONS.md`,
+/// incorporation target = 产品方案 §5.10) — 64 KiB head plus 64 KiB tail.
+pub const DEFAULT_QUICK_WINDOW_BYTES: u64 = 64 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScanOptions {
     pub mode: ScanMode,
-    /// Head/tail sampling window in bytes. `None` skips the quick stage and
-    /// full-hashes every same-size group. Fast mode requires a window.
+    /// Head/tail sampling window in bytes. `None` in full mode skips the quick
+    /// stage and full-hashes every same-size group; in fast mode it falls back
+    /// to [`DEFAULT_QUICK_WINDOW_BYTES`].
     pub quick_window: Option<u64>,
 }
 
@@ -43,10 +49,16 @@ impl ScanOptions {
                 return Err("quick window must be greater than zero".to_string());
             }
         }
-        if self.mode == ScanMode::Fast && self.quick_window.is_none() {
-            return Err("fast mode requires --quick-window-bytes".to_string());
-        }
         Ok(())
+    }
+
+    /// Window actually used by the quick stage: an explicit value always wins.
+    pub fn effective_quick_window(&self) -> Option<u64> {
+        match self.quick_window {
+            Some(window) => Some(window),
+            None if self.mode == ScanMode::Fast => Some(DEFAULT_QUICK_WINDOW_BYTES),
+            None => None,
+        }
     }
 }
 
@@ -128,7 +140,7 @@ pub fn scan_path(root: &Path, options: ScanOptions) -> std::io::Result<ScanOutco
             continue;
         }
 
-        match options.quick_window {
+        match options.effective_quick_window() {
             Some(window) => {
                 let mut by_quick: BTreeMap<Vec<u8>, Vec<usize>> = BTreeMap::new();
                 for index in indexes {
@@ -461,15 +473,41 @@ mod tests {
     }
 
     #[test]
-    fn fast_mode_requires_a_quick_window() {
+    fn fast_mode_falls_back_to_the_confirmed_default_window() {
         let dir = TempDir::new();
         fs::write(dir.0.join("a.bin"), b"same").unwrap();
+        fs::write(dir.0.join("b.bin"), b"same").unwrap();
         let options = ScanOptions {
             mode: ScanMode::Fast,
             quick_window: None,
         };
-        assert!(options.validate().is_err());
-        assert!(scan_path(&dir.0, options).is_err());
+        // 2026-11-02 用户确认：fast 不再要求显式传窗口，缺省头尾各 64 KiB（仍可覆盖）。
+        assert!(options.validate().is_ok());
+        assert_eq!(
+            options.effective_quick_window(),
+            Some(DEFAULT_QUICK_WINDOW_BYTES)
+        );
+        let outcome = scan_path(&dir.0, options).unwrap();
+        assert_eq!(outcome.stats.quick_hashed, 2, "缺省窗口下仍出快速哈希");
+        assert!(
+            outcome.files.iter().all(|file| file.quick_hash.is_some()),
+            "每条都应有快速哈希"
+        );
+        // 显式值优先于缺省
+        let explicit = ScanOptions {
+            mode: ScanMode::Fast,
+            quick_window: Some(4096),
+        };
+        assert_eq!(explicit.effective_quick_window(), Some(4096));
+        // full 模式不传窗口＝跳过快速阶段（本批未改该行为）
+        assert_eq!(
+            ScanOptions {
+                mode: ScanMode::Full,
+                quick_window: None,
+            }
+            .effective_quick_window(),
+            None
+        );
     }
 
     #[test]

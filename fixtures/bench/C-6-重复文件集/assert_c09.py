@@ -36,6 +36,8 @@ SHARED_COPIES = 10
 LINK_ALIASES = 3
 # 测试参数，不是产品默认窗口（OQ-28）；保留策略默认 earliest（OQ-29 已确认）。
 QUICK_WINDOW = 4096
+# 2026-11-02 用户确认的缺省采样窗口（头尾各 64 KiB，待方案 §5.10 收编）。
+DEFAULT_QUICK_WINDOW = 65536
 TEST_PLAN_ID = "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8"
 EXPECTED_LOG = (
     f"same_size_pairs={PAIRS} pair_size={PAIR_SIZE} shared_size={SHARED_SIZE} "
@@ -407,11 +409,22 @@ def main() -> int:
     print("ok: fast 仅输出 candidate 组，未读取全量哈希")
 
     no_window = run_c09("fast", None)
-    if no_window.returncode == 0:
-        fail("fast mode without --quick-window-bytes must fail")
-    if "fast mode requires --quick-window-bytes" not in no_window.stderr:
-        fail(f"fast mode error text missing, stderr：{no_window.stderr!r}")
-    print("ok: fast 模式缺少显式窗口时拒绝运行")
+    if no_window.returncode != 0:
+        fail(
+            "fast 模式省略窗口时应按已确认缺省运行（头尾各 64 KiB，2026-11-02），"
+            f"stderr：{no_window.stderr!r}"
+        )
+    default_report = json.loads(no_window.stdout)
+    if default_report["quick_window_bytes"] != DEFAULT_QUICK_WINDOW:
+        fail(
+            "fast 缺省窗口应上报 "
+            f"{DEFAULT_QUICK_WINDOW}，got {default_report['quick_window_bytes']}"
+        )
+    if default_report["stats"]["quick_hashed"] == 0:
+        fail("fast 缺省窗口下必须真的做快速哈希")
+    if any(group["confidence"] == "confirmed" for group in default_report["groups"]):
+        fail("fast 缺省窗口下仍只出 candidate 组")
+    print(f"ok: fast 缺省窗口＝{DEFAULT_QUICK_WINDOW}（64 KiB），仅出 candidate 组")
 
     plan = parse_report(
         run_c09(

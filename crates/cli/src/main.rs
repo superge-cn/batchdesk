@@ -214,7 +214,7 @@ const USAGE: &str = "usage:
 
 c09 options:
   --mode full|fast        grouping mode (default: full)
-  --quick-window-bytes N  head/tail quick-hash window; required for fast mode
+  --quick-window-bytes N  head/tail quick-hash window; fast mode defaults to 65536 (64 KiB)
   --plan                  build a C09 PlanDocument (preview only; no writes)
   --keep POLICY           keep suggestion (default: earliest): earliest | shortest-path | newest
   --plan-id ULID          optional caller-supplied ULID; generated when omitted
@@ -627,7 +627,7 @@ fn main() {
             keep,
             mode: grouping_mode,
             hash_algorithm: "blake3".to_string(),
-            quick_window_bytes: options.scan.quick_window,
+            quick_window_bytes: options.scan.effective_quick_window(),
             include_zero_byte: false,
             protected_dirs,
             case_sense,
@@ -6943,7 +6943,7 @@ fn print_human(options: &CliOptions, outcome: &ScanOutcome, report: &DuplicateRe
     println!(
         "mode={} quick_window={} files={} quick_hashed={} full_hashed={} size_pruned={} quick_pruned={}",
         mode_name(options.scan.mode),
-        quick_window_name(options.scan.quick_window),
+        quick_window_name(options.scan.effective_quick_window()),
         outcome.files.len(),
         outcome.stats.quick_hashed,
         outcome.stats.full_hashed,
@@ -7026,7 +7026,7 @@ fn print_json(options: &CliOptions, outcome: &ScanOutcome, report: &DuplicateRep
     out.push_str(&format!("\"mode\":\"{}\",", mode_name(options.scan.mode)));
     out.push_str(&format!(
         "\"quick_window_bytes\":{},",
-        match options.scan.quick_window {
+        match options.scan.effective_quick_window() {
             Some(window) => window.to_string(),
             None => "null".to_string(),
         }

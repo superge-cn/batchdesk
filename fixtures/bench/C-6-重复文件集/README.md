@@ -22,12 +22,12 @@ python fixtures/bench/C-6-重复文件集/assert_c09.py
 
 1. **full（无快速窗口）**：大小 → 全量两阶段；54 份数据集文件全部全量哈希，只有 `same_content/` 的 10 份成组，`same_size/` 无假阳性；
 2. **full（三阶段）**：显式传 `--quick-window-bytes 4096`；54 份快速哈希后仅 14 份进入全量（10 份同内容 + 4 个硬链接入口），40 份被快速阶段淘汰；
-3. **fast**：只算快速哈希（`full_hashed=0`），输出的组一律为 `candidate`，不得直接清理；
+3. **fast**：只算快速哈希（`full_hashed=0`），输出的组一律为 `candidate`，不得直接清理；显式窗口与缺省 64 KiB 两条路径都断言；
 4. **硬链接**（支持硬链接的文件系统）：`hardlink_skipped` 恰为 3 个入口，且同内容组不含硬链接；不支持时跳过该断言并在 `gen.log` 记录；
 5. **计划预览**：`--plan --keep shortest-path --plan-id <测试 ULID>` 只生成 `PlanDocument`：9 条 `delete`、保留 `copy_00.dat`、1 条 `hardlink-skipped` safe 告警；不执行 apply；
 6. **计划默认值**：`--plan` 省略 `--keep` 时默认 `earliest`（OQ-29 已确认）；fast 模式生成清理计划仍以 E1002 拒绝；
 7. **只读性**：所有运行（检测＋计划预览＋拒绝路径）前后 `out/` 的文件清单、大小、mtime 不变；
-8. **参数门禁**：`--mode fast` 缺少显式窗口时拒绝运行。
+8. **缺省窗口**：`--mode fast` 省略 `--quick-window-bytes` 时按已确认缺省（头尾各 64 KiB＝65536）运行，并上报 `quick_window_bytes=65536`（2026-11-02 用户确认，待方案 §5.10 收编）。
 
 说明：
 

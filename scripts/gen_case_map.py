@@ -695,7 +695,7 @@ add("C09",
     rbk=["隔离目录恢复", "部分撤销", "撤销时目标占用"],
     pre_slots=default_pre_slots(
         True, "kernel `duplicate` 9 项＋C-6 assert_c09.py（本地手动）",
-        ("kernel `plan` 21 项（快速模式仅出候选、清理前须补全量哈希）", "OQ-28 采样窗口值仍待产品确认（CLI 显式 --quick-window-bytes）"),
+        ("kernel `plan` 21 项（快速模式仅出候选、清理前须补全量哈希）", "采样窗口值已确认（2026-11-02＝头尾各 64 KiB 缺省、显式值优先），待方案 §5.10 收编后把注源从 PENDING-DECISIONS 改为基线章节号"),
         ("corpus.rs::t05_empty_file_is_reported_without_parts；kernel S02 保护命中", "E02 占位属人工语料"),
         ("kernel `plan` keep=earliest 默认（OQ-29 待基线收编）", "面板失效语义待 UI")),
     exe_slots={
