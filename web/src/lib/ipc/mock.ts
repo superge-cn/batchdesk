@@ -11,6 +11,7 @@ import type {
   PlanDocument,
   PlanEntry,
   PlanOperationInput,
+  PlanWarning,
   PreflightReport,
   ProgressEvent,
   ProgressPhase,
@@ -75,6 +76,29 @@ export async function mockPlan(input: PlanOperationInput): Promise<PlanDocument>
       (value) => typeof value === "string" && value.startsWith("/")
     ) as string | undefined;
     const base = (firstPath ?? "/mock").replace(/\/+$/, "");
+    // F11 夹具按 kernel 的同形状给一条集中报告：多级路径的父级位置若是文件，该分支在计划期
+    // 就 skip 并进 warnings。只证面板"逐项点名"的 UI 语义，不代表真机文件结果（ADR-0046）。
+    // 参数面按值形态取：PlanOperationInput 的类型是 C09 形状，不含功能页自己的字段。
+    const listValue = Object.values(input.params).find(
+      (value) => typeof value === "string" && value.includes("/") && !value.startsWith("/")
+    );
+    const branch =
+      typeof listValue === "string"
+        ? listValue
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => line.includes("/"))
+        : undefined;
+    const warnings: PlanWarning[] =
+      input.kind === "f11" && branch
+        ? [
+            {
+              kind: "parent-is-file",
+              suggestion: `${base}/${branch} (父级 ${base}/${branch.split("/")[0]} 是文件，本分支已跳过)`,
+              riskLevel: "caution"
+            }
+          ]
+        : [];
     lastPlan = {
       planId: PLAN_ID,
       kind: input.kind,
@@ -88,8 +112,8 @@ export async function mockPlan(input: PlanOperationInput): Promise<PlanDocument>
           reason: `${input.kind} 预览夹具：真实执行与撤销需桌面壳`
         }
       ],
-      stats: { total: 1, conflict: 0, warning: 0, blocked: 0 },
-      warnings: []
+      stats: { total: 1, conflict: 0, warning: warnings.length, blocked: 0 },
+      warnings
     };
     return lastPlan;
   }

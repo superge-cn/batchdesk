@@ -1859,6 +1859,88 @@ fn f11_existing_target_is_skipped() {
 }
 
 #[test]
+fn f11_skips_branches_whose_parent_position_is_an_existing_file() {
+    // TC-F11-PRE-03 的"父路径为文件"面：a 位置是文件时，a/b 与 a/b/c 必须在**计划期**就
+    // 报出并跳过，apply 不得因此整体失败，也不得在无冲突的 d/e 分支上出错。
+    let dir = TempDir::new();
+    let root = dir.0.join("out");
+    let list = dir.0.join("list.csv");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a"), b"not a directory").unwrap();
+    fs::write(&list, "a/b/c\nd/e\n").unwrap();
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+
+    let plan = batchdesk(&[
+        "f11",
+        "--list",
+        path_text(&list),
+        "--root",
+        path_text(&root),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "f11 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let conflict_of = |target: &str| {
+        document["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["target"] == target)
+            .and_then(|entry| entry["conflict"]["kind"].as_str())
+            .map(str::to_string)
+    };
+    let a = text(&root.join("a"));
+    let a_b = text(&root.join("a").join("b"));
+    let a_b_c = text(&root.join("a").join("b").join("c"));
+    let d = text(&root.join("d"));
+    let d_e = text(&root.join("d").join("e"));
+    // 文件自己那一行仍按既有语义报 existing-target（不借机改既有判定）。
+    assert_eq!(conflict_of(&a).as_deref(), Some("existing-target"));
+    assert_eq!(conflict_of(&a_b).as_deref(), Some("parent-is-file"));
+    assert_eq!(conflict_of(&a_b_c).as_deref(), Some("parent-is-file"));
+    assert_eq!(conflict_of(&d), None);
+    assert_eq!(conflict_of(&d_e), None);
+    assert_eq!(document["stats"]["conflict"], 3);
+    assert!(
+        document["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["kind"] == "parent-is-file"),
+        "集中报告缺少 parent-is-file：{document}"
+    );
+
+    let plan_file = dir.0.join("plan.json");
+    fs::write(&plan_file, &plan.stdout).unwrap();
+    let applied = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_file),
+        "--quarantine-dir",
+        path_text(&dir.0.join("q")),
+        "--journal",
+        path_text(&dir.0.join("j.json")),
+        "--json",
+    ]);
+    assert!(
+        applied.status.success(),
+        "跳过不得让任务整体失败\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&applied.stdout),
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert!(root.join("d").join("e").is_dir(), "无冲突分支应照常创建");
+    assert!(!Path::new(&a_b).exists(), "被文件挡住的分支不得落盘");
+    assert!(root.join("a").is_file(), "挡住路径的文件本身不受影响");
+}
+
+#[test]
 fn f12_prefix_plan_apply_and_undo_renames_files_and_directories() {
     let dir = TempDir::new();
     let root = dir.0.join("rename");

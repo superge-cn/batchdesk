@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Undo2 } from "lucide-react";
+import { Info, Loader2, Undo2 } from "lucide-react";
 import {
   applyPlan,
   getTask,
@@ -924,6 +924,21 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                   ))}
                 </div>
               </div>
+              {/* 集中报告：无效行/重复行/父路径为文件等都在计划级 warnings 里，功能页必须逐项点名，
+                  只有计数会让用户看不到"哪几行被排除、为什么"。 */}
+              {plan.warnings.length > 0 && (
+                <div className="warnings">
+                  {plan.warnings.map((warning, index) => (
+                    <div className={`warning ${warning.riskLevel}`} key={`${warning.kind}-${index}`}>
+                      <Info size={14} />
+                      <span>
+                        <strong>{warning.kind}</strong>
+                        {warning.suggestion ? ` · ${warning.suggestion}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           )}
         </div>

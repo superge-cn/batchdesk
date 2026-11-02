@@ -119,9 +119,9 @@ F10,生成目录清单,阶段 0,P0★,TC-F10-EXE-05,EXE,05,E5,C-1 十万级流�
 F10,生成目录清单,阶段 0,P0★,TC-F10-RBK-01,RBK,01,R1,删除清单产物,方案 §5.15、§4.8；T §3.2 F10,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,listing_plan_streams_csv_through_the_desktop_queue_and_undoes,
 F10,生成目录清单,阶段 0,P0★,TC-F10-RBK-02,RBK,02,R2,部分失败,方案 §5.15、§4.8；T §3.2 F10,◐,CI（cargo test --workspace --all-features）,apply_flow::f10_plan_apply_and_undo_writes_directory_listing,部分失败注入未测
 F10,生成目录清单,阶段 0,P0★,TC-F10-RBK-03,RBK,03,R3,产物占用,方案 §5.15、§4.8；T §3.2 F10,⛔,真人工（Windows 实机/受控环境）,kernel `journal` 5 项,E01 占用属人工语料
-F11,按清单建文件夹,阶段 0,P0★,TC-F11-PRE-01,PRE,01,P1,正常清单预览,方案 §5.15、§5.8；T §3.2 F11,◐,CI（cargo test --workspace --all-features）,kernel `create_dirs` 7 项,零落盘与重复预览幂等未纳入 c18 harness
+F11,按清单建文件夹,阶段 0,P0★,TC-F11-PRE-01,PRE,01,P1,正常清单预览,方案 §5.15、§5.8；T §3.2 F11,◐,CI（cargo test --workspace --all-features）,kernel `create_dirs` 11 项,零落盘与重复预览幂等未纳入 c18 harness
 F11,按清单建文件夹,阶段 0,P0★,TC-F11-PRE-02,PRE,02,P2,多级路径与无效行边界,方案 §5.15、§5.8；T §3.2 F11,✅,CI（cargo test --workspace --all-features）,kernel `create_dirs` 无效行/重复行汇总单测,
-F11,按清单建文件夹,阶段 0,P0★,TC-F11-PRE-03,PRE,03,P3,绝对路径/../非法名/保护名单集中报告,方案 §5.15、§5.8；T §3.2 F11,◐,CI（cargo test --workspace --all-features）,apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows,父路径为文件的前置报告未做（登记缺口）
+F11,按清单建文件夹,阶段 0,P0★,TC-F11-PRE-03,PRE,03,P3,绝对路径/../非法名/保护名单集中报告,方案 §5.15、§5.8；T §3.2 F11,✅,CI（cargo test --workspace --all-features）,apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows＋apply_flow::f11_skips_branches_whose_parent_position_is_an_existing_file＋kernel `create_dirs` 的 parent-is-file 三条单测（含无该事实时不报的对照断言）,
 F11,按清单建文件夹,阶段 0,P0★,TC-F11-PRE-04,PRE,04,P4,目标已存在与改清单后失效,方案 §5.15、§5.8；T §3.2 F11,◐,CI（cargo test --workspace --all-features）,apply_flow::f11_existing_target_is_skipped,面板失效语义待 UI
 F11,按清单建文件夹,阶段 0,P0★,TC-F11-EXE-01,EXE,01,E1,正常建目录（父先子后、多级路径）,方案 §5.15、§5.8；T §3.2 F11,✅,CI（cargo test --workspace --all-features）,apply_flow::f11_plan_apply_and_undo_creates_multi_level_directories,
 F11,按清单建文件夹,阶段 0,P0★,TC-F11-EXE-02,EXE,02,E2,@E04 预检阻断（人工）,方案 §5.15、§5.8；T §3.2 F11,⛔,真人工（Windows 实机/受控环境）,kernel `preflight` 9 项（磁盘/权限判定）,E04 属人工语料（manual-only.txt）

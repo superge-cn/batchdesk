@@ -505,17 +505,22 @@ add("F10",
 
 add("F11",
     name="按清单建文件夹", stage="阶段 0", prio="P0★", src="方案 §5.15、§5.8；T §3.2 F11",
-    plan_tests="kernel `create_dirs` 7 项",
+    plan_tests="kernel `create_dirs` 11 项",
     exe1="apply_flow::f11_plan_apply_and_undo_creates_multi_level_directories",
     rbk1="同上（Journal CreateDir/RemoveDir，撤销只删空目录）",
     pre=["正常清单预览", "多级路径与无效行边界", "绝对路径/../非法名/保护名单集中报告", "目标已存在与改清单后失效"],
     exe=["正常建目录（父先子后、多级路径）", "@E04 预检阻断（人工）", "无效行集中报告", "已存在目标 skip", "执行中取消"],
     rbk=["删除新建目录", "部分失败（非空目录不递归删）", "目标被占用"],
-    pre_slots=default_pre_slots(
-        False, "kernel `create_dirs` 7 项",
+    pre_slots={**default_pre_slots(
+        False, "kernel `create_dirs` 11 项",
         ("kernel `create_dirs` 无效行/重复行汇总单测", ""),
-        ("apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows", "父路径为文件的前置报告未做（登记缺口）"),
+        ("apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows", ""),
         ("apply_flow::f11_existing_target_is_skipped", "面板失效语义待 UI")),
+        # 第 3 槽含"父路径为文件"面：祖先位置被现存文件占据的分支在计划期即 skip＋集中报告。
+        3: ("✅", CI,
+            "apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows"
+            "＋apply_flow::f11_skips_branches_whose_parent_position_is_an_existing_file"
+            "＋kernel `create_dirs` 的 parent-is-file 三条单测（含无该事实时不报的对照断言）", "")},
     exe_slots={
         2: ("⛔", MANUAL_CARRIER, "kernel `preflight` 9 项（磁盘/权限判定）", "E04 属人工语料（manual-only.txt）"),
         4: ("✅", CI, "apply_flow::f11_existing_target_is_skipped", ""),

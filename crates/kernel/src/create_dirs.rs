@@ -5,6 +5,8 @@
 //! - 清单行只接受相对路径；绝对路径、`..` 逃逸、非法/保留名按无效行集中报告；
 //! - 每条有效路径按层级展开为 `create-dir` 条目，父目录先于子目录；
 //! - 目标已存在的条目按 `existing-target` + skip 处理；受保护目标按 E2009 阻断；
+//! - 清单路径的**祖先位置已被现存文件占据**时，该分支按 `parent-is-file` + skip 处理并集中
+//!   报告（方案 §5.15 的无效/冲突集中报告：不留到 apply 期才失败）；
 //! - 空行忽略；重复路径只创建一次并告警；
 //! - apply 逐条创建单级目录，撤销按 Journal 逆序删除空目录。
 
@@ -35,7 +37,11 @@ pub struct PlanF11Input {
     pub canonical_root: Option<String>,
     pub rows: Vec<PlanF11Row>,
     /// 壳层探测到的现存目标路径（原样字符串；计划只做比较标记）。
+    /// 调用方须按清单路径的**每一级前缀**探测后一并给出，否则祖先级冲突无从判定。
     pub existing_targets: Vec<String>,
+    /// `existing_targets` 中实际是**文件**的那些（同含逐级前缀）。
+    /// 文件占据某级前缀时，其下的目录分支不可能建出，按计划期 skip＋集中报告处理。
+    pub existing_files: Vec<String>,
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
 }
@@ -59,8 +65,14 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
         .iter()
         .map(|path| conflict_key(path, input.case_sense))
         .collect();
+    let existing_files: BTreeSet<String> = input
+        .existing_files
+        .iter()
+        .map(|path| conflict_key(path, input.case_sense))
+        .collect();
     let mut invalid_rows = Vec::new();
     let mut duplicate_rows = Vec::new();
+    let mut parent_is_file = Vec::new();
     let mut valid_paths: BTreeSet<String> = BTreeSet::new();
     let mut valid_rows = 0u64;
     let mut entries = Vec::new();
@@ -86,20 +98,41 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
         valid_rows += 1;
         let components: Vec<&str> = normalized.split('/').collect();
         let mut prefix = String::new();
-        for component in components {
+        // 祖先位置上的现存文件：一旦出现，其下的层级都建不出来（计划期就报，不留到 apply 期失败）。
+        let mut blocker: Option<String> = None;
+        for component in &components {
             if !prefix.is_empty() {
                 prefix.push('/');
             }
             prefix.push_str(component);
             let target = target_for_list_path(&input.root, &prefix);
             let target_key = conflict_key(&target, input.case_sense);
+            let blocked_by = blocker.clone();
+            if existing_files.contains(&target_key) {
+                blocker = Some(target.clone());
+            }
             if !planned.insert(target_key.clone()) {
                 continue;
             }
-            let conflict = existing.contains(&target_key).then(|| PlanConflict {
-                kind: "existing-target".to_string(),
-                risk_level: RiskLevel::Danger,
-            });
+            let conflict = match &blocked_by {
+                Some(blocker) => {
+                    parent_is_file.push(format!("{target} (parent {blocker} is a file)"));
+                    Some(PlanConflict {
+                        kind: "parent-is-file".to_string(),
+                        risk_level: RiskLevel::Danger,
+                    })
+                }
+                None => existing.contains(&target_key).then(|| PlanConflict {
+                    kind: "existing-target".to_string(),
+                    risk_level: RiskLevel::Danger,
+                }),
+            };
+            let reason = match &blocked_by {
+                Some(blocker) => {
+                    format!("skipped: {target} lies under the existing file {blocker}")
+                }
+                None => format!("create directory {target}"),
+            };
             let target_block =
                 crate::csv_merge::target_block(&target, &input.protected_dirs, input.case_sense);
             entries.push(PlanEntry {
@@ -108,7 +141,7 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
                 target: Some(target.clone()),
                 action: PlanAction::CreateDir,
                 relation: None,
-                reason: format!("create directory {target}"),
+                reason,
                 conflict: conflict.clone(),
                 resolution: conflict.as_ref().map(|_| PlanResolution::Skip),
                 blocked: target_block,
@@ -141,6 +174,16 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
             suggestion: Some(format!(
                 "duplicate paths are created once: {}",
                 duplicate_rows.join("; ")
+            )),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    if !parent_is_file.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "parent-is-file".to_string(),
+            suggestion: Some(format!(
+                "branches skipped because a parent position is an existing file: {}",
+                parent_is_file.join("; ")
             )),
             risk_level: RiskLevel::Caution,
         });
@@ -278,6 +321,7 @@ mod tests {
             canonical_root: None,
             rows,
             existing_targets: Vec::new(),
+            existing_files: Vec::new(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
         }
@@ -329,6 +373,109 @@ mod tests {
             .unwrap();
         assert_eq!(entry.conflict.as_ref().unwrap().kind, "existing-target");
         assert_eq!(entry.resolution, Some(PlanResolution::Skip));
+    }
+
+    #[test]
+    fn branch_under_an_existing_file_is_skipped_and_reported() {
+        let plan = plan_f11(PlanF11Input {
+            existing_targets: vec!["/data/out/a".to_string()],
+            existing_files: vec!["/data/out/a".to_string()],
+            ..input(vec![row(2, "a/b/c"), row(3, "d/e")])
+        })
+        .unwrap();
+        let entry = |target: &str| {
+            plan.entries
+                .iter()
+                .find(|item| item.target.as_deref() == Some(target))
+                .unwrap_or_else(|| panic!("缺少条目 {target}"))
+        };
+        // 文件本身那一级仍按 existing-target；其下每一级都因父级是文件而跳过。
+        assert_eq!(
+            entry("/data/out/a").conflict.as_ref().unwrap().kind,
+            "existing-target"
+        );
+        for target in ["/data/out/a/b", "/data/out/a/b/c"] {
+            let item = entry(target);
+            assert_eq!(item.conflict.as_ref().unwrap().kind, "parent-is-file");
+            assert_eq!(item.resolution, Some(PlanResolution::Skip));
+            assert!(
+                item.reason.contains("existing file /data/out/a"),
+                "原因要点名挡住的文件：{}",
+                item.reason
+            );
+        }
+        // 未受影响的分支不得被连坐。
+        assert!(entry("/data/out/d").conflict.is_none());
+        assert!(entry("/data/out/d/e").conflict.is_none());
+        let warning = plan
+            .warnings
+            .iter()
+            .find(|warning| warning.kind == "parent-is-file")
+            .expect("父级为文件须进集中报告");
+        let suggestion = warning.suggestion.as_ref().unwrap();
+        assert!(suggestion.contains("/data/out/a/b"), "{suggestion}");
+        assert_eq!(plan.stats.conflict, 3);
+    }
+
+    #[test]
+    fn blocker_propagates_when_the_parent_was_planned_by_an_earlier_row() {
+        // 前一行已计划过 a 时，a 只出一条，但"父级是文件"的结论仍须传给 a/b。
+        let plan = plan_f11(PlanF11Input {
+            existing_targets: vec!["/data/out/a".to_string()],
+            existing_files: vec!["/data/out/a".to_string()],
+            ..input(vec![row(1, "a"), row(2, "a/b")])
+        })
+        .unwrap();
+        let targets: Vec<String> = plan
+            .entries
+            .iter()
+            .filter_map(|item| item.target.clone())
+            .collect();
+        assert_eq!(targets, vec!["/data/out/a", "/data/out/a/b"]);
+        assert_eq!(
+            plan.entries[1].conflict.as_ref().unwrap().kind,
+            "parent-is-file"
+        );
+    }
+
+    #[test]
+    fn no_parent_is_file_report_without_the_file_fact() {
+        // 对照断言：同一清单在没有"文件占据父级"事实时不得产生该告警（防上一条空转）。
+        let plan = plan_f11(PlanF11Input {
+            existing_targets: vec!["/data/out/a".to_string()],
+            ..input(vec![row(2, "a/b/c")])
+        })
+        .unwrap();
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "parent-is-file"));
+        assert!(plan.entries.iter().all(|item| item
+            .conflict
+            .as_ref()
+            .map(|conflict| conflict.kind != "parent-is-file")
+            .unwrap_or(true)));
+        assert_eq!(plan.stats.conflict, 1);
+    }
+
+    #[test]
+    fn existing_file_at_the_leaf_stays_an_existing_target() {
+        // 清单只要求 a，而 a 位置是文件：仍按 existing-target 报，不改既有语义。
+        let plan = plan_f11(PlanF11Input {
+            existing_targets: vec!["/data/out/a".to_string()],
+            existing_files: vec!["/data/out/a".to_string()],
+            ..input(vec![row(2, "a")])
+        })
+        .unwrap();
+        assert_eq!(plan.entries.len(), 1);
+        assert_eq!(
+            plan.entries[0].conflict.as_ref().unwrap().kind,
+            "existing-target"
+        );
+        assert!(!plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "parent-is-file"));
     }
 
     #[test]

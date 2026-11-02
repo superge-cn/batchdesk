@@ -4763,13 +4763,27 @@ fn run_f11(args: &[String]) -> i32 {
             path,
         });
     }
+    // 逐级前缀都要探测：F11 把每条路径按层级展开，父级被现存文件占据时必须在计划期报出，
+    // 不能只探叶子路径（那会让"父路径为文件"拖到 apply 期才失败）。
     let mut existing_targets = Vec::new();
+    let mut existing_files = Vec::new();
     for row in &rows {
         let Ok(normalized) = normalize_list_path(&row.path) else {
             continue;
         };
-        let target = target_for_list_path(&root_text, &normalized);
-        if std::fs::metadata(&target).is_ok() {
+        let mut prefix = String::new();
+        for component in normalized.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let target = target_for_list_path(&root_text, &prefix);
+            let Ok(metadata) = std::fs::metadata(&target) else {
+                continue;
+            };
+            if metadata.is_file() {
+                existing_files.push(target.clone());
+            }
             existing_targets.push(target);
         }
     }
@@ -4792,6 +4806,7 @@ fn run_f11(args: &[String]) -> i32 {
         canonical_root,
         rows,
         existing_targets,
+        existing_files,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
     });

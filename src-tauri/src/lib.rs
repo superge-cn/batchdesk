@@ -956,18 +956,18 @@ fn plan_f11_shell(
         })
         .filter(|row| !row.path.is_empty())
         .collect();
-    let existing: Vec<String> = rows
-        .iter()
-        .map(|row| root.join(&row.path).to_string_lossy().into_owned())
-        .filter(|path| Path::new(path).exists())
-        .collect();
+    // 与 CLI `run_f11` 同口径：按清单路径的**每一级前缀**探测现存目标并区分文件/目录。
+    // 只探叶子路径会漏掉"父级位置是文件"——那种分支到 apply 期才失败。
+    let root_text = root.to_string_lossy().into_owned();
+    let (existing, existing_files) = f11_existing_facts(&root_text, &rows);
     let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f11"));
     let plan = kernel::create_dirs::plan_f11(kernel::create_dirs::PlanF11Input {
         plan_id: plan_id.clone(),
-        root: root.to_string_lossy().into_owned(),
+        root: root_text,
         canonical_root: platform::fs::canonicalize_display(&root),
         rows,
         existing_targets: existing,
+        existing_files,
         protected_dirs: Vec::new(),
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
     })
@@ -982,6 +982,37 @@ fn plan_f11_shell(
         },
     );
     Ok(plan)
+}
+
+/// F11 事实采集：对清单每条有效路径的**每一级前缀**探测存在性，并把其中的文件单独列出。
+/// kernel 需要这两份事实才能把"父级位置是文件"的分支在计划期跳过（方案 §5.15 的集中报告）。
+fn f11_existing_facts(
+    root_text: &str,
+    rows: &[kernel::create_dirs::PlanF11Row],
+) -> (Vec<String>, Vec<String>) {
+    let mut existing: Vec<String> = Vec::new();
+    let mut existing_files: Vec<String> = Vec::new();
+    for row in rows {
+        let Ok(normalized) = kernel::create_dirs::normalize_list_path(&row.path) else {
+            continue;
+        };
+        let mut prefix = String::new();
+        for component in normalized.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let target = kernel::create_dirs::target_for_list_path(root_text, &prefix);
+            let Ok(metadata) = std::fs::metadata(&target) else {
+                continue;
+            };
+            if metadata.is_file() {
+                existing_files.push(target.clone());
+            }
+            existing.push(target);
+        }
+    }
+    (existing, existing_files)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1214,5 +1245,64 @@ mod tests {
         let left = vec![ProtectedDir::with_canonical("/a", Some("/real/a".into()))];
         let right = vec![ProtectedDir::with_canonical("/a", Some("/real/b".into()))];
         assert!(!same_protected_dirs(&left, &right));
+    }
+
+    #[test]
+    fn f11_facts_probe_every_parent_position_and_flag_files() {
+        // 事实采集面：清单 "holder/sub" 必须同时探到 holder 与 holder/sub，并把作为文件的
+        // holder 单列出来——否则 kernel 无从把该分支判成 parent-is-file（计划期跳过）。
+        use std::fs;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("batchdesk-f11-{}-{seq}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("holder"), b"not a directory").unwrap();
+        fs::create_dir_all(root.join("dir")).unwrap();
+
+        let rows = vec![
+            kernel::create_dirs::PlanF11Row {
+                line: 1,
+                path: "holder/sub".to_string(),
+            },
+            kernel::create_dirs::PlanF11Row {
+                line: 2,
+                path: "dir/sub".to_string(),
+            },
+            kernel::create_dirs::PlanF11Row {
+                line: 3,
+                path: "../escape".to_string(),
+            },
+        ];
+        let root_text = root.to_string_lossy().into_owned();
+        let (existing, existing_files) = f11_existing_facts(&root_text, &rows);
+
+        let holder = root.join("holder").to_string_lossy().into_owned();
+        let holder_sub = root.join("holder").join("sub").to_string_lossy().into_owned();
+        let dir = root.join("dir").to_string_lossy().into_owned();
+        assert!(existing.contains(&holder), "父级位置也要探测：{existing:?}");
+        assert!(
+            existing_files.contains(&holder),
+            "文件须单列：{existing_files:?}"
+        );
+        assert!(existing.contains(&dir), "目录进存在清单：{existing:?}");
+        assert!(
+            !existing_files.contains(&dir),
+            "目录不得混进文件事实：{existing_files:?}"
+        );
+        assert!(
+            !existing.contains(&holder_sub),
+            "不存在的位置不该进入事实清单"
+        );
+        assert_eq!(
+            existing
+                .iter()
+                .filter(|path| path.contains("escape"))
+                .count(),
+            0,
+            "无效行（.. 逃逸）不产生事实"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 }
