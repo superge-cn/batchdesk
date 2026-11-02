@@ -37,6 +37,7 @@ apply_flow::c14_split_plan_apply_and_undo_inserts_columns_after_source	ok
 apply_flow::c14_split_regex_and_merge_plan_apply_and_undo	ok
 apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features	ok
 apply_flow::cleanup_and_undo_respect_retention_window	ok
+apply_flow::empty_protected_list_blocks_nothing_while_a_hit_blocks_and_writes_nothing	ok
 apply_flow::f01_plan_apply_and_undo_write_line_aligned_parts	ok
 apply_flow::f02_plan_apply_and_undo_split_every_n_lines	ok
 apply_flow::f03_plan_apply_and_undo_split_by_part_count	ok
@@ -60,6 +61,7 @@ apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows	ok
 apply_flow::f11_existing_target_is_skipped	ok
 apply_flow::f11_plan_apply_and_undo_creates_multi_level_directories	ok
 apply_flow::f11_skips_branches_whose_parent_position_is_an_existing_file	ok
+apply_flow::f11_undo_keeps_a_directory_that_became_non_empty_and_reports_the_failure	ok
 apply_flow::f12_prefix_plan_apply_and_undo_renames_files_and_directories	ok
 apply_flow::f12_reports_existing_conflicts_and_invalid_targets	ok
 apply_flow::f13_no_match_creates_no_entries_and_writes_nothing	ok
@@ -537,6 +539,7 @@ platform::preflight::tests::non_network_paths_are_not_probed	ok
 platform::preflight::tests::path_check_reads_metadata_without_error_for_missing_paths	ok
 platform::preflight::tests::path_check_reports_readonly_files	ok
 platform::preflight::tests::same_volume_is_true_for_two_paths_on_the_same_temp_dir	ok
+platform::preflight::tests::unc_share_root_picks_the_share_not_the_local_root	ok
 platform::replace_content::tests::inspects_csv_cells_and_quoted_newlines	ok
 platform::replace_content::tests::inspects_text_matches_and_context	ok
 platform::replace_content::tests::short_file_sample_is_truncated	ok
@@ -569,10 +572,15 @@ platform::text::tests::streams_line_without_newline_and_flags_it	ok
 platform::text::tests::streams_segments_and_counts_lines	ok
 shell::tasks::tests::apply_and_undo_run_through_the_queue_with_events	ok
 shell::tasks::tests::apply_completes_when_operation_log_is_unavailable	ok
+shell::tasks::tests::blocked_preflight_leaves_the_disk_untouched_and_the_plan_stored	ok
 shell::tasks::tests::corrupt_snapshot_is_backed_up_and_the_queue_starts_empty	ok
 shell::tasks::tests::csv_dedup_plan_executes_through_the_desktop_queue_and_undoes	ok
 shell::tasks::tests::generic_plan_kinds_execute_through_the_desktop_queue	ok
 shell::tasks::tests::listing_plan_streams_csv_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::preflight_gate_blocks_dispatch_with_e2004_when_disk_margin_is_exceeded	ok
+shell::tasks::tests::preflight_gate_is_recomputed_every_call_so_a_changed_environment_flips_the_verdict	ok
+shell::tasks::tests::preflight_gate_warns_on_unreachable_unc_without_blocking_the_task	ok
+shell::tasks::tests::preflight_passing_plan_then_applies_through_the_queue_and_quarantines_files	ok
 shell::tasks::tests::progress_bursts_are_coalesced_and_flushed_on_phase_change	ok
 shell::tasks::tests::recover_discard_keeps_applied_state_and_cancels_the_task	ok
 shell::tasks::tests::recover_rollback_restores_applied_entries_and_cancels_the_original_task	ok
