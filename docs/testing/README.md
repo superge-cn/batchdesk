@@ -6,7 +6,8 @@
 
 | 文档 | 覆盖 | 状态 | 说明 |
 |---|---|---|---|
-| [测试用例库-TC-v0.3.md](./测试用例库-TC-v0.3.md) | 单机版阶段 0（25 项＋C17a）＋横切 B1/B2/B3/B4/B6/B8＋C37/B9 阶段 1 | v0.3 | 296 条阶段 0 功能实例＋65 条 XCT＋C37 8＋B9 8＝377 条 |
+| [测试用例库-TC-v0.4.md](./测试用例库-TC-v0.4.md) | **当前版**：单机版阶段 0（25 项＋C17a）＋横切 B1/B2/B3/B4/B6/B8＋C37/B9 阶段 1 | v0.4 | 2026-11-02 按两项人类裁决升版：§3 逐行补齐为「每槽一项、项数＝槽数、顺序＝序号」（OQ-32，实例总数仍 296）；S01 的 E○2 由「预检中取消」改写为「预检期间界面可继续操作、结果落地前不派发」（OQ-31）并落地断言 |
+| [测试用例库-TC-v0.3.md](./测试用例库-TC-v0.3.md) | 历史版本（2026-10-29；§3 存在枚举数≠槽数的行，已由 v0.4 修正）｜单机版阶段 0（25 项＋C17a）＋横切 B1/B2/B3/B4/B6/B8＋C37/B9 阶段 1 | v0.3 | 296 条阶段 0 功能实例＋65 条 XCT＋C37 8＋B9 8＝377 条 |
 | [Web测试分册-TW-v0.2.md](./Web测试分册-TW-v0.2.md) | Web 双通道、OPFS/配额、隐私承诺、云契约、降级链、零强制力 | v0.2 | TW-A…TW-G；TW-E 覆盖 8 个云端端点（含 GET session）；TW-G 为 F15 Phase 3 |
 | [验收签署模板-v0.2.md](./验收签署模板-v0.2.md) | 功能级/阶段级/闭门/毕业签署、缺陷关闭、豁免、冒烟、人工语料 | v0.2 | 空白表单；判定口径回指 T §4/§5/§6 |
 | [性能基准执行手册.md](./性能基准执行手册.md) | C-1…C-8 的执行 SOP、环境台账、结果表 | v0.1 | 不定义阈值；口径引方案 §9.1 |
@@ -20,16 +21,16 @@
 | 对象 | 已实现 | 未实现 |
 |---|---|---|
 | 语料生成 | 24 条自动化脚本、范围门禁、冻结哈希、幂等/确定性校验 | **逐条 expected 断言 harness**（K01–K08＋T01–T08＋R01–R04/R06 已接；E03/Z01/Z02 待接） |
-| TC 功能用例 | 设计量 377 条（296 阶段 0 功能实例＋65 XCT＋C37 8＋B9 8）；**阶段 0 的 296 条已逐条映射到执行载体**（v0.2 CSV：✅ 149／◐ 110／⛔ 37／🔶 0，自动化可达 259 条＝87.5%），其判定所依赖的 plan/apply/undo 锚点大多已在 CI；E4 的"取消"已补到**十二臂**级（19 条 E4 行中 16 条 ✅，剩 C02 mid-stream／C09 Delete／C10 archive 三条）并由 Vitest 断言取消/重试入口可达；Playwright＋Chromium 层再断言真实浏览器下的面板语义（C05 预览渲染与刷新、S01 预检报告与「不存在跳过预检入口」负向断言、**方案 §7.3 的参数变更→旧计划失效阻断**、**保护目录命中时执行前的危险二次确认**（方案 §3.3/§7.11＋U §3.5）），D 类纯 UI 缺口清空（ADR-0046/0047/0048） | 逐条**签署记录**未开始（T §6.1 的 M1–M8 环境组合）；65 条 XCT 与 C37/B9 尚未做同级别映射 |
+| TC 功能用例 | 设计量 377 条（296 阶段 0 功能实例＋65 XCT＋C37 8＋B9 8）；**阶段 0 的 296 条已逐条映射到执行载体**（v0.2 CSV：✅ 150／◐ 112／⛔ 34／🔶 0，自动化可达 262 条＝88.5%），其判定所依赖的 plan/apply/undo 锚点大多已在 CI；E4 的"取消"已补到**十二臂**级（19 条 E4 行中 16 条 ✅，剩 C02 mid-stream／C09 Delete／C10 archive 三条）并由 Vitest 断言取消/重试入口可达；Playwright＋Chromium 层再断言真实浏览器下的面板语义（C05 预览渲染与刷新、S01 预检报告与「不存在跳过预检入口」负向断言、**方案 §7.3 的参数变更→旧计划失效阻断**、**保护目录命中时执行前的危险二次确认**（方案 §3.3/§7.11＋U §3.5）），D 类纯 UI 缺口清空（ADR-0046/0047/0048） | 逐条**签署记录**未开始（T §6.1 的 M1–M8 环境组合）；65 条 XCT 与 C37/B9 尚未做同级别映射 |
 | TW Web 用例 | 设计量（A/B/C/D/E/F） | mock 服务端、Playwright/浏览器矩阵、真实 staging |
 | 云契约 | 02 §4 的 8 端点契约 | mock 档自动化、staging 档 |
 | AI 助手（F15 Phase 1/2/3） | `fixtures/ai/` 用例规范、设计 14 契约 | mock provider、真实 provider/staging、自动断言 harness |
 | 性能 | C-1…C-8 数据集脚本/模板（C-7 阻塞）；C-6 的 C09 只读/计划预览断言（本地手动） | 基准执行 SOP、结果台账、CI 对比脚本 |
-| 代码与测试总览 | kernel 370 + 语料断言 22 + platform 97 + CLI 6 单测 + 66 集成（合计 **561 项**，2026-11-02 实测）＋ Vitest 组件测试 8 项＋Playwright（Chromium）UI 语义测试 12 项；C-6 只读/计划预览；apply→undo、S02、保留期集成；plan→apply 内容再校验（E2010）；Windows 文件身份（WinAPI，ADR-0012）与长路径前缀收口；S01 preflight 9 项、S02 目标路径复核 2 项、S03 恢复 4 项（壳层）；C05 预览聚合 4 项、C06 undo_dry_run 2 项 | TC S01/S02 的 UI 用例逐条执行（载体待 UI）；E03 语料断言；见用例覆盖映射表 |
+| 代码与测试总览 | kernel 370 + 语料断言 22 + platform 97 + CLI 6 单测 + 66 集成（合计 **561 项**，2026-11-02 实测）＋ Vitest 组件测试 10 项＋Playwright（Chromium）UI 语义测试 12 项；C-6 只读/计划预览；apply→undo、S02、保留期集成；plan→apply 内容再校验（E2010）；Windows 文件身份（WinAPI，ADR-0012）与长路径前缀收口；S01 preflight 9 项、S02 目标路径复核 2 项、S03 恢复 4 项（壳层）；C05 预览聚合 4 项、C06 undo_dry_run 2 项 | TC S01/S02 的 UI 用例逐条执行（载体待 UI）；E03 语料断言；见用例覆盖映射表 |
 | 配置/模板/UiState（C37/B9） | kernel `config`/`recipe`/`ui_state` 类型与迁移、`platform::config_store` 损坏兜底/原子写/模板 CRUD；单测 25+12 项 | 设置 UI 与人工执行（TC-C37 8 条、TC-XCT-B9 8 条待跑）；Web OPFS |
 | 桌面 IPC/UI（C09＋23 功能视图） | 壳层队列/恢复/重试/合帧/审计/generic kind 路由/f10 清单/c11 去重/c10 ZIP 测试 **17 项**；web `tsc --noEmit` + `vite build`；Tauri `cargo check`；浏览器 mock 流；WebView E2E（apply→undo、cleanup 演练、取消回滚） | i18n/虚拟滚动、任务列表 UI、S03 实机崩溃演练、真 WebView e2e（Playwright 的 WebKit 不是 WebKitGTK，不能替代；需 tauri-driver/WebKitWebDriver）——Vitest 与 Playwright 已覆盖 23 视图可达、取消/重试形状与面板语义 |
 
-> **CI 口径**：当前 `cargo test --workspace --all-features` **561 项**（kernel 370 + 语料断言 22 + platform 97 + CLI 6 单测 + 66 集成），另有 `pnpm test` 8 项与 `pnpm test:e2e` 12 项；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期及 C01–C05/C10/C11/C12 与 F01–F13 plan→apply→undo、C05 预览与 C06 撤销预演/终态/跨批次；壳层任务队列/中断恢复由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖（17 项，含 generic kind 队列路由、f10 清单写出与撤销、c11 去重、c10 ZIP 压缩 apply→undo），WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤执行生成 + 范围核对 + 哈希/幂等 + 已接入的 22 项断言（19 asserted／4 partial；E03 仍 pending）；TC v0.3 已展开 C37/B9 实例，人工执行尚未开始；C05/C06/S01/S02/C09/C17a 实例的执行载体映射见《用例覆盖映射表》（C05/C06 无必须人工的 CLI 条目）；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；**CI 七 job 全绿（run 41297222857，2026-11-01，head 16d19e8，含 Windows 单元测试与 desktop/deny/SBOM；上一轮 UI 接入切片 run 41269629787）**。
+> **CI 口径**：当前 `cargo test --workspace --all-features` **561 项**（kernel 370 + 语料断言 22 + platform 97 + CLI 6 单测 + 66 集成），另有 `pnpm test` 10 项与 `pnpm test:e2e` 12 项；C-6 的 C09 断言是本地手动、CI 不生成 C-6（覆盖只读检测与计划预览）；`crates/cli/tests/apply_flow.rs` 覆盖真实文件系统的 apply→隔离→undo、S02 保护目录与 cleanup 保留期及 C01–C05/C10/C11/C12 与 F01–F13 plan→apply→undo、C05 预览与 C06 撤销预演/终态/跨批次；壳层任务队列/中断恢复由独立 `cargo test --manifest-path src-tauri/Cargo.toml` 覆盖（17 项，含 generic kind 队列路由、f10 清单写出与撤销、c11 去重、c10 ZIP 压缩 apply→undo），WebView E2E 由 `scripts/e2e-tauri.mjs` 本地手动执行（尚未进 CI）；语料步骤执行生成 + 范围核对 + 哈希/幂等 + 已接入的 22 项断言（19 asserted／4 partial；E03 仍 pending）；TC v0.3 已展开 C37/B9 实例，人工执行尚未开始；C05/C06/S01/S02/C09/C17a 实例的执行载体映射见《用例覆盖映射表》（C05/C06 无必须人工的 CLI 条目）；CI 绿灯不能表述为“语料回归零失败”或“377 条用例通过”；**CI 七 job 全绿（run 41297222857，2026-11-01，head 16d19e8，含 Windows 单元测试与 desktop/deny/SBOM；上一轮 UI 接入切片 run 41269629787）**。
 
 ## 3. 执行流程
 

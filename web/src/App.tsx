@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -322,6 +322,10 @@ function App() {
     quickWindowBytes: quickWindow.trim(),
     protectedDirs
   });
+  // 预检是异步的：等待期间用户可能又改了参数，落地后须按当前签名复核（方案 §7.3）。
+  const latestSignatureRef = useRef(planSignature);
+  latestSignatureRef.current = planSignature;
+
   // 参数改动 → 旧计划立即失效：执行/撤销入口全部关闭，须重新生成预览。
   // 内核侧仍有 plan→apply 指纹（E2010）与保护名单变更（E1002）兜底，这里是入口层阻断（方案 §7.3）。
   const planStale =
@@ -414,6 +418,15 @@ function App() {
     try {
       const report = await preflightPlan(plan.planId);
       setPreflight(report);
+      if (plannedSnapshot !== null && latestSignatureRef.current !== plannedSnapshot) {
+        setError({
+          code: "E1002",
+          message: "参数已改动，旧计划预览失效：请重新生成计划再执行",
+          detail: "预检期间参数发生变化，未派发任何写操作（零副作用）",
+          retryable: false
+        });
+        return;
+      }
       if (report.taskBlocked) {
         const blocking = report.items.find(
           (item) => item.level === "block" && item.kind === "disk-space"
