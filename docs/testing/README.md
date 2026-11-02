@@ -13,6 +13,7 @@
 | [性能基准执行手册.md](./性能基准执行手册.md) | C-1…C-8 的执行 SOP、环境台账、结果表 | v0.1 | 不定义阈值；口径引方案 §9.1 |
 | [AI助手测试分册-AI-v0.1.md](./AI助手测试分册-AI-v0.1.md) | F15 Phase 1/2/3 AI 助手/工具调用/多计划/提示注入 | v0.1 | AI-01…AI-26；`fixtures/ai/`；mock provider |
 | [用例覆盖映射表-v0.2.md](./用例覆盖映射表-v0.2.md) ＋ [CSV](./用例覆盖映射表-v0.2.csv) | **TC §3 阶段 0 全 296 条实例逐条 → 载体/状态/锚点/缺口**（CSV 为数据源，md 放口径与汇总） | v0.2 | 每完成切片或 UI 接入即改 `scripts/gen_case_map.py` 重跑生成；**九项校验已并入 `scripts/check_docs.py`（CI lint job 必跑）**：296 条数、唯一 ID、锚点实名、禁省略式、✅ 不挂缺口、⛔ 不标 CI、✅／◐ 不标真人工、🔶 标 WebDriver、E4 ✅ 必须引用取消锚点 |
+| [用例执行台账-v0.1.md](./用例执行台账-v0.1.md) ＋ [CSV](./用例执行台账-v0.1.csv) | **按实例回答「锚点这次真跑过吗」**：296 行逐条解析到实测清单（实测通过 211／待人工 34／需精确化 43／不可定位 7／缺锚点 1）；覆盖判定仍以映射表为准 | v0.1 | 由 `scripts/run_case_ledger.py` 产出（CSV＋md＋`执行记录/` 清单同源），`check_docs.py` 门禁行数／词法／载体一致／硬缺陷为零——ADR-0051 |
 | [用例覆盖映射表-v0.1.md](./用例覆盖映射表-v0.1.md) | 历史版本（仅 C05/C06/S01/S02/C09/C17a 的 68 条），已被 v0.2 取代、不再更新 | v0.1 | — |
 | [`fixtures/corpus/manual-results.md`](../../fixtures/corpus/manual-results.md) | 4 条人工语料台账 | 待执行 | R05/E01/E02/E04；阶段末/闭门前执行 |
 
@@ -25,7 +26,7 @@
 | TW Web 用例 | 设计量（A/B/C/D/E/F） | mock 服务端、Playwright/浏览器矩阵、真实 staging |
 | 云契约 | 02 §4 的 8 端点契约 | mock 档自动化、staging 档 |
 | AI 助手（F15 Phase 1/2/3） | `fixtures/ai/` 用例规范、设计 14 契约 | mock provider、真实 provider/staging、自动断言 harness |
-| 性能 | C-1…C-8 数据集脚本/模板（C-7 阻塞）；C-6 的 C09 只读/计划预览断言（本地手动） | 基准执行 SOP、结果台账、CI 对比脚本 |
+| 性能 | C-1…C-8 数据集脚本/模板（C-7 阻塞）；C-6 的 C09 只读/计划预览断言（本地手动）；**测量夹具 `fixtures/bench/measure.py` ＋ 结果台账 `fixtures/bench/results.md`（C-1／C-2 首轮 Linux 预跑已入表）** | Windows 实机重测、C-4 其余介质记录、C-5／C-8、CI 基线对比脚本 |
 | 代码与测试总览 | kernel 376 + 语料断言 22 + platform 97 + CLI 6 单测 + 68 集成（合计 **569 项**，2026-11-02 实测）＋ Vitest 组件测试 12 项＋Playwright（Chromium）UI 语义测试 14 项；C-6 只读/计划预览；apply→undo、S02、保留期集成；plan→apply 内容再校验（E2010）；Windows 文件身份（WinAPI，ADR-0012）与长路径前缀收口；S01 preflight 9 项、S02 目标路径复核 2 项、S03 恢复 4 项（壳层）；C05 预览聚合 4 项、C06 undo_dry_run 2 项 | TC S01/S02 的 UI 用例逐条执行（载体待 UI）；E03 语料断言；见用例覆盖映射表 |
 | 配置/模板/UiState（C37/B9） | kernel `config`/`recipe`/`ui_state` 类型与迁移、`platform::config_store` 损坏兜底/原子写/模板 CRUD；单测 25+12 项 | 设置 UI 与人工执行（TC-C37 8 条、TC-XCT-B9 8 条待跑）；Web OPFS |
 | 桌面 IPC/UI（C09＋23 功能视图） | 壳层队列/恢复/重试/合帧/审计/generic kind 路由/f10 清单/c11 去重/c10 ZIP/F11 逐级前缀事实测试 **18 项**；web `tsc --noEmit` + `vite build`；Tauri `cargo check`；浏览器 mock 流；WebView E2E（apply→undo、cleanup 演练、取消回滚） | i18n/虚拟滚动、任务列表 UI、S03 实机崩溃演练、真 WebView e2e（Playwright 的 WebKit 不是 WebKitGTK，不能替代；需 tauri-driver/WebKitWebDriver）——Vitest 与 Playwright 已覆盖 23 视图可达、取消/重试形状与面板语义 |

@@ -86,7 +86,7 @@ def rows_for(spec):
             "R○2" if meta.get("simple") and index == 2 else rbk_recipe[index - 1]
         )
         status, carrier, anchor, gap = meta["rbk_slots"].get(
-            index, ("✅", CI, meta["rbk1"], "")
+            index, ("✅", CI, expand_same_as(meta), "")
         )
         out.append(row(fid, meta, slot, recipe, point, status, carrier, anchor, gap))
     return out
@@ -210,7 +210,23 @@ def d(pre, exe, rbk, name, stage, prio, src, plan_tests, exe1, rbk1,
     }
 
 
+def expand_same_as(meta) -> str:
+    """rbk1 常写成"同上（…）"——省略式锚点无法机器复核。这里把"同上"就地展开成
+    本功能的 EXE-01 锚点（即撤销断言实际所在的那条测试），保留括号里的说明。"""
+    rbk1 = meta["rbk1"]
+    if not rbk1.startswith("同上"):
+        return rbk1
+    note = rbk1[len("同上"):].strip()
+    exe1 = meta["exe1"]
+    return f"{exe1}（撤销断言同条；{note}）" if note else f"{exe1}（撤销断言同条）"
+
+
 def default_pre_slots(harness, plan_tests, boundary, conflict_gap, expire_gap):
+    # 三个槽位参数必须是 (锚点, 缺口) 二元组；写成 (状态, 载体, 锚点, 缺口) 会让锚点列落成"✅"，
+    # 执行台账当场报"锚点不可机器定位"。这里提前失败，别把错位带进 CSV。
+    for name, pair in (("boundary", boundary), ("conflict_gap", conflict_gap), ("expire_gap", expire_gap)):
+        if not (isinstance(pair, tuple) and len(pair) == 2):
+            raise ValueError(f"default_pre_slots 的 {name} 需要 (锚点, 缺口) 二元组，实际是 {pair!r}")
     slots = {
         1: ("✅" if harness else "◐", CI, plan_tests,
             "" if harness else "零落盘与重复预览幂等未纳入 c18 harness"),
@@ -324,7 +340,7 @@ add("F03",
 
 add("F04",
     name="TXT 合并", stage="阶段 0", prio="P0★", src="方案 §5.15、§5.2；T §3.2 F04",
-    plan_tests="kernel `merge` 9 项＋`encoding` 11 项（BOM 策略）",
+    plan_tests="kernel `merge` 9 项＋`encoding` 12 项（BOM 策略）",
     exe1="apply_flow::f04_plan_apply_and_undo_merge_with_encoding_unification",
     rbk1="同上（新建产物 reverse=Quarantine／覆盖 WriteAtomic{dataRef}）",
     pre=["多 TXT 正常预览", "目标编码与 BOM 策略组合边界", "同名目标与编码未确认标注", "改编码后旧预览失效"],
@@ -332,7 +348,7 @@ add("F04",
     rbk=["撤销合并产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
         False, "kernel `merge` 9 项",
-        ("kernel `encoding` 11 项（BOM/置信门控）＋apply_flow::f04_detects_encodings_and_writes_one_bom", ""),
+        ("kernel `encoding` 12 项（BOM/置信门控）＋apply_flow::f04_detects_encodings_and_writes_one_bom", ""),
         ("kernel `merge` mixed-source-encodings/existing-target 单测", "UI 阻断待 WebDriver"),
         ("kernel `merge` 源大小变化 skipped E2010 单测", "面板失效语义待 UI")),
     exe_slots={
@@ -392,7 +408,7 @@ add("F06",
         2: (corpus_cell(["T07"])[0], CI, "corpus.rs::t07_headerless_sample_aligns_by_column_position＋apply_flow::f06_plan_surfaces_headerless_and_header_normalization_warnings",
             corpus_cell(["T07"])[1]),
         3: (corpus_cell(["T08"])[0], CI, "corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing（表头规范化与重复列名）", corpus_cell(["T08"])[1]),
-        4: ("◐", CI, "kernel `generic_apply` 40 项（含冲突二次裁决）", "C19 四策略逐项执行未落（C19 属阶段 1）"),
+        4: ("◐", CI, "kernel `generic_apply` 44 项（含冲突二次裁决）", "C19 四策略逐项执行未落（C19 属阶段 1）"),
         5: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         # ↑ csv-merge／csv-rows 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
     },
@@ -586,7 +602,7 @@ add("F13",
 
 add("C01",
     name="文件编码转换", stage="阶段 0", prio="P0★", src="方案 §5.2；T §3.2 K01–K08",
-    plan_tests="kernel `plan_c01`＋`encoding` 11 项（四级流水线、零阈值置信门控）",
+    plan_tests="kernel `plan_c01`＋`encoding` 12 项（四级流水线、零阈值置信门控）",
     exe1="apply_flow::c01_plan_apply_and_undo_round_trip",
     rbk1="同上（edit-content 备份→dataRef 还原）",
     pre=["K01–K08 抽样预览", "目标编码与 BOM 组合边界", "K04/K05 低置信与 K06 伪装标注", "改目标编码后旧预览失效"],
@@ -594,7 +610,7 @@ add("C01",
          "@K07 混合编码不承诺修复", "执行中取消／>10 MB 流式"],
     rbk=["撤销转码还原", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        True, "kernel `encoding` 11 项＋plan_c01 7 项",
+        True, "kernel `encoding` 12 项＋plan_c01 7 项",
         ("kernel `encoding` BOM 优先/UTF-32 先于 UTF-16 单测", ""),
         ("corpus.rs::k04_and_k06_are_never_silently_converted、k05_ascii_sample_defaults_to_utf8_with_hint、k07_mixed_encoding_is_flagged_not_repaired", "低置信候选预览（§5.2）UI 未接"),
         ("kernel `encoding` require_encoding E3001 单测", "面板失效语义待 UI")),
@@ -675,7 +691,8 @@ add("C07",
         True, "kernel `c07` 5 项",
         ("kernel `c07` 缺失 skip=blocked E2001／error 整单 E2001 单测", ""),
         ("kernel `c07` E1003 双重防线与自指向 E1002 单测", "UI 呈现待 WebDriver"),
-        (corpus_cell(["R01"])[0], CI, "kernel `preflight` path_length_level 共用（R01 asserted）", "UNC 矩阵待实机")),
+        ("kernel `preflight` path_length_level 共用单测＋corpus.rs::r01_long_path_samples_follow_path_length_tiers",
+         "UNC 矩阵待实机")),
     exe_slots={
         2: ("✅", CI, "kernel `generic_apply` 跨盘 2 项（复制→verify_move_integrity→删源；故障注入保源清副本）", ""),
         3: (corpus_cell(["R01"])[0], CI, "corpus.rs::r01_long_path_samples_follow_path_length_tiers", corpus_cell(["R01"])[1]),
@@ -745,7 +762,7 @@ add("C10",
 
 add("C15",
     name="任务队列与进度", stage="阶段 0", prio="P0★", src="方案 §5.12、§7.5–7.7",
-    plan_tests="kernel `generic_apply` 40 项（含并发 6 项：限额 20 万条目 E3007/并发越界 E1002）",
+    plan_tests="kernel `generic_apply` 44 项（含并发 6 项：限额 20 万条目 E3007/并发越界 E1002）",
     exe1="壳层 generic_plan_kinds_execute_through_the_desktop_queue",
     rbk1="壳层 apply_and_undo_run_through_the_queue_with_events",
     pre=["多任务入队预览", "并发上限 1–16 与 20 万条目边界", "暂停/取消对预览的影响与队列重排标注", "改并发后旧预览失效"],
@@ -786,13 +803,13 @@ add("C18",
         2: ("✅", CI, "kernel `preview` 4 项（§7.4 四类固定计数＋高危汇总）", ""),
         3: ("✅", CI, "kernel::preview::tests::two_phase_entries_collapse_into_one_mapping_row"
             "＋apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects（新旧名对照行逐项）", ""),
-        4: ("✅", CI, "c18 harness 的 stdout 逐字节一致断言（derived_ulid 确定性派生）", ""),
+        4: ("✅", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features（derived_ulid 确定性派生）", ""),
         5: ("✅", PW, "e2e/stale-plan.spec.ts 两条（C09 工作台改保留策略、F12 功能页改前缀）＋Vitest「改参数后旧计划立即失效」＋kernel `plan` E1002 参数校验单测；判定在入口层（方案 §7.3／ADR-0047，计划为不可变产物）", ""),
         6: ("◐", CI, "corpus.rs::t05_empty_file_is_reported_without_parts＋c18 harness 空输入不异常",
             "巨输入（C-1／C-2 级）实测未跑（OQ-16）；harness 现覆盖 9 命令，其余命令待纳入（ADR-0039）"),
     },
     exe_slots={
-        1: ("◐", CI, "c18 harness＋apply_flow 各功能 plan→apply→undo", "「预览与执行结果一致」逐功能比对未做"),
+        1: ("◐", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features＋apply_flow::c01_plan_apply_and_undo_round_trip", "「预览与执行结果一致」逐功能比对未做"),
         2: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", ""),
     },
     rbk_slots={
@@ -852,7 +869,7 @@ add("C06",
     },
     rbk_slots={
         1: ("✅", CI, "apply_flow::c06_undo_is_terminal_and_the_plan_can_be_reapplied", ""),
-        2: ("✅", CI, "同上（二次撤销 reverted=0）", ""),
+        2: ("✅", CI, "apply_flow::c06_undo_is_terminal_and_the_plan_can_be_reapplied（回滚为终态，二次撤销 reverted=0）", ""),
         3: ("✅", CI, "apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（占用条目保持原状）", ""),
         4: ("✅", CI, "apply_flow::c06_cross_batch_undos_are_independent", ""),
         5: ("◐", SHELL, "apply_and_undo_run_through_the_queue_with_events（oplog 落库断言）",
@@ -882,7 +899,7 @@ add("S01",
     exe_slots={
         1: ("◐", SHELL, "壳层阻断与 apply 测试", "端到端组合待 e2e"),
         2: ("◐", CI, "kernel::preflight 9 项是纯函数判定（不变量 1 保证不写盘）"
-            "＋Vitest「预检结果落地前不派发执行、期间界面仍可操作」（`App.preflight.test.tsx`）",
+            "＋Vitest「预检落地前不派发；期间界面仍可操作；落地瞬间参数已变则拒绝派发」（`App.preflight.test.tsx`）",
             "壳层事实采集（probe_root／stat／security_settings 读取）尚无独立的零写入断言；预检耗时下的观感属人工走查"),
     },
     rbk_slots={
@@ -893,7 +910,7 @@ add("S01",
 
 add("S02",
     name="保护目录执行层复核", stage="阶段 0", prio="P0", src="方案 §3.3、§9.2、11.6-9；T v1.12 R-T15",
-    plan_tests="kernel `preflight` 保护命中单测＋`generic_apply` 40 项",
+    plan_tests="kernel `preflight` 保护命中单测＋`generic_apply` 44 项",
     exe1="kernel::generic_apply::tests::protected_target_is_skipped_before_any_change",
     rbk1="同上（阻断零副作用）",
     pre=["默认空名单不误拦", "自定义名单命中（literal）", "折叠/子路径（canonical 命中）",
@@ -904,7 +921,7 @@ add("S02",
     pre_slots={
         1: ("✅", CI, "各功能计划在空名单下零 blocked（split/rename/csv_* 单测隐含）", ""),
         2: ("✅", CI, "kernel::preflight::tests::protected_literal_and_canonical_hits_block_the_entry", ""),
-        3: ("✅", CI, "同上＋generic_apply::protected_path_hit", ""),
+        3: ("✅", CI, "generic_apply::tests::protected_target_is_skipped_before_any_change＋generic_apply::tests::protected_source_is_rechecked_during_execution", ""),
         4: ("◐", SHELL, "protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes",
             "端到端重算待 e2e（壳层单测已断言比较逻辑）"),
         5: ("◐", CI, "platform `preflight` is_network_path 与 probe 单测", "名单×UNC 组合断言未写；真环境归实机日"),
@@ -927,7 +944,7 @@ C17A = [
     ("TC-C17a-XCT-01", "P/XCT", "最小日志落库（§10.2 字段集全落列）", "✅", SHELL,
      "platform::oplog 5 项＋apply_and_undo_run_through_the_queue_with_events 内落库断言", ""),
     ("TC-C17a-XCT-02", "P/XCT", "供 C06 反查（与 Journal 一致）", "◐", SHELL,
-     "oplog entries_for_plan 单测", "与 Journal 的逐字段一致性断言待补（已登记小缺口）"),
+     "platform::oplog::tests::schema_migrates_once_and_round_trips_records＋platform::oplog::tests::full_paths_follow_the_log_full_paths_switch", "与 Journal 的逐字段一致性断言待补（已登记小缺口）"),
     ("TC-C17a-XCT-03", "P/XCT", "脱敏开关生效且不影响回滚", "✅", SHELL,
      "oplog::full_paths_follow_the_log_full_paths_switch", ""),
     ("TC-C17a-XCT-04", "P/XCT", "日志不含文件内容、与完整日志分轨", "◐", CI,

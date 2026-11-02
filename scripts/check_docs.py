@@ -286,6 +286,62 @@ TABLE_SEP_RE = re.compile(r"^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$")
 BARE_PIPE_RE = re.compile(r"(?<!\\)\|")
 
 
+LEDGER_VERDICTS = {
+    "实测通过", "锚点需精确化", "锚点不可机器定位", "锚点缺失",
+    "计数不符", "名不符", "实测失败", "待人工执行",
+}
+# 这三类是"证据链已断"的硬缺陷：出现即 CI 红，必须当场改锚点或改判定，不许留过夜。
+LEDGER_BLOCKING = {"计数不符", "名不符", "实测失败"}
+
+
+def check_case_ledger(errors: list[str]) -> None:
+    """用例执行台账 CSV 的自校验：与映射表逐行对齐、判定词法合法、硬缺陷为零。
+
+    台账由 scripts/run_case_ledger.py 产出（先跑四套载体，再把每条锚点解析到实测清单）。
+    它回答的是"证据是否真跑过、名字是否还在"，不是"用例判定是否通过"——后者仍由 TC 判定点承担。
+    """
+    path = ROOT / "docs/testing/用例执行台账-v0.1.csv"
+    if not path.is_file():
+        errors.append("缺少用例执行台账 CSV：docs/testing/用例执行台账-v0.1.csv（先跑 scripts/run_case_ledger.py）")
+        return
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    if len(rows) != 296:
+        errors.append(f"用例执行台账应为 296 行，实际 {len(rows)} 行")
+    map_path = ROOT / "docs/testing/用例覆盖映射表-v0.2.csv"
+    mapped = [r["实例ID"] for r in csv.DictReader(map_path.open(encoding="utf-8"))]
+    ledger_ids = [r["实例ID"] for r in rows]
+    if len(set(ledger_ids)) != len(ledger_ids):
+        errors.append("用例执行台账的实例ID 不唯一")
+    missing = set(mapped) - set(ledger_ids)
+    extra = set(ledger_ids) - set(mapped)
+    if missing:
+        errors.append(f"用例执行台账缺少映射表中的实例：{sorted(missing)[:5]}")
+    if extra:
+        errors.append(f"用例执行台账出现映射表没有的实例：{sorted(extra)[:5]}")
+    counts: dict[str, int] = {}
+    for row in rows:
+        verdict = row["判定"]
+        counts[verdict] = counts.get(verdict, 0) + 1
+        if verdict not in LEDGER_VERDICTS:
+            errors.append(f"{row['实例ID']}：判定值 {verdict!r} 不在词法表内")
+        manual_carrier = "真人工" in row["载体"]
+        if manual_carrier != (verdict == "待人工执行"):
+            errors.append(
+                f"{row['实例ID']}：载体与判定不一致（载体真人工={manual_carrier}、判定={verdict}）——"
+                "真人工行只能是待人工执行，反之待人工行必须有真人工/受控环境载体"
+            )
+        if verdict in LEDGER_BLOCKING:
+            errors.append(
+                f"{row['实例ID']}：判定 {verdict}（{row['解析明细'][:80]}）——证据链已断，需改锚点或补测试"
+            )
+        inventory = ROOT / "docs/testing/执行记录" / row["清单文件"]
+        if not inventory.is_file():
+            errors.append(f"{row['实例ID']}：实测清单文件不存在 {row['清单文件']}")
+    for verdict in sorted(LEDGER_BLOCKING):
+        if counts.get(verdict):
+            errors.append(f"台账存在 {counts[verdict]} 行 {verdict}（见上）")
+
+
 def check_table_arity(errors: list[str]) -> None:
     """Markdown 表格的列数必须与分隔行一致：代码段里的裸竖线会串列（渲染时列会整体错位）。
 
@@ -329,6 +385,7 @@ def main() -> int:
     check_error_codes(errors)
     check_baseline_hashes(errors)
     check_case_map(errors)
+    check_case_ledger(errors)
     check_table_arity(errors)
 
     if errors:
@@ -339,7 +396,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、Markdown 表格列数。"
+        "错误码白名单、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
     )
     return 0
 
