@@ -343,7 +343,20 @@ def check_case_ledger(errors: list[str]) -> None:
             errors.append(f"{row['实例ID']}：实测清单文件不存在 {row['清单文件']}")
     for verdict in sorted(LEDGER_BLOCKING):
         if counts.get(verdict):
-            errors.append(f"台账存在 {counts[verdict]} 行 {verdict}（见上）")
+            errors.append(f"台账存在 {counts.get(verdict)} 行 {verdict}（见上）")
+    # 摘要 md 的 §2 表与 CSV 必须同源：手改过 md（或 md 没跟着重跑）就报错，
+    # 否则"数字不手写"只在生成侧成立、读的人仍可能拿到过期统计。
+    md = ROOT / "docs/testing/用例执行台账-v0.1.md"
+    if md.is_file():
+        text = md.read_text(encoding="utf-8")
+        for verdict in LEDGER_VERDICTS:
+            found = re.findall(rf"^\| {re.escape(verdict)} \| (\d+) \|", text, flags=re.MULTILINE)
+            if not found:
+                errors.append(f"台账摘要 md 缺少「{verdict}」的统计表行")
+            elif found[0] != str(counts.get(verdict, 0)):
+                errors.append(
+                    f"台账摘要 md 的「{verdict}」写作 {found[0]}，CSV 实为 {counts.get(verdict, 0)}——md 未随 CSV 重跑"
+                )
 
 
 def check_table_arity(errors: list[str]) -> None:

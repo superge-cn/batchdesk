@@ -25,7 +25,10 @@ CORPUS = {
 }
 MANUAL = {"R05", "E01", "E02", "E04"}  # fixtures/corpus/manual-only.txt
 # c18 横切 harness 覆盖的 plan 命令（apply_flow::c18_plan_dry_run_…）
-HARNESS = {"C01", "C04", "C07", "C08", "C09", "C13", "C14", "F01", "F12"}
+HARNESS = {
+    "C01", "C02", "C03", "C04", "C07", "C08", "C09", "C10", "C11", "C12", "C13", "C14",
+    "F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09", "F10", "F11", "F12", "F13",
+}
 
 CI = "CI（cargo test --workspace --all-features）"
 SHELL = "CI（cargo test --manifest-path src-tauri/Cargo.toml）"
@@ -65,7 +68,7 @@ def rows_for(spec):
             recipe = "P6"
         status, carrier, anchor, gap = meta["pre_slots"].get(
             index,
-            ("◐", CI, meta["plan_tests"], "零落盘与幂等未纳入 c18 harness（该功能不在 9 命令清单内）"),
+            ("◐", CI, meta["plan_tests"], "零落盘与幂等未纳入 c18 harness（该功能无 plan 命令）"),
         )
         out.append(row(fid, meta, slot, recipe, point, status, carrier, anchor, gap))
     exe_recipe = ["E1", "E2", "E3", "E4", "E5"]
@@ -245,10 +248,10 @@ def add(fid, **kw):
     """kw 里允许 rbk_recipes（TC §3 行的 RBK 槽位数超过 3 时显式标注配方）。"""
     spec = d(**kw)
     spec["id"] = fid
-    if fid in HARNESS:
-        spec["pre_slots"].setdefault(
-            1, ("✅", CI, spec["plan_tests"], "重复预览幂等与源树零落盘由 c18 harness 覆盖")
-        )
+    if fid in HARNESS and spec["pre_slots"].get(1, ("",))[0] != "✅":
+        # 横切 harness 已覆盖该 plan 命令 ⇒ PRE-01（零落盘/幂等）必须是 ✅。
+        # 这里把它变成生成期错误，避免"脚本说覆盖了、表里还是 ◐"的漂移。
+        raise ValueError(f"{fid} 在 HARNESS 中但 PRE-01 未标 ✅")
     FUNCS.append((fid, spec))
 
 
@@ -297,7 +300,7 @@ add("F02",
          "执行中暂停/恢复/取消", "C-2 大文件（行数预扫描进度）"],
     rbk=["撤销新增分片", "部分失败回滚", "产物被占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `split` 28 项（Lines 基准）",
+        True, "kernel `split` 28 项（Lines 基准）",
         ("kernel::split::tests::f02_n_equals_one_puts_each_line_in_its_own_part＋f02_single_part_when_n_exceeds_total_lines", ""),
         ("kernel `conflict` 9 项", "同名分片的 UI 阻断路径待 WebDriver"),
         ("壳层 protected_snapshot_comparison_ignores_order_and_duplicates＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -322,7 +325,7 @@ add("F03",
     exe=["正常均分：禁止行中断裂", "@T06 无换行", "余数分配与末片并入增长行", "执行中暂停/取消", "超大文件双遍读盘进度"],
     rbk=["撤销分片", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `split` 28 项（Quota 基准）",
+        True, "kernel `split` 28 项（Quota 基准）",
         ("kernel::split::tests::part_line_quotas_distributes_remainder_to_first_parts＋quota_accumulator_closes_on_each_quota_and_keeps_tail", ""),
         ("kernel::split::tests::f03_plan_warns_when_parts_exceed_lines＋part_line_quotas_caps_parts_at_line_count", "UI 标注待 WebDriver"),
         ("壳层 protected_snapshot_comparison_*＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -347,7 +350,7 @@ add("F04",
     exe=["正常按序合并", "@K03 BOM 只写一次；@K08 UTF-16 转码", "非法编码组合/skip 策略", "执行中暂停/取消", "大文件流式合并"],
     rbk=["撤销合并产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `merge` 9 项",
+        True, "kernel `merge` 9 项",
         ("kernel `encoding` 12 项（BOM/置信门控）＋apply_flow::f04_detects_encodings_and_writes_one_bom", ""),
         ("kernel::merge::tests::ambiguous_encoding_blocks_the_merge_with_e3001＋existing_target_is_a_conflict_skipped_by_default", "UI 阻断待 WebDriver"),
         ("generic_apply::tests::merge_skips_when_a_source_size_changed_since_plan＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -357,8 +360,9 @@ add("F04",
             corpus_cell(["K03", "K08"])[1] + "；F04 每片/产物 BOM 策略在 F05 侧仍 partial"),
         4: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         # ↑ merge／csv-range 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
-        5: ("⛔", MANUAL_CARRIER, "generic_apply Merge 分支（整文件读入内存）",
-            "实现缺口：大文件流式合并未做（内存 O(产物)）；进度仅到单条 entry"),
+        5: ("◐", CI,
+            "generic_apply::tests::merge_transcodes_inputs_in_order_and_undo_removes_the_output（断言 read_bytes 0 次＋分块回调）＋platform::fs::tests::read_stream_delivers_bounded_chunks_and_propagates_the_callback_error",
+            "大文件流式合并已落地（read_stream＋StreamTranscoder，内存 O(块)）；合并进度仍只到单条 entry；Windows 实机大文件重测未做"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
@@ -375,7 +379,7 @@ add("F05",
          "@T02 引号内换行不切记录", "执行中暂停/取消"],
     rbk=["撤销分片产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `csv` 18 项",
+        True, "kernel `csv` 18 项",
         ("kernel::csv::tests::overlong_record_occupies_its_own_part＋platform `csv` 6 项", ""),
         ("kernel::csv::tests::plan_blocks_utf16_source_and_multi_line_header", "UI 标注与阻断待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -400,7 +404,7 @@ add("F06",
          "列不一致补空/skip 与 strict 阻断", "执行中暂停/取消"],
     rbk=["撤销合并产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `csv_merge` 14 项",
+        True, "kernel `csv_merge` 14 项",
         ("kernel `csv_merge` strict 阻断 E3004 单测＋apply_flow::f06_strict_mode_blocks_a_schema_mismatch", ""),
         ("kernel::csv_merge::tests::plan_no_header_aligns_by_position＋plan_warns_when_headers_need_normalization_or_are_duplicated", "UI 呈现待 WebDriver"),
         ("generic_apply::tests::csv_merge_rejects_a_header_changed_since_plan＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -427,7 +431,7 @@ add("F07",
          "重复输出目标 E1002 与 skip", "执行中暂停/取消"],
     rbk=["撤销导出产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `csv_extract` 12 项",
+        True, "kernel `csv_extract` 12 项",
         ("kernel::csv_extract::tests::out_of_range_index_blocks_with_e3004", ""),
         ("kernel `csv_extract` 重复表头取首列告警单测＋apply_flow::f07_missing_column_blocks_with_e3004", "UI 呈现待 WebDriver"),
         ("kernel::generic_apply::tests::csv_extract_rejects_a_header_changed_since_plan＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -450,7 +454,7 @@ add("F08",
     exe=["正常取前 N", "后 N 取尾", "N=0 仅写表头", "@T04 列数漂移原样输出", "执行中暂停/取消"],
     rbk=["撤销产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `csv_rows` 10 项",
+        True, "kernel `csv_rows` 10 项",
         ("apply_flow::f08_zero_rows_writes_only_the_header＋kernel count-exceeds-rows 告警单测", ""),
         ("kernel::csv_rows::tests::duplicate_targets_and_mixed_header_modes_are_rejected＋occupied_target_is_marked_as_skip_conflict", "UI 呈现待 WebDriver"),
         ("kernel::generic_apply::tests::csv_rows_rejects_a_header_changed_since_plan＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -476,7 +480,7 @@ add("F09",
          "执行中暂停/取消", "跳过前段不整读（read_ranges）"],
     rbk=["撤销产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `csv_range` 9 项",
+        True, "kernel `csv_range` 9 项",
         ("apply_flow::f09_rejects_an_invalid_range＋kernel range-exceeds-rows 告警单测", ""),
         ("kernel::csv_range::tests::encoding_and_multiline_header_block_the_entry", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -503,7 +507,7 @@ add("F10",
          "执行中取消", "C-1 十万级流式遍历实测"],
     rbk=["删除清单产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `listing` 6 项",
+        True, "kernel `listing` 6 项",
         ("platform `listing` 4 项（层级从 1 起、目录大小 0、RFC3339）", ""),
         ("apply_flow::f10_empty_directory_and_target_inside_root_are_reported", "占位文件单列报告属人工（E02）"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -528,7 +532,7 @@ add("F11",
     exe=["正常建目录（父先子后、多级路径）", "@E04 预检阻断（人工）", "无效行集中报告", "已存在目标 skip", "执行中取消"],
     rbk=["删除新建目录", "部分失败（非空目录不递归删）", "目标被占用"],
     pre_slots={**default_pre_slots(
-        False, "kernel `create_dirs` 11 项",
+        True, "kernel `create_dirs` 11 项",
         ("kernel::create_dirs::tests::duplicate_rows_and_invalid_rows_are_reported", ""),
         ("apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows", ""),
         ("apply_flow::f11_existing_target_is_skipped＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -585,7 +589,7 @@ add("F13",
     exe=["正常捕获组改名", "非法正则报错不写", "无匹配不产条目", "两阶段与冲突复用 F12", "执行中取消"],
     rbk=["撤销改名映射", "部分失败", "目标占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `regex_rename` 11 项",
+        True, "kernel `regex_rename` 11 项",
         ("apply_flow::f13_rejects_invalid_regex_and_missing_capture_references", ""),
         ("kernel::regex_rename::tests::reserved_target_names_are_blocked＋missing_capture_reference_is_rejected", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -637,7 +641,7 @@ add("C02",
     exe=["正常统一换行（CRLF/LF/CR 混合输入）", "@T02 CSV 引号内换行不误改", "二进制/UTF-16/编码未确认 blocked E3001", "执行中取消", "大文件流式改写实测"],
     rbk=["撤销还原原字节", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `line_endings` 14 项",
+        True, "kernel `line_endings` 14 项",
         ("platform::line_endings::tests::counts_mixed_text_newlines＋text_mixed_newlines_are_counted_and_converted", ""),
         ("apply_flow::c02_blocks_binary_files_and_skips_already_target_files＋corpus K06 asserted", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -662,7 +666,7 @@ add("C03",
     exe=["正常替换（非重叠）", "正则捕获组替换", "@K06 不进入文本管道", "@T01 CSV 引号内命中的单元格保护", "执行中取消/行区间"],
     rbk=["撤销还原", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `replace_content` 11 项",
+        True, "kernel `replace_content` 11 项",
         ("kernel::replace_content::tests::empty_replacement_is_a_danger_warning＋plan_skips_no_matches_and_creates_entries_for_matches", ""),
         ("apply_flow::c03_blocks_binary_and_unclosed_csv", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -740,7 +744,7 @@ add("C10",
          "密码包/密码错误", "取消与逐文件报告"],
     rbk=["撤销清理产物与空目录", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        False, "kernel `archive` 9 项",
+        True, "kernel `archive` 9 项",
         ("kernel::archive::tests::plan_blocks_when_limits_are_exceeded", ""),
         ("corpus.rs 的 Z02 断言（apply_flow::c10_z02_rejects_traversal_entries_but_extracts_the_safe_one）", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -768,11 +772,21 @@ add("C15",
     pre=["多任务入队预览", "并发上限 1–16 与 20 万条目边界", "暂停/取消对预览的影响与队列重排标注", "改并发后旧预览失效"],
     exe=["排队执行", "双层进度（条目级＋总量级）", "暂停/恢复", "取消", "并发可控与介质自适应"],
     rbk=["取消后已完成项按各功能 Journal 回滚", "部分失败重试", "撤销时资源占用"],
-    pre_slots=default_pre_slots(
-        False, "kernel `apply` 15 项（validate_apply_limits）",
-        ("kernel `generic_apply` 并发 6 项（越界 E1002、超限 E3007）", ""),
-        ("tasks::tests::task_state_events_cover_pause_resume_and_queued_cancel＋kernel::generic_apply::tests::pooled_same_source_edit_content_is_serialized", "队列 50 待执行的引导排队 UI 未做"),
-        ("无（并发变更即时生效于下一批，面板重算待 UI）", "运行中调参「下一批生效」UI 未做")),
+    pre_slots={
+        **default_pre_slots(
+            False, "kernel `apply` 15 项（validate_apply_limits）",
+            ("kernel `generic_apply` 并发 6 项（越界 E1002、超限 E3007）", ""),
+            ("tasks::tests::task_state_events_cover_pause_resume_and_queued_cancel＋kernel::generic_apply::tests::pooled_same_source_edit_content_is_serialized", "队列 50 待执行的引导排队 UI 未做"),
+            ("无（并发变更即时生效于下一批，面板重算待 UI）", "运行中调参「下一批生效」UI 未做")),
+        # C15 没有独立 plan 命令，不属 c18 横切 harness；PRE-01 的"多任务入队预览"
+        # 只有排队态取消/暂停用例，没有"两条任务同时在队列"的预览排序断言。
+        1: ("◐", SHELL, "tasks::tests::task_state_events_cover_pause_resume_and_queued_cancel",
+            "多任务入队预览未单独测：现有壳层用例覆盖排队态取消与暂停/恢复，未断两条任务同时在队列时的预览与排序"),
+        # 2026-11-02 人类裁决：运行中调参 UI 未实现，该实例改判 ⛔（功能未实现），
+        # 不再挂"有锚点但断言不全"的 ◐——锚点列写「无」，解除条件是先做功能。
+        4: ("⛔", MANUAL_CARRIER, "无（运行中调参 UI 未实现）",
+            "待实现：运行中调参与面板重算 UI 未做（功能未实现，非测试缺口）"),
+    },
     exe_slots={
         1: ("✅", SHELL, "generic_plan_kinds_execute_through_the_desktop_queue", ""),
         2: ("✅", SHELL, "progress_bursts_are_coalesced_and_flushed_on_phase_change（合帧取 §9.1 区间下限）", ""),
@@ -789,7 +803,7 @@ add("C15",
 
 add("C18",
     name="执行前预览/干跑", stage="阶段 0", prio="P0★", src="方案 §7.1、§7.4",
-    plan_tests="kernel `preview` 4 项＋apply_flow::c18 harness（9 个 plan 命令×2 遍）",
+    plan_tests="kernel `preview` 4 项＋apply_flow::c18 harness（25 个 plan 命令×2 遍）",
     exe1="apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
     rbk1="apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects（零副作用断言）",
     pre=["干跑零落盘（源树快照前后一致）", "影响范围统计（四类计数）", "差异逐项", "重复预览幂等",
@@ -798,15 +812,15 @@ add("C18",
     rbk=["干跑零副作用", "失效即阻断"],
     simple=True,
     pre_slots={
-        1: ("◐", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
-            "harness 覆盖 c01/c04/c07/c08/c09/c13/c14/f01/f12；其余命令待纳入（守门规则已写入 ADR-0039）"),
+        1: ("✅", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
+            ""),
         2: ("✅", CI, "kernel `preview` 4 项（§7.4 四类固定计数＋高危汇总）", ""),
         3: ("✅", CI, "kernel::preview::tests::two_phase_entries_collapse_into_one_mapping_row"
             "＋apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects（新旧名对照行逐项）", ""),
         4: ("✅", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features（derived_ulid 确定性派生）", ""),
         5: ("✅", PW, "e2e/stale-plan.spec.ts 两条（C09 工作台改保留策略、F12 功能页改前缀）＋Vitest「改参数后旧计划立即失效」＋kernel `plan` E1002 参数校验单测；判定在入口层（方案 §7.3／ADR-0047，计划为不可变产物）", ""),
         6: ("◐", CI, "corpus.rs::t05_empty_file_is_reported_without_parts＋c18 harness 空输入不异常",
-            "巨输入（C-1／C-2 级）实测未跑（OQ-16）；harness 现覆盖 9 命令，其余命令待纳入（ADR-0039）"),
+            "巨输入（C-1／C-2 级）实测未跑（OQ-16）；25 个 plan 命令已全部纳入 harness（C15 队列无 plan 命令）"),
     },
     exe_slots={
         1: ("◐", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features＋apply_flow::c01_plan_apply_and_undo_round_trip", "「预览与执行结果一致」逐功能比对未做"),
