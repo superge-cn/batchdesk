@@ -15,6 +15,7 @@ import {
   undoDryRun,
   undoPlan
 } from "./lib/ipc";
+import { DangerConfirm } from "./DangerConfirm";
 import type {
   IpcError,
   PlanDocument,
@@ -606,6 +607,8 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
   /** 上次成功预览时锁定的表单快照：任一字段变化即视为旧计划失效（T 配方 P4）。 */
   const [plannedForm, setPlannedForm] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
+  /** 保护目录命中的危险二次确认（方案 §3.3＋§7.11）。 */
+  const [dangerOpen, setDangerOpen] = useState(false);
 
   const setField = (name: string, value: string) =>
     setForm((previous) => ({ ...previous, [name]: value }));
@@ -658,6 +661,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     setDryRun(null);
     setCanUndo(false);
     setPlannedForm(null);
+    setDangerOpen(false);
     try {
       const next = await planOperationFor(view, form);
       setPlan(next);
@@ -775,6 +779,8 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
   // 内核侧仍有 E2010 指纹与保护名单 E1002 兜底，这里是入口层阻断（方案 §7.3）。
   const stale =
     plan !== null && plannedForm !== null && JSON.stringify(form) !== plannedForm;
+  // 保护命中条目：E2009 由 kernel 判定，界面只做危险确认，不放宽也不改变该判定。
+  const protectionHits = (plan?.entries ?? []).filter((entry) => entry.blocked?.code === "E2009");
 
   const field = (
     label: string,
@@ -854,6 +860,28 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
               </div>
             )}
 
+            {dangerOpen && (
+              <DangerConfirm
+                confirmLabel="已知悉，执行其余条目"
+                items={protectionHits.map(
+                  (entry) => `${entry.target ?? entry.source}：${entry.blocked?.reason ?? "受保护目录"}`
+                )}
+                title="命中保护目录"
+                body={
+                  <>
+                    本次计划里有 {protectionHits.length} 条落在保护目录内，
+                    <strong>这些条目已被禁止写入、不会执行</strong>
+                    （强制力在内核执行层，界面确认不改变该判定）。其余条目将继续执行，是否继续？
+                  </>
+                }
+                onCancel={() => setDangerOpen(false)}
+                onConfirm={() => {
+                  setDangerOpen(false);
+                  void onApply();
+                }}
+              />
+            )}
+
             <div className="toolbar">
               <span className="hint">plan 命令即干跑预览（C18）：零落盘、重复预览幂等。</span>
               <button
@@ -912,7 +940,13 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
               <button
                 className="button button-primary"
                 type="button"
-                onClick={onApply}
+                onClick={() => {
+                  if (protectionHits.length > 0) {
+                    setDangerOpen(true);
+                    return;
+                  }
+                  void onApply();
+                }}
                 disabled={
                   !plan || busy !== null || active || plan.entries.length === 0 || stale
                 }

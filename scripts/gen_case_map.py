@@ -903,12 +903,13 @@ add("S02",
         4: ("◐", SHELL, "protected_snapshot_comparison_ignores_order_and_duplicates、protected_snapshot_comparison_sees_canonical_changes",
             "端到端重算待 e2e（壳层单测已断言比较逻辑）"),
         5: ("◐", CI, "platform `preflight` is_network_path 与 probe 单测", "名单×UNC 组合断言未写；真环境归实机日"),
-        6: ("⛔", "待实现（前端无二次确认入口）", "无",
-            "界面上不存在保护命中的二次确认弹窗，故本条无法测；需先实现（方案 §9.2 命中即禁止含二次确认）"),
+        6: ("◐", PW, "e2e/protection-confirm.spec.ts（对话框出现＋点名被保护落点＋声明这些条目不会执行＋初始焦点落「取消」且危险按钮不带默认焦点）＋Vitest「保护目录命中：执行前必须二次确认」（组件 `web/src/DangerConfirm.tsx`；方案 §3.3/§7.11＋U §3.5）",
+            "文案观感（是否人话、分层是否清晰）仍属人工走查（U §7）"),
     },
     exe_slots={
-        1: ("◐", CI, "generic_apply::protected_target_is_skipped_before_any_change＋protected_source_is_rechecked_during_execution",
-            "提示呈现待 UI"),
+        1: ("✅", CI, "generic_apply::protected_target_is_skipped_before_any_change＋protected_source_is_rechecked_during_execution"
+            "＋e2e/protection-confirm.spec.ts（危险二次确认对话框）＋Vitest 保护命中用例",
+            ""),
         2: ("✅", CI, "各功能 apply_flow 集成测试均在空名单下全量成功", ""),
     },
     rbk_slots={

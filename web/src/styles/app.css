@@ -824,6 +824,63 @@ button {
   }
 }
 
+/* 危险二次确认对话框（U v1.3 §3.5：底 --popover、圆角 --radius-lg、--shadow-2、遮罩 --dialog-backdrop；
+   标题 --text-lg／正文 --text-base／操作区右对齐、按钮间距 --space-2；危险对话框只做标题图标着色，不整块红底） */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: var(--dialog-backdrop);
+}
+
+.dialog-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(560px, calc(100vw - var(--space-6)));
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-2);
+}
+
+.dialog-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.dialog-title svg {
+  color: var(--status-danger-fg);
+}
+
+.dialog-body {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--foreground);
+}
+
+.dialog-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--muted-foreground);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 @supports not (backdrop-filter: blur(1px)) {
   .glass-shell,
   .card {

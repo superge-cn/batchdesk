@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FeaturePages } from "./FeaturePages";
+import type { PlanDocument } from "./lib/ipc/types";
 
 // E4（任务控制）与 RBK（撤销/重试）的前端行为断言：
 // 取消与重试失败项必须在功能视图上可达，并且调用正确的壳层命令。
@@ -128,6 +129,49 @@ describe("功能视图的任务控制与撤销", () => {
     await user.click(screen.getByRole("button", { name: /生成计划预览/ }));
     await waitFor(() => expect(screen.queryByTestId("plan-stale")).toBeNull());
     expect(screen.getByRole("button", { name: /^执行$/ })).toBeEnabled();
+  });
+
+  it("保护目录命中：执行前必须二次确认，且初始焦点不在危险按钮（方案 §3.3/§7.11、U §3.5）", async () => {
+    const user = userEvent.setup();
+    const protectedPlan: PlanDocument = {
+      ...fakePlan,
+      entries: [
+        { entryId: "e1", source: "/dir/a.txt", target: "/dir/b.txt", action: "rename", reason: "rename" },
+        {
+          entryId: "e2",
+          source: "/x/win.txt",
+          target: "/Windows/win.txt",
+          action: "rename",
+          reason: "rename",
+          blocked: { code: "E2009", reason: "path is under protected directory C:/Windows" }
+        }
+      ],
+      stats: { total: 2, conflict: 0, warning: 0, blocked: 1 }
+    };
+    vi.mocked(planOperation).mockResolvedValueOnce(protectedPlan);
+    render(<FeaturePages view="f12" onBack={() => undefined} />);
+    await planThrough(user);
+
+    await user.click(screen.getByRole("button", { name: /^执行$/ }));
+    const dialog = await screen.findByTestId("danger-confirm");
+    expect(dialog).toHaveTextContent("命中保护目录");
+    // 清单里点名被保护的落点，且说明这些条目不会执行
+    expect(dialog).toHaveTextContent("/Windows/win.txt");
+    expect(dialog).toHaveTextContent("不会执行");
+    // 未确认前绝不派发任务
+    expect(applyPlan).not.toHaveBeenCalled();
+    // 危险按钮不带默认焦点：焦点在「取消」上（回车即确认的误操作路径被消除）
+    expect(document.activeElement).toBe(screen.getByTestId("danger-cancel"));
+
+    await user.click(screen.getByTestId("danger-cancel"));
+    expect(screen.queryByTestId("danger-confirm")).toBeNull();
+    expect(applyPlan).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /^执行$/ }));
+    await user.click(await screen.findByTestId("danger-confirm-button"));
+    await waitFor(() =>
+      expect(applyPlan).toHaveBeenCalledWith("01PLAN", { onConflict: "skip", overwriteConfirmed: false })
+    );
   });
 
   it("计划失败时呈现 06 码位而非自由文本", async () => {

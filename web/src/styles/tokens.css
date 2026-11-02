@@ -72,6 +72,7 @@
 
 :root[data-theme="light"] {
   --background: var(--n-100);
+  --dialog-backdrop: rgba(0, 0, 0, 0.4);
   --foreground: var(--n-900);
   --card: var(--n-000);
   --card-foreground: var(--n-900);
@@ -114,6 +115,7 @@
 
 :root[data-theme="dark"] {
   --background: var(--n-900);
+  --dialog-backdrop: rgba(0, 0, 0, 0.6);
   --foreground: var(--n-100);
   --card: var(--n-800);
   --card-foreground: var(--n-100);

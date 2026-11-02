@@ -41,6 +41,7 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { FeaturePages } from "./FeaturePages";
+import { DangerConfirm } from "./DangerConfirm";
 import type {
   ApplyReport,
   CleanupOutcome,
@@ -194,6 +195,8 @@ function App() {
   const [plan, setPlan] = useState<PlanDocument | null>(null);
   /** 上次成功预览所依据的参数快照；任一参数变化即判定旧计划失效（T 配方 P4）。 */
   const [plannedSnapshot, setPlannedSnapshot] = useState<string | null>(null);
+  /** 保护目录命中的危险二次确认（方案 §3.3＋§7.11）；仅在有待执行条目时出现。 */
+  const [dangerOpen, setDangerOpen] = useState(false);
   const [taskViews, setTaskViews] = useState<Record<string, TaskView>>({});
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [undoTaskId, setUndoTaskId] = useState<string | null>(null);
@@ -310,6 +313,8 @@ function App() {
   const undoTask = undoTaskId ? taskViews[undoTaskId] ?? null : null;
   const taskActive = isActive(applyTask) || isActive(undoTask);
   const hasBlocked = (plan?.stats.blocked ?? 0) > 0;
+  // E2009 由 kernel 判定；界面只做危险确认，既不放宽也不改变该判定（强制力在执行层）。
+  const protectionHits = (plan?.entries ?? []).filter((entry) => entry.blocked?.code === "E2009");
   const deletableCount = plan?.entries.filter((entry) => !entry.blocked).length ?? 0;
   const planSignature = JSON.stringify({
     root: root.trim(),
@@ -374,6 +379,7 @@ function App() {
     setCleanupOutcome(null);
     setConfirmed(false);
     setPlannedSnapshot(null);
+    setDangerOpen(false);
     try {
       const next = await planOperation({
         kind: "c09",
@@ -1173,7 +1179,18 @@ function App() {
                   <div className="divider" />
 
                   <div className="button-row">
-                    <button className="button button-primary" type="button" onClick={onApply} disabled={!canApply}>
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      onClick={() => {
+                        if (protectionHits.length > 0) {
+                          setDangerOpen(true);
+                          return;
+                        }
+                        void onApply();
+                      }}
+                      disabled={!canApply}
+                    >
                       {isActive(applyTask) ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
                       {isActive(applyTask) ? "执行中…" : "移入隔离目录"}
                     </button>
@@ -1187,6 +1204,28 @@ function App() {
                       </button>
                     )}
                   </div>
+
+                  {dangerOpen && (
+                    <DangerConfirm
+                      confirmLabel="已知悉，执行其余条目"
+                      items={protectionHits.map(
+                        (entry) => `${entry.target ?? entry.source}：${entry.blocked?.reason ?? "受保护目录"}`
+                      )}
+                      title="命中保护目录"
+                      body={
+                        <>
+                          本次计划里有 {protectionHits.length} 条落在保护目录内，
+                          <strong>这些条目已被禁止写入、不会执行</strong>
+                          （强制力在内核执行层，界面确认不改变该判定）。其余条目将继续执行，是否继续？
+                        </>
+                      }
+                      onCancel={() => setDangerOpen(false)}
+                      onConfirm={() => {
+                        setDangerOpen(false);
+                        void onApply();
+                      }}
+                    />
+                  )}
 
                   {hasBlocked && (
                     <div className="warning danger" style={{ marginTop: "var(--space-3)" }}>
