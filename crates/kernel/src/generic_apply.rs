@@ -5098,7 +5098,8 @@ mod tests {
     #[test]
     fn cancel_rolls_back_applied_entries_in_each_write_arm() {
         // E4（任务控制）此前只在 Rename 与并发池上有断言；本测试把"取消后已完成条目回滚"
-        // 逐执行臂钉住：copy / move / edit-content / split(1:N) / csv-extract(1:1 产物) / create-dir。
+        // 逐执行臂钉住：copy / move / edit-content / split(1:N) / csv-extract(1:1 产物) /
+        // create-dir / delete（隔离目录）。
         let license = crate::license::AlwaysAllowLicense;
 
         // ① copy：新建产物的逆向是移入隔离目录
@@ -5276,6 +5277,52 @@ mod tests {
             .unwrap();
             assert_cancelled(&outcome, "create-dir");
             assert!(!fs.dir_exists("/o/one"), "已建目录随取消删除");
+        }
+
+        // ⑦ delete：条目先移入隔离目录，取消须把它取回原位（C09 清理走这条臂）
+        {
+            let fs = TestFs::with_files(&["/d/one.txt", "/d/two.txt"]);
+            let mut journal = TestJournal::default();
+            let ports = cancel_ports(1);
+            let mut ctx = context(&fs, &mut journal, &license);
+            ctx.progress = Some(&ports);
+            ctx.cancel = Some(&ports);
+            let outcome = apply_generic_plan(
+                &plan(vec![
+                    action_entry("e1", "/d/one.txt", None, PlanAction::Delete),
+                    action_entry("e2", "/d/two.txt", None, PlanAction::Delete),
+                ]),
+                &ApplyOptions::default(),
+                &mut ctx,
+            )
+            .unwrap();
+            assert_cancelled(&outcome, "delete");
+            assert!(
+                fs.exists("/d/one.txt"),
+                "已隔离的首条目随取消取回原位，不得留在隔离目录"
+            );
+            assert!(fs.exists("/d/two.txt"), "未派发的条目保持原状");
+            assert!(!fs.exists("/quarantine/1"), "回滚后隔离目录不得残留该条目");
+
+            // 对照：不取消时首条目确实进隔离目录（防止上面的断言空转）
+            let control = TestFs::with_files(&["/d/one.txt", "/d/two.txt"]);
+            let mut control_journal = TestJournal::default();
+            let control_ports = Ports::default();
+            let mut control_ctx = context(&control, &mut control_journal, &license);
+            control_ctx.progress = Some(&control_ports);
+            control_ctx.cancel = Some(&control_ports);
+            let done = apply_generic_plan(
+                &plan(vec![
+                    action_entry("e1", "/d/one.txt", None, PlanAction::Delete),
+                    action_entry("e2", "/d/two.txt", None, PlanAction::Delete),
+                ]),
+                &ApplyOptions::default(),
+                &mut control_ctx,
+            )
+            .unwrap();
+            assert_eq!(done.state, ApplyState::Completed);
+            assert!(!control.exists("/d/one.txt"), "未取消时条目应移入隔离目录");
+            assert!(control.exists("/quarantine/1"), "隔离目录应持有该条目");
         }
     }
 

@@ -125,7 +125,7 @@ ARM = {
     "F12": "rename", "F13": "rename",
     "C01": "edit-content", "C02": "content-rewriter", "C03": "content-rewriter",
     "C07": "copy",
-    "C09": None,   # Delete（隔离目录）臂未做条目级取消断言；现有载体＝壳层队列＋e2e-tauri
+    "C09": "delete",
     "C10": None,   # Archive/Extract 专用执行器；取消只在条目边界由壳层队列覆盖
     "C15": None,   # 队列本体；载体＝壳层测试
     "C18": None,   # 横切预览；载体＝壳层测试
@@ -144,6 +144,7 @@ ARM_TEST = {
     "edit-content": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
     "content-rewriter": "generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms",
     "copy": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
+    "delete": "generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm",
 }
 
 

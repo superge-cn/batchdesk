@@ -210,7 +210,7 @@ C09,重复文件查找,阶段 0,P0★,TC-C09-PRE-04,PRE,04,P4,删除策略（kee
 C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-01,EXE,01,E1,正常三段式哈希,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --workspace --all-features）,apply_flow::apply_and_undo_restore_files,
 C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-02,EXE,02,E2,@T05 空文件单独分组,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --workspace --all-features）,corpus.rs::t05_empty_file_is_reported_without_parts（语料台账：T05 台账＝asserted）,
 C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-03,EXE,03,E2,@E02 占位跳过（人工）,方案 §5.10、11.6-20；T §3.2 C09、T05,⛔,真人工（Windows 实机/受控环境）,platform `scan` 10 项（占位探测）,E02 OneDrive 占位属人工 → Windows 实机日
-C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-04,EXE,04,E4,执行中取消（E2E 已测）,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel＋scripts/e2e-tauri.mjs（执行中取消回滚）,
+C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-04,EXE,04,E4,执行中取消（E2E 已测）,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,task_state_events_cover_pause_resume_and_queued_cancel＋scripts/e2e-tauri.mjs（执行中取消回滚）＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm（delete 臂）,
 C09,重复文件查找,阶段 0,P0★,TC-C09-EXE-05,EXE,05,E5,大集（C-1/基准）,方案 §5.10、11.6-20；T §3.2 C09、T05,⛔,真人工（Windows 实机/受控环境）,fixtures/bench C-6 的 assert_c09.py（本地手动脚本，不在 CI）,C-6 断言未进 CI；C-1 大集归入正式基准（OQ-16）→ 受控环境
 C09,重复文件查找,阶段 0,P0★,TC-C09-RBK-01,RBK,01,R1,隔离目录恢复,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --workspace --all-features）,apply_flow::apply_and_undo_restore_files＋壳层队列测试,
 C09,重复文件查找,阶段 0,P0★,TC-C09-RBK-02,RBK,02,R2,部分撤销,方案 §5.10、11.6-20；T §3.2 C09、T05,✅,CI（cargo test --workspace --all-features）,apply_flow::cleanup_and_undo_respect_retention_window（保留期窗口内/外）,
