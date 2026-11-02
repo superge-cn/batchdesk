@@ -339,6 +339,115 @@ fn cleanup_and_undo_respect_retention_window() {
 }
 
 #[test]
+fn c01_reports_invalid_sequence_replacement_counts_per_entry() {
+    // 方案 §5.2"默认替换并计数上报"的执行侧验收：转码遇到的非法序列计数必须以**条目级 detail**
+    // 出现在执行报告里（JSON 与人读输出都要有），且合法文件仍上报 0（不是缺字段）。
+    let dir = TempDir::new();
+    let dirty = dir.0.join("dirty.txt");
+    let clean = dir.0.join("clean.txt");
+    fs::write(&dirty, b"ab\xff\xffcd".as_slice()).unwrap();
+    fs::write(&clean, b"plain ascii line\n").unwrap();
+    let dirty_original = fs::read(&dirty).unwrap();
+    let plan_path = dir.0.join("plan.json");
+    let journal = dir.0.join("journal.jsonl");
+    let quarantine = dir.0.join("q");
+
+    let plan = batchdesk(&[
+        "c01",
+        "--file",
+        path_text(&dirty),
+        "--file",
+        path_text(&clean),
+        "--target",
+        "utf-8",
+        "--source",
+        "gb18030",
+        "--sample-window",
+        "64",
+        "--sample-blocks",
+        "0",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c01 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_doc: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    fs::write(&plan_path, &plan.stdout).unwrap();
+
+    let applied = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    assert!(
+        applied.status.success(),
+        "c01 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&applied.stdout),
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(report["state"], "completed");
+    let detail_for = |file: &Path| -> String {
+        let wanted = path_text(file);
+        let entry = plan_doc["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["source"] == wanted)
+            .unwrap_or_else(|| panic!("计划里缺少 {wanted} 的条目"));
+        let entry_id = entry["entryId"].as_str().unwrap();
+        let reported = report["report"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["entryId"] == entry_id)
+            .unwrap_or_else(|| panic!("执行报告缺少条目 {entry_id}"));
+        reported["detail"]
+            .as_str()
+            .unwrap_or("<detail 字段缺失>")
+            .to_string()
+    };
+    assert_eq!(detail_for(&dirty), "invalid sequences replaced: 2");
+    assert_eq!(
+        detail_for(&clean),
+        "invalid sequences replaced: 0",
+        "合法文件也要上报计数，不能缺字段"
+    );
+
+    // 人读输出同样要看得见：把脏文件还原后再跑一次不带 --json 的 apply。
+    fs::write(&dirty, &dirty_original).unwrap();
+    let human = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("q2")),
+        "--journal",
+        path_text(&dir.0.join("journal2.jsonl")),
+    ]);
+    assert!(
+        human.status.success(),
+        "human apply failed\nstderr:\n{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&human.stdout).into_owned();
+    assert!(
+        stdout.contains("invalid sequences replaced: 2"),
+        "人读输出未显示条目级计数：{stdout}"
+    );
+}
+
+#[test]
 fn c01_plan_apply_and_undo_round_trip() {
     let dir = TempDir::new();
     let quarantine = dir.0.join("quarantine");

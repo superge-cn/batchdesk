@@ -110,6 +110,10 @@ pub struct ApplyEntryReport {
     pub status: ApplyStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<KernelError>,
+    /// 条目级明细：由执行器注入的变换产出（方案 §5.2 的"替换并计数上报"落在这里）。
+    /// 与 `error` 互不冲突——成功条目也可带明细；缺省时省略字段，旧报告仍可反序列化。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +226,7 @@ pub fn apply_plan(
                     blocked.hint.clone(),
                     false,
                 )),
+                detail: None,
             });
             continue;
         }
@@ -230,6 +235,7 @@ pub fn apply_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Skipped,
                 error: None,
+                detail: None,
             });
             continue;
         }
@@ -259,6 +265,7 @@ pub fn apply_plan(
                         None,
                         false,
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -320,6 +327,7 @@ pub fn apply_plan(
                     None,
                     true,
                 )),
+                detail: None,
             });
             continue;
         }
@@ -335,6 +343,7 @@ pub fn apply_plan(
                         None,
                         false,
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -350,6 +359,7 @@ pub fn apply_plan(
                                 None,
                                 false,
                             )),
+                            detail: None,
                         });
                         continue;
                     }
@@ -435,6 +445,7 @@ pub fn apply_plan(
             entry_id: entry.entry_id.clone(),
             status: ApplyStatus::Ok,
             error: None,
+            detail: None,
         });
     }
 
@@ -495,6 +506,7 @@ pub fn apply_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Skipped,
                 error: None,
+                detail: None,
             });
         }
         report_progress(context, ProgressPhase::Finalizing, 1, 1, None);
@@ -576,6 +588,7 @@ fn failed_entry(entry_id: &str, error: KernelError) -> ApplyEntryReport {
         entry_id: entry_id.to_string(),
         status: ApplyStatus::Failed,
         error: Some(error),
+        detail: None,
     }
 }
 
@@ -796,6 +809,7 @@ pub fn undo_plan_with_ports(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Ok,
                     error: None,
+                    detail: None,
                 });
             }
             Err(error) => {
@@ -803,6 +817,7 @@ pub fn undo_plan_with_ports(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Failed,
                     error: Some(error.clone()),
+                    detail: None,
                 });
                 failed.push(UndoFailure {
                     entry_id: entry.entry_id.clone(),

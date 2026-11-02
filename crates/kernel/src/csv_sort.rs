@@ -603,6 +603,7 @@ pub(crate) fn perform_csv_sort(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 

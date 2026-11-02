@@ -421,6 +421,9 @@ impl InvalidSequencePolicy {
 #[serde(rename_all = "camelCase")]
 pub struct Transcoded {
     pub bytes: Vec<u8>,
+    /// **替换字符（U+FFFD）的个数**，不是"有没有出错"的 0/1：方案 §5.2 要求计数上报，
+    /// T 的 C01 行也写作"替换字符计数为 0"。口径边界：源文本本来就自带的 U+FFFD 无法与
+    /// 解码产生的替换区分，会被一并计入（替代口径见 ADR-0050）。
     pub replacement_count: usize,
     /// 输入是否带有源编码的 BOM（供调用方决定输出侧 BOM 策略的延续性）。
     pub had_bom_input: bool,
@@ -458,7 +461,7 @@ pub fn transcode(
             InvalidSequencePolicy::ReplaceAndCount => {}
         }
     }
-    let replacement_count = if had_errors { 1 } else { 0 };
+    let replacement_count = text.matches('\u{fffd}').count();
     // 输出端：UTF-8/UTF-16 直接按 BOM 策略拼装；legacy 编码经 encoding_rs 编码
     // （不可映射字符默认走 WHATwg 数字实体，输出端逐字节策略待 C01 验收定稿）。
     let bytes = match target {
@@ -509,6 +512,45 @@ mod tests {
     fn encode_with(encoding: &'static Encoding, text: &str) -> Vec<u8> {
         let (bytes, _, _) = encoding.encode(text);
         bytes.into_owned()
+    }
+
+    #[test]
+    fn transcode_counts_every_replacement_character() {
+        // 方案 §5.2"默认替换并计数上报"：计数是**替换字符个数**，不是"有没有错"的 0/1。
+        // 本输入的非法序列共四处：0xff、0xff、0xfe，以及 0xc3 引导后跟 ASCII 'c'（续接字节非法）。
+        let bytes = b"a\xff\xffb\xfe\xc3c".as_slice();
+        let out = transcode(
+            bytes,
+            SourceEncoding::Utf8,
+            TargetEncoding::Utf8 { bom: false },
+            InvalidSequencePolicy::ReplaceAndCount,
+        )
+        .expect("replace-and-count 不应中止");
+        let text = String::from_utf8(out.bytes.clone()).expect("输出应为 UTF-8");
+        assert_eq!(out.replacement_count, 4);
+        assert_eq!(text.matches('\u{fffd}').count(), out.replacement_count);
+
+        // 对照：合法输入仍是 0（K01/K08 的语料断言口径不变）。
+        let clean = transcode(
+            b"plain ascii\r\n",
+            SourceEncoding::Utf8,
+            TargetEncoding::Gb18030,
+            InvalidSequencePolicy::ReplaceAndCount,
+        )
+        .expect("合法输入应转码成功");
+        assert_eq!(clean.replacement_count, 0);
+
+        // Abort 策略仍是 E3002，不产出计数。
+        let aborted = transcode(
+            bytes,
+            SourceEncoding::Utf8,
+            TargetEncoding::Utf8 { bom: false },
+            InvalidSequencePolicy::Abort,
+        );
+        assert_eq!(
+            aborted.err().map(|error| error.code),
+            Some("E3002".to_string())
+        );
     }
 
     #[test]

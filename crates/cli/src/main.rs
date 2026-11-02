@@ -43,7 +43,7 @@ use kernel::encoding::{
 };
 use kernel::fs::FsAdapter;
 use kernel::generic_apply::{
-    apply_generic_plan, ContentEditor, ContentRewriter, GenericApplyContext,
+    apply_generic_plan, ContentEditor, ContentRewriter, EditedContent, GenericApplyContext,
 };
 use kernel::journal::JournalStore;
 use kernel::license::AlwaysAllowLicense;
@@ -802,7 +802,7 @@ fn run_apply(args: &[String]) -> i32 {
             },
             false => None,
         };
-        let editor = |data: &[u8]| -> Result<Vec<u8>, kernel::error::KernelError> {
+        let editor = |data: &[u8]| -> Result<EditedContent, kernel::error::KernelError> {
             let Some((target, invalid, prior, source)) = encoding else {
                 return Err(kernel::error::KernelError::invalid_params(
                     "content editor is only available for transcode plans",
@@ -812,7 +812,12 @@ fn run_apply(args: &[String]) -> i32 {
                 Some(source) => source,
                 None => detect(data, prior).require_encoding()?,
             };
-            transcode(data, source, target, invalid).map(|result| result.bytes)
+            let result = transcode(data, source, target, invalid)?;
+            // 方案 §5.2"默认替换并计数上报"：计数随条目级 detail 进执行报告。
+            Ok(EditedContent::with_detail(
+                result.bytes,
+                format!("invalid sequences replaced: {}", result.replacement_count),
+            ))
         };
         let content_editor =
             (has_edit_content && !streaming).then_some(&editor as ContentEditor<'_>);
@@ -5398,13 +5403,27 @@ fn print_apply_human(outcome: &ApplyOutcome) {
         }
         match &entry.error {
             Some(error) => println!(
-                "  {} {} — {}: {}",
+                "  {} {} — {}: {}{}",
                 entry.entry_id,
                 entry.status.as_str(),
                 error.code,
-                error.message
+                error.message,
+                entry
+                    .detail
+                    .as_ref()
+                    .map(|detail| format!(" ({detail})"))
+                    .unwrap_or_default()
             ),
-            None => println!("  {} {}", entry.entry_id, entry.status.as_str()),
+            None => println!(
+                "  {} {}{}",
+                entry.entry_id,
+                entry.status.as_str(),
+                entry
+                    .detail
+                    .as_ref()
+                    .map(|detail| format!(" — {detail}"))
+                    .unwrap_or_default()
+            ),
         }
     }
     println!("summary: ok={ok} skipped={skipped} failed={failed}");

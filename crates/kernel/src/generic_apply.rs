@@ -37,8 +37,34 @@ use crate::plan::{
 };
 use crate::progress::{CancelToken, ProgressPhase, ProgressSink};
 
-/// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节。
-pub type ContentEditor<'a> = &'a (dyn Fn(&[u8]) -> Result<Vec<u8>, KernelError> + Send + Sync);
+/// `edit-content` 的变换结果：新字节 ＋ 可选的**条目级明细**。
+///
+/// 明细是给执行报告看的一行文本（方案 §5.2"默认替换并计数上报"的落点），由注入方
+/// 生成——判定与计数都在纯函数层，执行器只负责把它带到 `ApplyEntryReport.detail`。
+pub struct EditedContent {
+    pub bytes: Vec<u8>,
+    pub detail: Option<String>,
+}
+
+impl EditedContent {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            detail: None,
+        }
+    }
+
+    pub fn with_detail(bytes: Vec<u8>, detail: impl Into<String>) -> Self {
+        Self {
+            bytes,
+            detail: Some(detail.into()),
+        }
+    }
+}
+
+/// `edit-content` 的内容变换函数：输入原始字节，返回变换后的字节与条目级明细。
+pub type ContentEditor<'a> =
+    &'a (dyn Fn(&[u8]) -> Result<EditedContent, KernelError> + Send + Sync);
 
 /// 流式内容重写端口：读取源流、写入目标流；C02 等大文件改写使用。
 pub trait ContentRewriter: Send + Sync {
@@ -489,6 +515,7 @@ fn precheck_entry(
             entry_id: entry.entry_id.clone(),
             status: ApplyStatus::Skipped,
             error: None,
+            detail: None,
         });
     }
 
@@ -676,6 +703,7 @@ fn settle_entry(
     }
     let forward = performed.forward;
     let reverse = performed.reverse;
+    let detail = performed.detail;
     match exec.journal.append_with_kind(
         &plan.plan_id,
         &entry.entry_id,
@@ -708,6 +736,7 @@ fn settle_entry(
             ApplyStatus::Ok
         },
         error: None,
+        detail,
     })
 }
 
@@ -1013,6 +1042,8 @@ pub(crate) struct Performed {
     pub(crate) final_path: String,
     pub(crate) forward: FsOp,
     pub(crate) reverse: FsOp,
+    /// 条目级明细（来自注入的内容变换），随 `ApplyEntryReport.detail` 上报。
+    pub(crate) detail: Option<String>,
 }
 
 /// 执行单条动作并推导 Journal 的 forward/reverse（设计 01 §8）：
@@ -1116,6 +1147,7 @@ fn perform_listing(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -1170,6 +1202,7 @@ fn perform(
                                 from: final_path,
                                 to: entry.source.clone(),
                             },
+                            detail: None,
                         });
                     }
                     if let Err(error) =
@@ -1197,6 +1230,7 @@ fn perform(
                         final_path,
                         forward,
                         reverse,
+                        detail: None,
                     })
                 }
             }
@@ -1230,6 +1264,7 @@ fn perform(
                         to: outcome.final_path,
                     },
                     reverse,
+                    detail: None,
                 })
             }
             PlanAction::Split => {
@@ -1278,6 +1313,7 @@ fn perform(
                         data_ref: None,
                     },
                     reverse,
+                    detail: None,
                 })
             }
             PlanAction::Merge => {
@@ -1352,6 +1388,7 @@ fn perform(
                         data_ref: None,
                     },
                     reverse,
+                    detail: None,
                 })
             }
             PlanAction::CsvExtract => {
@@ -1418,11 +1455,13 @@ fn perform(
                     final_path: target.to_string(),
                     forward,
                     reverse,
+                    detail: None,
                 })
             }
             PlanAction::EditContent => {
                 // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
                 let backup = view.fs.backup_to_quarantine(&entry.source)?;
+                let mut detail = None;
                 if let Some(rewriter) = view.content_rewriter {
                     view.fs
                         .rewrite_atomic_with(&entry.source, &mut |reader, writer| {
@@ -1434,7 +1473,8 @@ fn perform(
                         .content_editor
                         .expect("validated: edit-content requires an editor");
                     let edited = editor(&data)?;
-                    view.fs.write_atomic(&entry.source, &edited)?;
+                    detail = edited.detail;
+                    view.fs.write_atomic(&entry.source, &edited.bytes)?;
                 }
                 let forward = FsOp::WriteAtomic {
                     path: entry.source.clone(),
@@ -1452,6 +1492,7 @@ fn perform(
                     final_path: entry.source.clone(),
                     forward,
                     reverse,
+                    detail,
                 })
             }
             PlanAction::Delete => {
@@ -1468,6 +1509,7 @@ fn perform(
                         from: quarantined,
                         to: entry.source.clone(),
                     },
+                    detail: None,
                 })
             }
             other => Err(KernelError::invalid_params(format!(
@@ -1641,6 +1683,7 @@ fn perform_csv_columns(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -1704,6 +1747,7 @@ fn to_performed(
         final_path: outcome.final_path,
         forward: forward_op,
         reverse,
+        detail: None,
     })
 }
 
@@ -2343,6 +2387,7 @@ fn perform_csv_extract(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -2477,6 +2522,7 @@ fn perform_csv_range(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -2580,6 +2626,7 @@ fn perform_csv_filter(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -2669,6 +2716,7 @@ fn perform_csv_dedup(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -2772,6 +2820,7 @@ fn perform_csv_rows(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -2934,6 +2983,7 @@ fn perform_csv_merge(
             data_ref: None,
         },
         reverse,
+        detail: None,
     })
 }
 
@@ -2990,6 +3040,7 @@ fn skipped_entry(entry_id: String, error: KernelError) -> ApplyEntryReport {
         entry_id,
         status: ApplyStatus::Skipped,
         error: Some(error),
+        detail: None,
     }
 }
 
@@ -2998,6 +3049,7 @@ fn failed_entry(entry_id: String, error: KernelError) -> ApplyEntryReport {
         entry_id,
         status: ApplyStatus::Failed,
         error: Some(error),
+        detail: None,
     }
 }
 
@@ -4863,10 +4915,9 @@ mod tests {
         let mut journal = TestJournal::default();
         let mut ctx = context(&fs, &mut journal, &license);
         ctx.content_editor = Some(&|data: &[u8]| {
-            Ok(data
-                .iter()
-                .map(|byte| byte.to_ascii_uppercase())
-                .collect::<Vec<u8>>())
+            Ok(EditedContent::new(
+                data.iter().map(|byte| byte.to_ascii_uppercase()).collect(),
+            ))
         });
         let outcome = apply_generic_plan(
             &plan(vec![action_entry(
@@ -4900,6 +4951,62 @@ mod tests {
         .unwrap();
         assert_eq!(undo.reverted, 1);
         assert_eq!(fs.read_file("/data/a.txt"), b"abc");
+    }
+
+    #[test]
+    fn edit_content_carries_detail_per_entry_and_keeps_it_absent_when_not_produced() {
+        // 方案 §5.2"默认替换并计数上报"的执行侧落点：注入变换产出的条目级 detail 必须随
+        // 该条目的执行报告出现；两条目的 detail 不得互相串用；未产出明细时保持 None。
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt"]);
+        fs.write_file("/data/a.txt", b"abc");
+        fs.write_file("/data/b.txt", b"xy");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.content_editor = Some(&|data: &[u8]| {
+            Ok(EditedContent::with_detail(
+                data.to_vec(),
+                format!("invalid sequences replaced: {}", data.len()),
+            ))
+        });
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/data/a.txt", None, PlanAction::EditContent),
+                action_entry("e2", "/data/b.txt", None, PlanAction::EditContent),
+            ]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.report.entries[0].detail.as_deref(),
+            Some("invalid sequences replaced: 3"),
+            "第一条条目要带自己的计数"
+        );
+        assert_eq!(
+            outcome.report.entries[1].detail.as_deref(),
+            Some("invalid sequences replaced: 2"),
+            "第二条条目不得复用第一条的明细"
+        );
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+
+        // 对照：注入方不产出明细时 detail 保持 None（不得凭空造一行）。
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.content_editor = Some(&|data: &[u8]| Ok(EditedContent::new(data.to_vec())));
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e3",
+                "/data/a.txt",
+                None,
+                PlanAction::EditContent,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(outcome.report.entries[0].detail, None);
     }
 
     #[test]
@@ -5167,10 +5274,9 @@ mod tests {
             ctx.progress = Some(&ports);
             ctx.cancel = Some(&ports);
             ctx.content_editor = Some(&|data: &[u8]| {
-                Ok(data
-                    .iter()
-                    .map(|byte| byte.to_ascii_uppercase())
-                    .collect::<Vec<u8>>())
+                Ok(EditedContent::new(
+                    data.iter().map(|byte| byte.to_ascii_uppercase()).collect(),
+                ))
             });
             let outcome = apply_generic_plan(
                 &plan(vec![
@@ -5769,7 +5875,10 @@ mod tests {
         let editor = |data: &[u8]| {
             let mut owned = data.to_vec();
             owned.extend_from_slice(b"+");
-            Ok(owned)
+            Ok(EditedContent::with_detail(
+                owned,
+                "appended a marker byte by the test editor",
+            ))
         };
         ctx.content_editor = Some(&editor);
         let outcome = apply_generic_plan(

@@ -95,6 +95,8 @@ export interface ApplyEntryReport {
   entryId: string;
   status: ApplyStatus;
   error?: IpcError;
+  /** 条目级明细（方案 §5.2 的替换计数上报等）；与 error 互不冲突，成功条目也可带。 */
+  detail?: string;
 }
 
 export interface ApplyReport {

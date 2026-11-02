@@ -630,6 +630,7 @@ pub fn apply_archive_plan(
                     block.hint.clone(),
                     false,
                 )),
+                detail: None,
             });
             continue;
         }
@@ -638,6 +639,7 @@ pub fn apply_archive_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Skipped,
                 error: None,
+                detail: None,
             });
             continue;
         }
@@ -649,6 +651,7 @@ pub fn apply_archive_plan(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Failed,
                     error: Some(error),
+                    detail: None,
                 });
                 continue;
             }
@@ -667,6 +670,7 @@ pub fn apply_archive_plan(
                     None,
                     true,
                 )),
+                detail: None,
             });
             continue;
         }
@@ -683,6 +687,7 @@ pub fn apply_archive_plan(
                         None,
                         false,
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -697,6 +702,7 @@ pub fn apply_archive_plan(
                         None,
                         false,
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -707,6 +713,7 @@ pub fn apply_archive_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Failed,
                 error: Some(error),
+                detail: None,
             });
             continue;
         }
@@ -718,6 +725,7 @@ pub fn apply_archive_plan(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Failed,
                     error: Some(KernelError::missing_param("archive target is required")),
+                    detail: None,
                 });
                 continue;
             };
@@ -732,6 +740,7 @@ pub fn apply_archive_plan(
                         None,
                         false,
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -741,6 +750,7 @@ pub fn apply_archive_plan(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Skipped,
                     error: None,
+                    detail: None,
                 });
                 continue;
             }
@@ -753,6 +763,7 @@ pub fn apply_archive_plan(
                         entry_id: entry.entry_id.clone(),
                         status: ApplyStatus::Failed,
                         error: Some(error),
+                        detail: None,
                     });
                     continue;
                 }
@@ -766,6 +777,7 @@ pub fn apply_archive_plan(
                         entry_id: entry.entry_id.clone(),
                         status: ApplyStatus::Failed,
                         error: Some(error),
+                        detail: None,
                     });
                     continue;
                 }
@@ -779,6 +791,7 @@ pub fn apply_archive_plan(
                         entry_id: entry.entry_id.clone(),
                         status: ApplyStatus::Failed,
                         error: Some(error),
+                        detail: None,
                     });
                     continue;
                 }
@@ -790,6 +803,7 @@ pub fn apply_archive_plan(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Failed,
                     error: Some(error),
+                    detail: None,
                 });
                 continue;
             }
@@ -812,6 +826,7 @@ pub fn apply_archive_plan(
                         entry_id: entry.entry_id.clone(),
                         status: ApplyStatus::Failed,
                         error: Some(error),
+                        detail: None,
                     });
                     continue;
                 }
@@ -824,6 +839,7 @@ pub fn apply_archive_plan(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Failed,
                     error: Some(error),
+                    detail: None,
                 });
                 continue;
             }
@@ -832,6 +848,7 @@ pub fn apply_archive_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Ok,
                 error: None,
+                detail: None,
             });
             continue;
         }
@@ -844,6 +861,7 @@ pub fn apply_archive_plan(
                     entry_id: entry.entry_id.clone(),
                     status: ApplyStatus::Failed,
                     error: Some(error),
+                    detail: None,
                 });
                 continue;
             }
@@ -864,6 +882,7 @@ pub fn apply_archive_plan(
                     None,
                     false,
                 )),
+                detail: None,
             });
             continue;
         }
@@ -878,6 +897,7 @@ pub fn apply_archive_plan(
                     error: Some(KernelError::missing_param(
                         "plan param maxTotalBytes is required",
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -895,6 +915,7 @@ pub fn apply_archive_plan(
                     error: Some(KernelError::missing_param(
                         "plan param maxRatio is required",
                     )),
+                    detail: None,
                 });
                 continue;
             }
@@ -929,6 +950,7 @@ pub fn apply_archive_plan(
                     Some(format!("total {total} bytes, ratio {ratio:.2}")),
                     false,
                 )),
+                detail: None,
             });
             continue;
         }
@@ -1038,6 +1060,7 @@ pub fn apply_archive_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Failed,
                 error: first_error,
+                detail: None,
             });
         } else {
             ok += 1;
@@ -1045,6 +1068,7 @@ pub fn apply_archive_plan(
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Ok,
                 error: None,
+                detail: None,
             });
         }
     }
