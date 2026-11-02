@@ -541,7 +541,7 @@ def main() -> None:
         ])
 
     with LEDGER_CSV.open("w", encoding="utf-8", newline="") as sink:
-        writer = csv.writer(sink)
+        writer = csv.writer(sink, lineterminator="\n")
         writer.writerow(header)
         writer.writerows(ledger_rows)
 

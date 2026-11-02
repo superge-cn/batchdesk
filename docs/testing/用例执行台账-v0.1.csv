@@ -1,297 +1,297 @@
 实例ID,功能,类型,表内状态,载体,判定,解析层,解析明细,实测命令,实测时间,提交,清单文件
-TC-F01-PRE-01,TXT 按大小分割,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,29 项实测通过；模块级 split 整组 28 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-PRE-02,TXT 按大小分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-PRE-03,TXT 按大小分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,10 项实测通过；模块级 conflict 整组 9 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-PRE-04,TXT 按大小分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-EXE-01,TXT 按大小分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-EXE-02,TXT 按大小分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-EXE-03,TXT 按大小分割,EXE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；conflict::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-EXE-04,TXT 按大小分割,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-EXE-05,TXT 按大小分割,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-RBK-01,TXT 按大小分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-RBK-02,TXT 按大小分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F01-RBK-03,TXT 按大小分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-PRE-01,TXT 按行数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,28 项实测通过；模块级 split 整组 28 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-PRE-02,TXT 按行数分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-PRE-03,TXT 按行数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 conflict 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-PRE-04,TXT 按行数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-EXE-01,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-EXE-02,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-EXE-03,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-EXE-04,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-EXE-05,TXT 按行数分割,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-RBK-01,TXT 按行数分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-RBK-02,TXT 按行数分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F02-RBK-03,TXT 按行数分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-PRE-01,TXT 按份数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,28 项实测通过；模块级 split 整组 28 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-PRE-02,TXT 按份数分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-PRE-03,TXT 按份数分割,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-PRE-04,TXT 按份数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过；按用例名片段 protected_snapshot_comparison_ 定位到 2 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-EXE-01,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-EXE-02,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-EXE-03,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-EXE-04,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-EXE-05,TXT 按份数分割,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-RBK-01,TXT 按份数分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-RBK-02,TXT 按份数分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F03-RBK-03,TXT 按份数分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-PRE-01,TXT 合并,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 merge 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-PRE-02,TXT 合并,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,13 项实测通过；模块级 encoding 整组 12 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-PRE-03,TXT 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；merge::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-PRE-04,TXT 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；merge::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-EXE-01,TXT 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-EXE-02,TXT 合并,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-EXE-03,TXT 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-EXE-04,TXT 合并,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-EXE-05,TXT 合并,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-RBK-01,TXT 合并,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-RBK-02,TXT 合并,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F04-RBK-03,TXT 合并,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-PRE-01,CSV 分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,18 项实测通过；模块级 csv 整组 18 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-PRE-02,CSV 分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,24 项实测通过；csv::tests::* 整组 18 项全绿，但锚点未声称条数也未指名用例；模块级 csv 整组 6 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-PRE-03,CSV 分割,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,18 项实测通过；csv::tests::* 整组 18 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-PRE-04,CSV 分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-EXE-01,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-EXE-02,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-EXE-03,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-EXE-04,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-EXE-05,CSV 分割,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-RBK-01,CSV 分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-RBK-02,CSV 分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F05-RBK-03,CSV 分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-PRE-01,CSV 合并,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,14 项实测通过；模块级 csv_merge 整组 14 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-PRE-02,CSV 合并,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,15 项实测通过；csv_merge::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-PRE-03,CSV 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；csv_merge::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-PRE-04,CSV 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；csv_merge::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-EXE-01,CSV 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-EXE-02,CSV 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-EXE-03,CSV 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-EXE-04,CSV 合并,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,44 项实测通过；模块级 generic_apply 整组 44 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-EXE-05,CSV 合并,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-RBK-01,CSV 合并,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-RBK-02,CSV 合并,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F06-RBK-03,CSV 合并,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-PRE-01,CSV 抽取指定列,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,12 项实测通过；模块级 csv_extract 整组 12 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-PRE-02,CSV 抽取指定列,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；csv_extract::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-PRE-03,CSV 抽取指定列,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,13 项实测通过；csv_extract::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-PRE-04,CSV 抽取指定列,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；csv_extract::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-EXE-01,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-EXE-02,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-EXE-03,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-EXE-04,CSV 抽取指定列,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 conflict 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-EXE-05,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-RBK-01,CSV 抽取指定列,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-RBK-02,CSV 抽取指定列,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F07-RBK-03,CSV 抽取指定列,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-PRE-01,CSV 抽取数量行,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,10 项实测通过；模块级 csv_rows 整组 10 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-PRE-02,CSV 抽取数量行,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-PRE-03,CSV 抽取数量行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；csv_rows::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-PRE-04,CSV 抽取数量行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；csv_rows::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-EXE-01,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-EXE-02,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-EXE-03,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-EXE-04,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-EXE-05,CSV 抽取数量行,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-RBK-01,CSV 抽取数量行,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-RBK-02,CSV 抽取数量行,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F08-RBK-03,CSV 抽取数量行,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-PRE-01,CSV 抽取位置行,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 csv_range 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-PRE-02,CSV 抽取位置行,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-PRE-03,CSV 抽取位置行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；csv_range::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-PRE-04,CSV 抽取位置行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,8 项实测通过；csv_range::tests::* 整组 8 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-EXE-01,CSV 抽取位置行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-EXE-02,CSV 抽取位置行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-EXE-03,CSV 抽取位置行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-EXE-04,CSV 抽取位置行,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-EXE-05,CSV 抽取位置行,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 read_ranges 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-RBK-01,CSV 抽取位置行,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-RBK-02,CSV 抽取位置行,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F09-RBK-03,CSV 抽取位置行,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-PRE-01,生成目录清单,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,6 项实测通过；模块级 listing 整组 6 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-PRE-02,生成目录清单,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,4 项实测通过；模块级 listing 整组 4 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-PRE-03,生成目录清单,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-PRE-04,生成目录清单,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,6 项实测通过；listing::tests::* 整组 6 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-EXE-01,生成目录清单,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-EXE-02,生成目录清单,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-EXE-03,生成目录清单,EXE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,4 项实测通过；listing::tests::* 整组 4 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-EXE-04,生成目录清单,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-EXE-05,生成目录清单,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-RBK-01,生成目录清单,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 listing_plan_streams_csv_through_the_desktop_queue_and_undoes 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-RBK-02,生成目录清单,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F10-RBK-03,生成目录清单,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-PRE-01,按清单建文件夹,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,11 项实测通过；模块级 create_dirs 整组 11 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-PRE-02,按清单建文件夹,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；create_dirs::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-PRE-03,按清单建文件夹,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,13 项实测通过；create_dirs::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-PRE-04,按清单建文件夹,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-EXE-01,按清单建文件夹,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-EXE-02,按清单建文件夹,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-EXE-03,按清单建文件夹,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-EXE-04,按清单建文件夹,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-EXE-05,按清单建文件夹,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-RBK-01,按清单建文件夹,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-RBK-02,按清单建文件夹,RBK,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；create_dirs::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F11-RBK-03,按清单建文件夹,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-PRE-01,批量重命名,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,10 项实测通过；模块级 rename 整组 10 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-PRE-02,批量重命名,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-PRE-03,批量重命名,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-PRE-04,批量重命名,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-EXE-01,批量重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-EXE-02,批量重命名,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-EXE-03,批量重命名,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,11 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-EXE-04,批量重命名,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-EXE-05,批量重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-RBK-01,批量重命名,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-RBK-02,批量重命名,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F12-RBK-03,批量重命名,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-PRE-01,正则重命名,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,11 项实测通过；模块级 regex_rename 整组 11 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-PRE-02,正则重命名,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-PRE-03,正则重命名,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；regex_rename::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-PRE-04,正则重命名,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；regex_rename::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-EXE-01,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-EXE-02,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-EXE-03,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-EXE-04,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,10 项实测通过；模块级 rename 整组 10 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-EXE-05,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-RBK-01,正则重命名,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-RBK-02,正则重命名,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-F13-RBK-03,正则重命名,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-PRE-01,文件编码转换,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,12 项实测通过；模块级 encoding 整组 12 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-PRE-02,文件编码转换,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；encoding::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-PRE-03,文件编码转换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-PRE-04,文件编码转换,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；encoding::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-EXE-01,文件编码转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-EXE-02,文件编码转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-EXE-03,文件编码转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-EXE-04,文件编码转换,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-EXE-05,文件编码转换,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-RBK-01,文件编码转换,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-RBK-02,文件编码转换,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C01-RBK-03,文件编码转换,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-PRE-01,换行符转换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,14 项实测通过；模块级 line_endings 整组 14 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-PRE-02,换行符转换,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；line_endings::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-PRE-03,换行符转换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-PRE-04,换行符转换,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；line_endings::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-EXE-01,换行符转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-EXE-02,换行符转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-EXE-03,换行符转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,2 项实测通过；模块级 binary 整组 2 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-EXE-04,换行符转换,EXE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-EXE-05,换行符转换,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-RBK-01,换行符转换,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-RBK-02,换行符转换,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C02-RBK-03,换行符转换,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-PRE-01,批量查找替换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,11 项实测通过；模块级 replace_content 整组 11 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-PRE-02,批量查找替换,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；replace_content::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-PRE-03,批量查找替换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-PRE-04,批量查找替换,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；replace_content::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-EXE-01,批量查找替换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-EXE-02,批量查找替换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-EXE-03,批量查找替换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；K06 按前缀定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-EXE-04,批量查找替换,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-EXE-05,批量查找替换,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-RBK-01,批量查找替换,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-RBK-02,批量查找替换,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C03-RBK-03,批量查找替换,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-PRE-01,清单驱动移动,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,5 项实测通过；模块级 c07 整组 5 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-PRE-02,清单驱动移动,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,5 项实测通过；c07::tests::* 整组 5 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-PRE-03,清单驱动移动,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,5 项实测通过；c07::tests::* 整组 5 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-PRE-04,清单驱动移动,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,10 项实测通过；preflight::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-EXE-01,清单驱动移动,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-EXE-02,清单驱动移动,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,2 项实测通过；模块级 generic_apply 整组 2 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-EXE-03,清单驱动移动,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-EXE-04,清单驱动移动,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-EXE-05,清单驱动移动,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-RBK-01,清单驱动移动,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-RBK-02,清单驱动移动,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C07-RBK-03,清单驱动移动,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-PRE-01,重复文件查找,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 duplicate 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-PRE-02,重复文件查找,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,21 项实测通过；模块级 plan 整组 21 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-PRE-03,重复文件查找,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-PRE-04,重复文件查找,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,21 项实测通过；plan::tests::* 整组 21 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-EXE-01,重复文件查找,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-EXE-02,重复文件查找,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-EXE-03,重复文件查找,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-EXE-04,重复文件查找,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-EXE-05,重复文件查找,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-RBK-01,重复文件查找,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-RBK-02,重复文件查找,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C09-RBK-03,重复文件查找,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-PRE-01,批量压缩/解压,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 archive 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-PRE-02,批量压缩/解压,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；archive::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-PRE-03,批量压缩/解压,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-PRE-04,批量压缩/解压,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；archive::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-EXE-01,批量压缩/解压,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-EXE-02,批量压缩/解压,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-EXE-03,批量压缩/解压,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-EXE-04,批量压缩/解压,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-EXE-05,批量压缩/解压,EXE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-RBK-01,批量压缩/解压,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 zip_compress_plan_executes_through_the_desktop_queue_and_undoes 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-RBK-02,批量压缩/解压,RBK,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；archive::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C10-RBK-03,批量压缩/解压,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-PRE-01,任务队列与进度,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,15 项实测通过；模块级 apply 整组 15 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-PRE-02,任务队列与进度,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,6 项实测通过；模块级 generic_apply 整组 6 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-PRE-03,任务队列与进度,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,44 项实测通过；generic_apply::tests::* 整组 44 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-PRE-04,任务队列与进度,PRE,◐,CI（cargo test --workspace --all-features）,锚点缺失,未解析,"锚点列没有可核证据（状态符号或""无""），需补测试名或改判状态",cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-EXE-01,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 generic_plan_kinds_execute_through_the_desktop_queue 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-EXE-02,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 progress_bursts_are_coalesced_and_flushed_on_phase_change 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-EXE-03,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-EXE-04,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-EXE-05,任务队列与进度,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,6 项实测通过；模块级 generic_apply 整组 6 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-RBK-01,任务队列与进度,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 recover_rollback_restores_applied_entries_and_cancels_the_original_task 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-RBK-02,任务队列与进度,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 retry_reruns_only_failed_entries_under_a_new_task_id 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C15-RBK-03,任务队列与进度,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 restart_marks_unfinished_tasks_interrupted_and_resume_skips_applied_entries 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-PRE-01,执行前预览/干跑,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-PRE-02,执行前预览/干跑,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,4 项实测通过；模块级 preview 整组 4 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-PRE-03,执行前预览/干跑,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-PRE-04,执行前预览/干跑,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-PRE-05,执行前预览/干跑,PRE,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,23 项实测通过；plan::tests::* 整组 21 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-PRE-06,执行前预览/干跑,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-EXE-01,执行前预览/干跑,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-EXE-02,执行前预览/干跑,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-RBK-01,执行前预览/干跑,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C18-RBK-02,执行前预览/干跑,RBK,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,4 项实测通过；preview::tests::* 整组 4 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-PRE-01,预览与冲突检测,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-PRE-02,预览与冲突检测,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,6 项实测通过；name_replace::tests::* 整组 6 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-PRE-03,预览与冲突检测,PRE,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,1 项实测通过；rename-preview.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-PRE-04,预览与冲突检测,PRE,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,2 项实测通过；rename-preview.spec.ts 按标题匹配 1 条；stale-plan.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-PRE-05,预览与冲突检测,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-PRE-06,预览与冲突检测,PRE,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,1 项实测通过；rename-preview.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-EXE-01,预览与冲突检测,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,4 项实测通过；模块级 preview 整组 4 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-EXE-02,预览与冲突检测,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 non_rename_kinds_are_rejected_with_e1002 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-RBK-01,预览与冲突检测,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C05-RBK-02,预览与冲突检测,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-PRE-01,重命名撤销/回滚,PRE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-PRE-02,重命名撤销/回滚,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-EXE-01,重命名撤销/回滚,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-EXE-02,重命名撤销/回滚,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-EXE-03,重命名撤销/回滚,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-EXE-04,重命名撤销/回滚,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-EXE-05,重命名撤销/回滚,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,5 项实测通过；模块级 journal 整组 5 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-RBK-01,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-RBK-02,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-RBK-03,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-RBK-04,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C06-RBK-05,重命名撤销/回滚,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-PRE-01,执行前预检,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 preflight 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-PRE-02,执行前预检,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；preflight::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-PRE-03,执行前预检,PRE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-PRE-04,执行前预检,PRE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-PRE-05,执行前预检,PRE,◐,CI（cargo test --workspace --all-features）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-PRE-06,执行前预检,PRE,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-EXE-01,执行前预检,EXE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-EXE-02,执行前预检,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,文件级,1 项实测通过；App.preflight.test.tsx 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-RBK-01,执行前预检,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S01-RBK-02,执行前预检,RBK,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,1 项实测通过；preflight-report.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-PRE-01,保护目录执行层复核,PRE,✅,CI（cargo test --workspace --all-features）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-PRE-02,保护目录执行层复核,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 protected_literal_and_canonical_hits_block_the_entry 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-PRE-03,保护目录执行层复核,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-PRE-04,保护目录执行层复核,PRE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 protected_snapshot_comparison_ignores_order_and_duplicates 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-PRE-05,保护目录执行层复核,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,7 项实测通过；preflight::tests::* 整组 7 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-PRE-06,保护目录执行层复核,PRE,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-EXE-01,保护目录执行层复核,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,文件级,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-EXE-02,保护目录执行层复核,EXE,✅,CI（cargo test --workspace --all-features）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-RBK-01,保护目录执行层复核,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 protected_target_is_skipped_before_any_change 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-S02-RBK-02,保护目录执行层复核,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 protected_snapshot_comparison_sees_canonical_changes 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C17a-XCT-01,最小操作/撤销日志,XCT,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C17a-XCT-02,最小操作/撤销日志,XCT,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 schema_migrates_once_and_round_trips_records 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C17a-XCT-03,最小操作/撤销日志,XCT,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 full_paths_follow_the_log_full_paths_switch 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
-TC-C17a-XCT-04,最小操作/撤销日志,XCT,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 operation_log 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:57:00+0800,ee9a2f2,2026-11-02-inventory.tsv
+TC-F01-PRE-01,TXT 按大小分割,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,29 项实测通过；模块级 split 整组 28 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-PRE-02,TXT 按大小分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-PRE-03,TXT 按大小分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,10 项实测通过；模块级 conflict 整组 9 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-PRE-04,TXT 按大小分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-EXE-01,TXT 按大小分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-EXE-02,TXT 按大小分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-EXE-03,TXT 按大小分割,EXE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；conflict::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-EXE-04,TXT 按大小分割,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-EXE-05,TXT 按大小分割,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-RBK-01,TXT 按大小分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-RBK-02,TXT 按大小分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F01-RBK-03,TXT 按大小分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-PRE-01,TXT 按行数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,28 项实测通过；模块级 split 整组 28 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-PRE-02,TXT 按行数分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-PRE-03,TXT 按行数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 conflict 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-PRE-04,TXT 按行数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-EXE-01,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-EXE-02,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-EXE-03,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-EXE-04,TXT 按行数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-EXE-05,TXT 按行数分割,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-RBK-01,TXT 按行数分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-RBK-02,TXT 按行数分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F02-RBK-03,TXT 按行数分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-PRE-01,TXT 按份数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,28 项实测通过；模块级 split 整组 28 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-PRE-02,TXT 按份数分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-PRE-03,TXT 按份数分割,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,28 项实测通过；split::tests::* 整组 28 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-PRE-04,TXT 按份数分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过；按用例名片段 protected_snapshot_comparison_ 定位到 2 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-EXE-01,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-EXE-02,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-EXE-03,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-EXE-04,TXT 按份数分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-EXE-05,TXT 按份数分割,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-RBK-01,TXT 按份数分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-RBK-02,TXT 按份数分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F03-RBK-03,TXT 按份数分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-PRE-01,TXT 合并,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 merge 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-PRE-02,TXT 合并,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,13 项实测通过；模块级 encoding 整组 12 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-PRE-03,TXT 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；merge::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-PRE-04,TXT 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；merge::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-EXE-01,TXT 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-EXE-02,TXT 合并,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-EXE-03,TXT 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-EXE-04,TXT 合并,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-EXE-05,TXT 合并,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-RBK-01,TXT 合并,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-RBK-02,TXT 合并,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F04-RBK-03,TXT 合并,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-PRE-01,CSV 分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,18 项实测通过；模块级 csv 整组 18 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-PRE-02,CSV 分割,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,24 项实测通过；csv::tests::* 整组 18 项全绿，但锚点未声称条数也未指名用例；模块级 csv 整组 6 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-PRE-03,CSV 分割,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,18 项实测通过；csv::tests::* 整组 18 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-PRE-04,CSV 分割,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-EXE-01,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-EXE-02,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-EXE-03,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-EXE-04,CSV 分割,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-EXE-05,CSV 分割,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-RBK-01,CSV 分割,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-RBK-02,CSV 分割,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F05-RBK-03,CSV 分割,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-PRE-01,CSV 合并,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,14 项实测通过；模块级 csv_merge 整组 14 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-PRE-02,CSV 合并,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,15 项实测通过；csv_merge::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-PRE-03,CSV 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；csv_merge::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-PRE-04,CSV 合并,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；csv_merge::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-EXE-01,CSV 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-EXE-02,CSV 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-EXE-03,CSV 合并,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-EXE-04,CSV 合并,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,44 项实测通过；模块级 generic_apply 整组 44 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-EXE-05,CSV 合并,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-RBK-01,CSV 合并,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-RBK-02,CSV 合并,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F06-RBK-03,CSV 合并,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-PRE-01,CSV 抽取指定列,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,12 项实测通过；模块级 csv_extract 整组 12 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-PRE-02,CSV 抽取指定列,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；csv_extract::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-PRE-03,CSV 抽取指定列,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,13 项实测通过；csv_extract::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-PRE-04,CSV 抽取指定列,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；csv_extract::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-EXE-01,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-EXE-02,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-EXE-03,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-EXE-04,CSV 抽取指定列,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 conflict 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-EXE-05,CSV 抽取指定列,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-RBK-01,CSV 抽取指定列,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-RBK-02,CSV 抽取指定列,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F07-RBK-03,CSV 抽取指定列,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-PRE-01,CSV 抽取数量行,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,10 项实测通过；模块级 csv_rows 整组 10 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-PRE-02,CSV 抽取数量行,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-PRE-03,CSV 抽取数量行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；csv_rows::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-PRE-04,CSV 抽取数量行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；csv_rows::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-EXE-01,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-EXE-02,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-EXE-03,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-EXE-04,CSV 抽取数量行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-EXE-05,CSV 抽取数量行,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-RBK-01,CSV 抽取数量行,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-RBK-02,CSV 抽取数量行,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F08-RBK-03,CSV 抽取数量行,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-PRE-01,CSV 抽取位置行,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 csv_range 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-PRE-02,CSV 抽取位置行,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-PRE-03,CSV 抽取位置行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；csv_range::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-PRE-04,CSV 抽取位置行,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,8 项实测通过；csv_range::tests::* 整组 8 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-EXE-01,CSV 抽取位置行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-EXE-02,CSV 抽取位置行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-EXE-03,CSV 抽取位置行,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-EXE-04,CSV 抽取位置行,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-EXE-05,CSV 抽取位置行,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 read_ranges 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-RBK-01,CSV 抽取位置行,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-RBK-02,CSV 抽取位置行,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F09-RBK-03,CSV 抽取位置行,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-PRE-01,生成目录清单,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,6 项实测通过；模块级 listing 整组 6 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-PRE-02,生成目录清单,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,4 项实测通过；模块级 listing 整组 4 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-PRE-03,生成目录清单,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-PRE-04,生成目录清单,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,6 项实测通过；listing::tests::* 整组 6 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-EXE-01,生成目录清单,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-EXE-02,生成目录清单,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-EXE-03,生成目录清单,EXE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,4 项实测通过；listing::tests::* 整组 4 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-EXE-04,生成目录清单,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-EXE-05,生成目录清单,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-RBK-01,生成目录清单,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 listing_plan_streams_csv_through_the_desktop_queue_and_undoes 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-RBK-02,生成目录清单,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F10-RBK-03,生成目录清单,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-PRE-01,按清单建文件夹,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,11 项实测通过；模块级 create_dirs 整组 11 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-PRE-02,按清单建文件夹,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；create_dirs::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-PRE-03,按清单建文件夹,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,13 项实测通过；create_dirs::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-PRE-04,按清单建文件夹,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-EXE-01,按清单建文件夹,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-EXE-02,按清单建文件夹,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-EXE-03,按清单建文件夹,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-EXE-04,按清单建文件夹,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-EXE-05,按清单建文件夹,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-RBK-01,按清单建文件夹,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-RBK-02,按清单建文件夹,RBK,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；create_dirs::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F11-RBK-03,按清单建文件夹,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-PRE-01,批量重命名,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,10 项实测通过；模块级 rename 整组 10 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-PRE-02,批量重命名,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-PRE-03,批量重命名,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-PRE-04,批量重命名,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-EXE-01,批量重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-EXE-02,批量重命名,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-EXE-03,批量重命名,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,11 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-EXE-04,批量重命名,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-EXE-05,批量重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-RBK-01,批量重命名,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-RBK-02,批量重命名,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F12-RBK-03,批量重命名,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-PRE-01,正则重命名,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,11 项实测通过；模块级 regex_rename 整组 11 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-PRE-02,正则重命名,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-PRE-03,正则重命名,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；regex_rename::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-PRE-04,正则重命名,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；regex_rename::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-EXE-01,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-EXE-02,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-EXE-03,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-EXE-04,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,10 项实测通过；模块级 rename 整组 10 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-EXE-05,正则重命名,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,7 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-RBK-01,正则重命名,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-RBK-02,正则重命名,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-F13-RBK-03,正则重命名,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-PRE-01,文件编码转换,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,12 项实测通过；模块级 encoding 整组 12 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-PRE-02,文件编码转换,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；encoding::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-PRE-03,文件编码转换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-PRE-04,文件编码转换,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,12 项实测通过；encoding::tests::* 整组 12 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-EXE-01,文件编码转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-EXE-02,文件编码转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-EXE-03,文件编码转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-EXE-04,文件编码转换,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-EXE-05,文件编码转换,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-RBK-01,文件编码转换,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-RBK-02,文件编码转换,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C01-RBK-03,文件编码转换,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-PRE-01,换行符转换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,14 项实测通过；模块级 line_endings 整组 14 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-PRE-02,换行符转换,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；line_endings::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-PRE-03,换行符转换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-PRE-04,换行符转换,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,14 项实测通过；line_endings::tests::* 整组 14 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-EXE-01,换行符转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-EXE-02,换行符转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-EXE-03,换行符转换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,2 项实测通过；模块级 binary 整组 2 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-EXE-04,换行符转换,EXE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-EXE-05,换行符转换,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-RBK-01,换行符转换,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-RBK-02,换行符转换,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C02-RBK-03,换行符转换,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-PRE-01,批量查找替换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,11 项实测通过；模块级 replace_content 整组 11 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-PRE-02,批量查找替换,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；replace_content::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-PRE-03,批量查找替换,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-PRE-04,批量查找替换,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,11 项实测通过；replace_content::tests::* 整组 11 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-EXE-01,批量查找替换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-EXE-02,批量查找替换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-EXE-03,批量查找替换,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；K06 按前缀定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-EXE-04,批量查找替换,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-EXE-05,批量查找替换,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-RBK-01,批量查找替换,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-RBK-02,批量查找替换,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C03-RBK-03,批量查找替换,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-PRE-01,清单驱动移动,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,5 项实测通过；模块级 c07 整组 5 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-PRE-02,清单驱动移动,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,5 项实测通过；c07::tests::* 整组 5 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-PRE-03,清单驱动移动,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,5 项实测通过；c07::tests::* 整组 5 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-PRE-04,清单驱动移动,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,10 项实测通过；preflight::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-EXE-01,清单驱动移动,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-EXE-02,清单驱动移动,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,2 项实测通过；模块级 generic_apply 整组 2 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-EXE-03,清单驱动移动,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-EXE-04,清单驱动移动,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-EXE-05,清单驱动移动,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-RBK-01,清单驱动移动,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-RBK-02,清单驱动移动,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C07-RBK-03,清单驱动移动,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-PRE-01,重复文件查找,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 duplicate 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-PRE-02,重复文件查找,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,21 项实测通过；模块级 plan 整组 21 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-PRE-03,重复文件查找,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-PRE-04,重复文件查找,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,21 项实测通过；plan::tests::* 整组 21 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-EXE-01,重复文件查找,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-EXE-02,重复文件查找,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-EXE-03,重复文件查找,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-EXE-04,重复文件查找,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-EXE-05,重复文件查找,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-RBK-01,重复文件查找,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-RBK-02,重复文件查找,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C09-RBK-03,重复文件查找,RBK,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-PRE-01,批量压缩/解压,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 archive 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-PRE-02,批量压缩/解压,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；archive::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-PRE-03,批量压缩/解压,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-PRE-04,批量压缩/解压,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；archive::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-EXE-01,批量压缩/解压,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-EXE-02,批量压缩/解压,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-EXE-03,批量压缩/解压,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-EXE-04,批量压缩/解压,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-EXE-05,批量压缩/解压,EXE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-RBK-01,批量压缩/解压,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 zip_compress_plan_executes_through_the_desktop_queue_and_undoes 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-RBK-02,批量压缩/解压,RBK,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；archive::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C10-RBK-03,批量压缩/解压,RBK,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-PRE-01,任务队列与进度,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,15 项实测通过；模块级 apply 整组 15 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-PRE-02,任务队列与进度,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,6 项实测通过；模块级 generic_apply 整组 6 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-PRE-03,任务队列与进度,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,44 项实测通过；generic_apply::tests::* 整组 44 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-PRE-04,任务队列与进度,PRE,◐,CI（cargo test --workspace --all-features）,锚点缺失,未解析,"锚点列没有可核证据（状态符号或""无""），需补测试名或改判状态",cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-EXE-01,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 generic_plan_kinds_execute_through_the_desktop_queue 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-EXE-02,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 progress_bursts_are_coalesced_and_flushed_on_phase_change 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-EXE-03,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-EXE-04,任务队列与进度,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-EXE-05,任务队列与进度,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,6 项实测通过；模块级 generic_apply 整组 6 项（与表内声称一致），已按限定词收窄,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-RBK-01,任务队列与进度,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 recover_rollback_restores_applied_entries_and_cancels_the_original_task 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-RBK-02,任务队列与进度,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 retry_reruns_only_failed_entries_under_a_new_task_id 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C15-RBK-03,任务队列与进度,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 restart_marks_unfinished_tasks_interrupted_and_resume_skips_applied_entries 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-PRE-01,执行前预览/干跑,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-PRE-02,执行前预览/干跑,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,模块级,4 项实测通过；模块级 preview 整组 4 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-PRE-03,执行前预览/干跑,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-PRE-04,执行前预览/干跑,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-PRE-05,执行前预览/干跑,PRE,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,23 项实测通过；plan::tests::* 整组 21 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-PRE-06,执行前预览/干跑,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-EXE-01,执行前预览/干跑,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-EXE-02,执行前预览/干跑,EXE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 task_state_events_cover_pause_resume_and_queued_cancel 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-RBK-01,执行前预览/干跑,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C18-RBK-02,执行前预览/干跑,RBK,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,4 项实测通过；preview::tests::* 整组 4 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-PRE-01,预览与冲突检测,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-PRE-02,预览与冲突检测,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,6 项实测通过；name_replace::tests::* 整组 6 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-PRE-03,预览与冲突检测,PRE,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,1 项实测通过；rename-preview.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-PRE-04,预览与冲突检测,PRE,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,2 项实测通过；rename-preview.spec.ts 按标题匹配 1 条；stale-plan.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-PRE-05,预览与冲突检测,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,10 项实测通过；rename::tests::* 整组 10 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-PRE-06,预览与冲突检测,PRE,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,1 项实测通过；rename-preview.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-EXE-01,预览与冲突检测,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,4 项实测通过；模块级 preview 整组 4 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-EXE-02,预览与冲突检测,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 non_rename_kinds_are_rejected_with_e1002 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-RBK-01,预览与冲突检测,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C05-RBK-02,预览与冲突检测,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-PRE-01,重命名撤销/回滚,PRE,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-PRE-02,重命名撤销/回滚,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-EXE-01,重命名撤销/回滚,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-EXE-02,重命名撤销/回滚,EXE,⛔,真人工（Windows 实机/受控环境）,待人工执行,人工,载体为真人工／受控环境，本脚本不代跑,—（人工／受控环境）,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-EXE-03,重命名撤销/回滚,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-EXE-04,重命名撤销/回滚,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-EXE-05,重命名撤销/回滚,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,5 项实测通过；模块级 journal 整组 5 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-RBK-01,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-RBK-02,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-RBK-03,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-RBK-04,重命名撤销/回滚,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C06-RBK-05,重命名撤销/回滚,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-PRE-01,执行前预检,PRE,◐,CI（cargo test --workspace --all-features）,实测通过,模块级,9 项实测通过；模块级 preflight 整组 9 项（与表内声称一致）,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-PRE-02,执行前预检,PRE,✅,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,9 项实测通过；preflight::tests::* 整组 9 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-PRE-03,执行前预检,PRE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-PRE-04,执行前预检,PRE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-PRE-05,执行前预检,PRE,◐,CI（cargo test --workspace --all-features）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-PRE-06,执行前预检,PRE,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-EXE-01,执行前预检,EXE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-EXE-02,执行前预检,EXE,◐,CI（cargo test --workspace --all-features）,实测通过,文件级,1 项实测通过；App.preflight.test.tsx 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-RBK-01,执行前预检,RBK,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S01-RBK-02,执行前预检,RBK,✅,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,1 项实测通过；preflight-report.spec.ts 按标题匹配 1 条,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-PRE-01,保护目录执行层复核,PRE,✅,CI（cargo test --workspace --all-features）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-PRE-02,保护目录执行层复核,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 protected_literal_and_canonical_hits_block_the_entry 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-PRE-03,保护目录执行层复核,PRE,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-PRE-04,保护目录执行层复核,PRE,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 protected_snapshot_comparison_ignores_order_and_duplicates 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-PRE-05,保护目录执行层复核,PRE,◐,CI（cargo test --workspace --all-features）,锚点需精确化,模块级,7 项实测通过；preflight::tests::* 整组 7 项全绿，但锚点未声称条数也未指名用例,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-PRE-06,保护目录执行层复核,PRE,◐,CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）,实测通过,文件级,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-EXE-01,保护目录执行层复核,EXE,✅,CI（cargo test --workspace --all-features）,实测通过,文件级,2 项实测通过,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-EXE-02,保护目录执行层复核,EXE,✅,CI（cargo test --workspace --all-features）,锚点不可机器定位,未解析,锚点是纯文字描述，实测清单里找不到对应模块或用例名,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-RBK-01,保护目录执行层复核,RBK,✅,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 protected_target_is_skipped_before_any_change 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-S02-RBK-02,保护目录执行层复核,RBK,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 protected_snapshot_comparison_sees_canonical_changes 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C17a-XCT-01,最小操作/撤销日志,XCT,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 apply_and_undo_run_through_the_queue_with_events 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C17a-XCT-02,最小操作/撤销日志,XCT,◐,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 schema_migrates_once_and_round_trips_records 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C17a-XCT-03,最小操作/撤销日志,XCT,✅,CI（cargo test --manifest-path src-tauri/Cargo.toml）,实测通过,逐名,1 项实测通过；按用例名片段 full_paths_follow_the_log_full_paths_switch 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
+TC-C17a-XCT-04,最小操作/撤销日志,XCT,◐,CI（cargo test --workspace --all-features）,实测通过,逐名,1 项实测通过；按用例名片段 operation_log 定位到 1 项,cargo test --workspace --all-features,2026-11-02T17:59:03+0800,7254ead,2026-11-02-inventory.tsv
