@@ -505,6 +505,120 @@ fn utf16_output(text: &str, bom: bool, little: bool) -> Vec<u8> {
     output
 }
 
+/// 流式转码的累计信息（与 `Transcoded` 同口径，只是不带整段字节）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamTranscodeSummary {
+    pub replacement_count: usize,
+    pub had_bom_input: bool,
+}
+
+/// 流式转码器（F04 合并等大文件路径）：按块解码，按目标编码追加输出。
+///
+/// 与整段 `transcode` 的语义对齐：源 BOM 由解码器剥离（`new_decoder_with_bom_removal`）；
+/// 目标 BOM **不在这里写**——调用方在产物最前面写一次，避免每个源各写一份；
+/// `Abort` 策略下解码出错立即 E3002；`ReplaceAndCount` 累计 U+FFFD 个数
+/// （口径同 `transcode` 与 ADR-0050）。
+pub struct StreamTranscoder {
+    decoder: encoding_rs::Decoder,
+    source: SourceEncoding,
+    target: TargetEncoding,
+    invalid: InvalidSequencePolicy,
+    replacement_count: usize,
+    had_bom_input: bool,
+    started: bool,
+}
+
+impl StreamTranscoder {
+    pub fn new(
+        source: SourceEncoding,
+        target: TargetEncoding,
+        invalid: InvalidSequencePolicy,
+    ) -> Self {
+        Self {
+            decoder: source.to_encoding().new_decoder_with_bom_removal(),
+            source,
+            target,
+            invalid,
+            replacement_count: 0,
+            had_bom_input: false,
+            started: false,
+        }
+    }
+
+    /// 喂入一段源字节，把新解出的文本按目标编码追加到 `out`。
+    pub fn push(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), KernelError> {
+        if !self.started {
+            self.had_bom_input = self
+                .source
+                .expected_bom()
+                .map(|bom| input.starts_with(bom))
+                .unwrap_or(false);
+            self.started = true;
+        }
+        self.decode_into(input, false, out)
+    }
+
+    /// 冲刷解码器尾部（不完整的多字节序列按 invalid 策略处理）。
+    pub fn finish(mut self, out: &mut Vec<u8>) -> Result<StreamTranscodeSummary, KernelError> {
+        self.decode_into(&[], true, out)?;
+        Ok(StreamTranscodeSummary {
+            replacement_count: self.replacement_count,
+            had_bom_input: self.had_bom_input,
+        })
+    }
+
+    fn decode_into(
+        &mut self,
+        input: &[u8],
+        last: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<(), KernelError> {
+        // `decode_to_string` 按 dst 的剩余容量写出：容量不足会返回 OutputFull 且只消费
+        // 一部分输入。这里按块扩容并循环消费，保证跨块与超长行都不会丢字节。
+        let mut text = String::with_capacity(input.len().saturating_mul(4).saturating_add(8));
+        let mut consumed = 0usize;
+        let mut had_errors = false;
+        loop {
+            let (result, read, errors) =
+                self.decoder
+                    .decode_to_string(&input[consumed..], &mut text, last);
+            consumed += read;
+            had_errors |= errors;
+            match result {
+                encoding_rs::CoderResult::InputEmpty => break,
+                encoding_rs::CoderResult::OutputFull => {
+                    text.reserve(text.len().max(64));
+                }
+            }
+        }
+        if had_errors && self.invalid == InvalidSequencePolicy::Abort {
+            return Err(KernelError::new(
+                "E3002",
+                "strict decoding failed on the source encoding",
+                Some(self.source.to_encoding().name().to_string()),
+                false,
+            ));
+        }
+        self.replacement_count += text.matches('\u{fffd}').count();
+        self.encode(&text, out);
+        Ok(())
+    }
+
+    fn encode(&self, text: &str, out: &mut Vec<u8>) {
+        match self.target {
+            // 目标 BOM 由调用方写一次；这里只追加正文字节。
+            TargetEncoding::Utf8 { .. } => out.extend_from_slice(text.as_bytes()),
+            TargetEncoding::Gb18030 => out.extend_from_slice(&encoding_rs::GB18030.encode(text).0),
+            TargetEncoding::Utf16Le { .. } => {
+                out.extend_from_slice(&utf16_output(text, false, true))
+            }
+            TargetEncoding::Utf16Be { .. } => {
+                out.extend_from_slice(&utf16_output(text, false, false))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +626,25 @@ mod tests {
     fn encode_with(encoding: &'static Encoding, text: &str) -> Vec<u8> {
         let (bytes, _, _) = encoding.encode(text);
         bytes.into_owned()
+    }
+
+    #[test]
+    fn stream_transcoder_matches_whole_file_transcode_across_chunk_boundaries() {
+        let gb = encoding_rs::GB18030.encode("中文A\n").0.to_vec();
+        let mut out = Vec::new();
+        let mut transcoder = StreamTranscoder::new(
+            SourceEncoding::Gb18030,
+            TargetEncoding::Utf8 { bom: false },
+            InvalidSequencePolicy::ReplaceAndCount,
+        );
+        // 2 字节一片，必然把 GB18030 的双字节字符切开。
+        for chunk in gb.chunks(2) {
+            transcoder.push(chunk, &mut out).unwrap();
+        }
+        let summary = transcoder.finish(&mut out).unwrap();
+        assert_eq!(out, "中文A\n".as_bytes());
+        assert_eq!(summary.replacement_count, 0);
+        assert!(!summary.had_bom_input);
     }
 
     #[test]

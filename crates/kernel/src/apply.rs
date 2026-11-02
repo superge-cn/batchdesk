@@ -42,6 +42,22 @@ pub struct ApplyOptions {
     /// 任务内条目级并发（有界工作池，方案 §5.12）；1＝串行（缺省，行为不变）。
     #[serde(default = "default_entry_concurrency")]
     pub entry_concurrency: usize,
+    /// 取消时对「已完成条目」的处置（方案 §7.7）。
+    /// 缺省 `rollbackApplied` 供没有交互面的调用方使用；桌面壳在取消后要询问用户，
+    /// 因此显式传 `keepApplied`，等答复再走同一本 Journal 的撤销通道。
+    #[serde(default)]
+    pub cancel_policy: CancelPolicy,
+}
+
+/// 取消时已完成条目的处置（方案 §7.7：停止派发＋安全收尾＋询问是否回滚已完成项）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CancelPolicy {
+    /// 立即按 Journal 反向回滚已应用条目（无交互面的调用方的缺省行为）。
+    #[default]
+    RollbackApplied,
+    /// 保留已应用条目并留在 Journal 里，由调用方询问用户后再决定是否撤销。
+    KeepApplied,
 }
 
 fn default_entry_concurrency() -> usize {
@@ -79,6 +95,7 @@ impl Default for ApplyOptions {
             on_conflict: OnConflict::Skip,
             overwrite_confirmed: false,
             entry_concurrency: default_entry_concurrency(),
+            cancel_policy: CancelPolicy::default(),
         }
     }
 }
@@ -450,56 +467,61 @@ pub fn apply_plan(
     }
 
     if cancelled {
+        // 方案 §7.7 的两种处置：调用方已问过用户（keepApplied）就保留并留给撤销；
+        // 没有交互面（缺省 rollbackApplied）就立即按 Journal 反向回滚。
+        let keep_applied = options.cancel_policy == CancelPolicy::KeepApplied;
         let rollback_total = applied.len() as u64;
-        report_progress(
-            context,
-            ProgressPhase::Journaling,
-            0,
-            rollback_total,
-            Some("rolling back applied entries"),
-        );
         let mut rollback_failed = false;
-        for (done, applied_op) in applied.iter().rev().enumerate() {
-            let result = match &applied_op.reverse {
-                FsOp::Rename { from, to } => {
-                    match context.fs.rename(from, to, ConflictPolicy::Skip) {
-                        Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => Ok(()),
-                        Ok(_) => Err(KernelError::new(
-                            "E2007",
-                            "cancel rollback target already exists",
-                            None,
-                            false,
-                        )),
-                        Err(error) => Err(error),
+        if !keep_applied {
+            report_progress(
+                context,
+                ProgressPhase::Journaling,
+                0,
+                rollback_total,
+                Some("rolling back applied entries"),
+            );
+            for (done, applied_op) in applied.iter().rev().enumerate() {
+                let result = match &applied_op.reverse {
+                    FsOp::Rename { from, to } => {
+                        match context.fs.rename(from, to, ConflictPolicy::Skip) {
+                            Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => Ok(()),
+                            Ok(_) => Err(KernelError::new(
+                                "E2007",
+                                "cancel rollback target already exists",
+                                None,
+                                false,
+                            )),
+                            Err(error) => Err(error),
+                        }
                     }
-                }
-                _ => Err(KernelError::internal(
-                    "cancel rollback reverse is not supported",
-                    format!("{:?}", applied_op.reverse),
-                )),
-            };
-            match result {
-                Ok(()) => {
-                    if let Err(error) = context
-                        .journal
-                        .mark_reverted(&plan.plan_id, &[applied_op.seq])
-                    {
+                    _ => Err(KernelError::internal(
+                        "cancel rollback reverse is not supported",
+                        format!("{:?}", applied_op.reverse),
+                    )),
+                };
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = context
+                            .journal
+                            .mark_reverted(&plan.plan_id, &[applied_op.seq])
+                        {
+                            rollback_failed = true;
+                            mark_entry_error(&mut entries, applied_op.entry_index, error);
+                        }
+                    }
+                    Err(error) => {
                         rollback_failed = true;
                         mark_entry_error(&mut entries, applied_op.entry_index, error);
                     }
                 }
-                Err(error) => {
-                    rollback_failed = true;
-                    mark_entry_error(&mut entries, applied_op.entry_index, error);
-                }
+                report_progress(
+                    context,
+                    ProgressPhase::Journaling,
+                    (done + 1) as u64,
+                    rollback_total,
+                    None,
+                );
             }
-            report_progress(
-                context,
-                ProgressPhase::Journaling,
-                (done + 1) as u64,
-                rollback_total,
-                None,
-            );
         }
         for entry in &plan.entries[stopped_at..] {
             entries.push(ApplyEntryReport {
@@ -516,7 +538,7 @@ pub fn apply_plan(
                 plan_id: plan.plan_id.clone(),
                 task_id: context.task_id.clone(),
                 entries,
-                undone_by: if rollback_failed {
+                undone_by: if keep_applied || rollback_failed {
                     None
                 } else {
                     Some(context.task_id.clone())
@@ -1505,6 +1527,47 @@ mod tests {
         assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
         assert_eq!(outcome.report.entries[1].status, ApplyStatus::Skipped);
         assert_eq!(outcome.report.entries[2].status, ApplyStatus::Skipped);
+    }
+
+    #[test]
+    fn cancel_keeps_applied_entries_when_the_caller_asks_the_user_first() {
+        // 方案 §7.7：桌面壳传 keepApplied——取消只停止派发，已完成条目留在 Journal 里，
+        // 等用户答复「是否一并撤销」；答复"撤销"时走同一条 undo_plan。
+        let fs = TestFs::with_files(&["a", "b", "c"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let flag = Arc::new(AtomicBool::new(false));
+        let sink = CancelAfterFirst { flag: flag.clone() };
+        let token = FlagToken(flag);
+        let mut ctx = context(&fs, &license, &mut journal);
+        ctx.progress = Some(&sink);
+        ctx.cancel = Some(&token);
+        let outcome = apply_plan(
+            &plan(vec![
+                delete_entry("e1", "a"),
+                delete_entry("e2", "b"),
+                delete_entry("e3", "c"),
+            ]),
+            &ApplyOptions {
+                cancel_policy: CancelPolicy::KeepApplied,
+                ..ApplyOptions::default()
+            },
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Cancelled);
+        assert_eq!(outcome.report.undone_by, None, "保留处置不得声称已撤销");
+        assert!(!fs.exists("a"), "已完成的删除保留在隔离目录");
+        assert!(fs.exists("b") && fs.exists("c"), "未派发条目原地不动");
+        assert_eq!(
+            journal.entries[0].status,
+            JournalStatus::Applied,
+            "保留的条目必须仍处于可撤销状态"
+        );
+        let undo = undo_plan(PLAN_ID, &fs, &license, &mut journal).unwrap();
+        assert_eq!(undo.reverted, 1, "答复撤销后按 Journal 还原已完成的 1 条");
+        assert!(fs.exists("a"));
+        assert_eq!(journal.entries[0].status, JournalStatus::Reverted);
     }
 
     #[test]

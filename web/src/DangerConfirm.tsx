@@ -12,11 +12,21 @@ export interface DangerConfirmProps {
   /** 高危条目清单（通常是命中保护目录的路径）。 */
   items: string[];
   confirmLabel: string;
+  /** 次要动作文案；缺省"取消"（危险确认的默认语义）。 */
+  cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-export function DangerConfirm({ title, body, items, confirmLabel, onConfirm, onCancel }: DangerConfirmProps) {
+export function DangerConfirm({
+  title,
+  body,
+  items,
+  confirmLabel,
+  cancelLabel = "取消",
+  onConfirm,
+  onCancel
+}: DangerConfirmProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -58,7 +68,7 @@ export function DangerConfirm({ title, body, items, confirmLabel, onConfirm, onC
             type="button"
             onClick={onCancel}
           >
-            取消
+            {cancelLabel}
           </button>
           <button
             className="button button-danger"

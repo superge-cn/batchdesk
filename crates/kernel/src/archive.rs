@@ -1072,6 +1072,10 @@ pub fn apply_archive_plan(
             });
         }
     }
+    // 取消处置（方案 §7.7）：归档专用执行器没有"执行中回滚"通道——取消一律保留
+    // 已应用条目并留在 Journal 里（`undone_by=None` 如实报告），由调用方询问用户后
+    // 走 undoPlan 撤销。壳层对所有 apply 任务统一 keepApplied，因此用户看到的行为
+    // 与通用执行器一致；请求 rollbackApplied 的调用方从报告即可看出"未撤销"。
     let state = if cancelled {
         ApplyState::Cancelled
     } else if failed == 0 {

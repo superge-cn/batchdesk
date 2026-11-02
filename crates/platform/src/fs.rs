@@ -17,6 +17,9 @@ pub struct CliFsAdapter {
     counter: AtomicU64,
 }
 
+/// 流式读取块大小（与区间复制一致：64 KiB）。
+const STREAM_CHUNK_BYTES: usize = 64 * 1024;
+
 impl CliFsAdapter {
     pub fn new(quarantine_dir: Option<PathBuf>) -> Self {
         Self {
@@ -122,6 +125,25 @@ impl CliFsAdapter {
 impl FsAdapter for CliFsAdapter {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError> {
         fs::read(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
+    }
+
+    fn read_stream(
+        &self,
+        path: &str,
+        read: &mut dyn FnMut(&[u8]) -> Result<(), KernelError>,
+    ) -> Result<(), KernelError> {
+        let mut file = fs::File::open(fs_path(Path::new(path)))
+            .map_err(|error| io_error(&error, Path::new(path)))?;
+        let mut buffer = vec![0u8; STREAM_CHUNK_BYTES];
+        loop {
+            let read_bytes = file
+                .read(&mut buffer)
+                .map_err(|error| io_error(&error, Path::new(path)))?;
+            if read_bytes == 0 {
+                return Ok(());
+            }
+            read(&buffer[..read_bytes])?;
+        }
     }
 
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
@@ -1035,6 +1057,39 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn read_stream_delivers_bounded_chunks_and_propagates_the_callback_error() {
+        let dir = TempDir::new();
+        let path = dir.0.join("big.bin");
+        let data: Vec<u8> = (0..(STREAM_CHUNK_BYTES * 2 + 7))
+            .map(|index| (index % 251) as u8)
+            .collect();
+        fs::write(&path, &data).unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        let mut chunks = Vec::new();
+        adapter
+            .read_stream(path.to_str().unwrap(), &mut |chunk| {
+                chunks.push(chunk.len());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(chunks.iter().sum::<usize>(), data.len(), "不得丢字节");
+        assert!(
+            chunks.iter().all(|size| *size <= STREAM_CHUNK_BYTES),
+            "块大小必须受上限约束：{chunks:?}"
+        );
+        assert!(chunks.len() >= 3, "2 个整块＋余数应至少回调三次");
+
+        // 回调报错必须中止读取并原样上抛（调用方据此判定条目失败）。
+        let error = adapter
+            .read_stream(path.to_str().unwrap(), &mut |_| {
+                Err(KernelError::new("E3005", "stop", None, false))
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "E3005");
     }
 
     #[test]

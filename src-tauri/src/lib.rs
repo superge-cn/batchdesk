@@ -361,9 +361,11 @@ fn applyPlan(
         return Err(error);
     }
     state.plans.lock().unwrap().remove(&plan_id);
-    let task_id = state
-        .tasks
-        .enqueue_apply(stored, options.unwrap_or_default());
+    // 方案 §7.7：桌面壳在取消后要问"已完成 N 项，是否一并撤销？"，
+    // 因此执行期一律保留已应用条目（Journal 记账不动），答复为"撤销"时再走 undoPlan。
+    let mut options = options.unwrap_or_default();
+    options.cancel_policy = kernel::apply::CancelPolicy::KeepApplied;
+    let task_id = state.tasks.enqueue_apply(stored, options);
     Ok(TaskHandle { task_id })
 }
 

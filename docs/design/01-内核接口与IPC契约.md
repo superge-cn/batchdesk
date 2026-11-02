@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.41（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额、C04 `plan_c04`/名称查找替换、C14 `plan_c14`/`csv-columns` 动作/`csvColumns` 载荷/列拆分合并、C07 `plan_c07`/清单驱动 move/copy/跨盘校验删源、C08 `plan_c08`/按规则归档（复用 move 动作）、C13 `plan_c13`/`csv-sort` 动作/`csvSort` 载荷/类型感知排序与外排、C18 计划幂等契约（derived_ulid）与横切 harness、UI 接入（planOperation kind 路由 f05/f11/f12＋`renamePreview`/`undoDryRun` 壳层命令；批量接入 f01–f04/c01–c03；第三批接入 f06–f09 共用 `CsvPlanParams` 参数面与 f10 清单、并定稿终态快照剪枝顺序——ADR-0042；第四批接入 c04/c11/c12/c13/c14，共用 `OpPlanParams` 超集参数面——ADR-0043；第五批接入 c07 清单/c08 规则/c10 ZIP 壳层计划，`run_apply` 为 c10 增设专用执行器分支（`apply_archive_plan`＋`ZipArchiveService`，保留逐文件 Journal 撤销语义）——ADR-0044；2026-11-02 追加 F11 的逐级前缀事实（`PlanF11Input.existing_files`）与 `parent-is-file` 的计划期跳过＋集中报告——ADR-0049；2026-11-02 追加 §5 `ApplyEntryReport.detail`（条目级明细）与 `ContentEditor`→`EditedContent` 返回型、§3 的 `Transcoded.replacement_count` 口径改为替换字符个数——ADR-0050） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.43（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额、C04 `plan_c04`/名称查找替换、C14 `plan_c14`/`csv-columns` 动作/`csvColumns` 载荷/列拆分合并、C07 `plan_c07`/清单驱动 move/copy/跨盘校验删源、C08 `plan_c08`/按规则归档（复用 move 动作）、C13 `plan_c13`/`csv-sort` 动作/`csvSort` 载荷/类型感知排序与外排、C18 计划幂等契约（derived_ulid）与横切 harness、UI 接入（planOperation kind 路由 f05/f11/f12＋`renamePreview`/`undoDryRun` 壳层命令；批量接入 f01–f04/c01–c03；第三批接入 f06–f09 共用 `CsvPlanParams` 参数面与 f10 清单、并定稿终态快照剪枝顺序——ADR-0042；第四批接入 c04/c11/c12/c13/c14，共用 `OpPlanParams` 超集参数面——ADR-0043；第五批接入 c07 清单/c08 规则/c10 ZIP 壳层计划，`run_apply` 为 c10 增设专用执行器分支（`apply_archive_plan`＋`ZipArchiveService`，保留逐文件 Journal 撤销语义）——ADR-0044；2026-11-02 追加 F11 的逐级前缀事实（`PlanF11Input.existing_files`）与 `parent-is-file` 的计划期跳过＋集中报告——ADR-0049；2026-11-02 追加 §5 `ApplyEntryReport.detail`（条目级明细）与 `ContentEditor`→`EditedContent` 返回型、§3 的 `Transcoded.replacement_count` 口径改为替换字符个数——ADR-0050；2026-11-02 追加 §2.2 取消处置（`ApplyOptions.cancelPolicy`：缺省回滚／桌面壳保留＋问询后 undo）——ADR-0052；2026-11-02 追加 F04 merge 的流式执行（`read_stream`＋`StreamTranscoder`）——ADR-0053） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -66,7 +66,7 @@ interface IpcError {
 - 进度经事件通道推送（事件名见 §4.3），字段：`taskId, phase, done, total, message`。
   `phase ∈ queued | scanning | planning | executing | journaling | finalizing`。
 - **节流**：推送频率上限为性能阈值，引用方案 §9.1 既定值，本文不设数值；壳层负责合帧。已实现（v1.5）：桌面壳按方案 §9.1「进度刷新节流 100–200 ms」区间的下限，对同阶段 `task://progress` 做合帧（`TaskSummary` 仍逐条更新）；阶段迁移立即推送并在窗口内补发最新条目计数，`task://state`/`task://done` 不合帧。
-- **取消**（§7.7）：壳层持有原子取消标志，以 `CancelToken` 端口传入 kernel 执行循环，每个条目边界检查一次；取消后已落盘动作按 Journal 反向回滚（§7.8）。
+- **取消**（§7.7）：壳层持有原子取消标志，以 `CancelToken` 端口传入 kernel 执行循环，每个条目边界检查一次。停止派发后按 `ApplyOptions.cancelPolicy` 处置已应用条目（v1.42）：缺省 `rollbackApplied`＝立即按 Journal 反向回滚（§7.8，供没有交互面的调用方）；桌面壳传 `keepApplied`＝已应用条目保留在磁盘与 Journal 中（`ApplyReport.undone_by` 为空），由界面询问「已完成 N 项，是否一并撤销？」——答复撤销时调用 `undoPlan`，走同一本 Journal。`c10` 归档专用执行器只有"保留"通道（无执行中回滚），其取消同样以 `undone_by` 为空如实报告。
 - **暂停/恢复**：仅壳层队列语义（§4.4），kernel 不感知暂停。
 
 ### 2.3 分页
@@ -286,7 +286,7 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 |---|---|---|
 | `task://progress` | `ProgressEvent` | §2.2 |
 | `task://state` | `{taskId, state: TaskState}` | 状态机迁移推送 |
-| `task://done` | `{taskId, summary: ApplyReport}` | 终态推送（成功/失败/取消三态由 state 区分） |
+| `task://done` | `{taskId, kind, summary: ApplyReport}` | 终态推送（成功/失败/取消三态由 state 区分）；`kind ∈ apply \| undo`，取消后的"是否一并撤销"只对 apply 任务成立（v1.42） |
 | `license://changed` | `LicenseStateSummary` | 仅通知**显示状态**；web 端不得据此做放行/拦截逻辑（不变量 11） |
 
 - 终态顺序固定为 `task://state` → `task://done`；快照剪枝先于该顺序落盘（v1.37，ADR-0042）：任务进入终态时，恢复快照必须先完成剪枝再推送 state/done，使「终态对外可观测」的任何时刻恢复快照都不含该任务（内存终态与写盘之间仍可能有毫秒级窗口，读文件的调用方应等待收敛）；
@@ -362,7 +362,8 @@ interface PlanEntry {
                              // 追加式可选字段：F04 合并载荷，仅 merge 使用；
                              // sources 按合并顺序排列，size 为 plan 期输入大小（apply 逐项复核，变化 skipped + E2010）；
                              // encoding 省略=需人工确认（计划条目 blocked E3001）；targetEncoding 含 BOM 策略，
-                             // 产物只在最前面写一次 BOM，各输入自身 BOM 由转码剥离（ADR-0016）
+                             // 产物只在最前面写一次 BOM，各输入自身 BOM 由转码剥离（ADR-0016）；
+                             // apply 逐源 read_stream→StreamTranscoder→write_atomic_with，内存 O(块)（v1.43，ADR-0053）
   csv?: { header?: { start: number; end: number };
           delimiter: string;   // "," | ";" | "\t" | "|"（稳定字符串）
           rows: number;        // 本片记录数（不含表头）
@@ -613,3 +614,5 @@ interface JournalEntry {
 | v1.39 | 2026-11-01 | UI 接入第五批：C07 清单／C08 规则／C10 ZIP 的壳层计划；`run_apply` 为 c10 增设专用执行器分支（`apply_archive_plan`＋`ZipArchiveService`，保留逐文件 Journal 撤销语义）。**补录行**（同 v1.37）。决策见 [ADR-0044](../adr/0044-UI接入第五批清单规则ZIP与桌面专用执行器.md)。 |
 | v1.40 | 2026-11-02 | §3.1 `PlanF11Input` 追加 `existing_files` 事实（与 `existing_targets` 同覆盖**每一级前缀**）；§5 `create-dir` 明确：文件占据祖先位置时该整条子树按 `conflict.kind=parent-is-file`＋`resolution=skip` 处理，并出计划级 `parent-is-file` 集中报告（不新增错误码，复用既有冲突形态；方案 §5.15/§5.8）。入口两侧（CLI `run_f11`、壳层 `f11_existing_facts`）事实采集同步。决策见 [ADR-0049](../adr/0049-逐级前缀事实与集中报告的界面点名.md)。 |
 | v1.41 | 2026-11-02 | §5 `ApplyEntryReport` 追加可选 `detail`（serde default＋缺省省略，旧报告仍可反序列化）：条目级明细由注入的内容变换产出，落点＝方案 §5.2 的"替换并计数上报"；`ContentEditor` 返回型由 `Vec<u8>` 改为 `EditedContent{bytes,detail}`（新增 `pub` 类型），`Performed` 同步搬运；`encoding::Transcoded.replacement_count` 口径由"有错=1"改为**解码产生的 U+FFFD 个数**（源文本自带 U+FFFD 会一并计入，边界见 ADR §4）。决策见 [ADR-0050](../adr/0050-条目级detail的载体与替换计数口径.md)。 |
+| v1.42 | 2026-11-02 | §2.2 取消处置：`ApplyOptions.cancelPolicy`（缺省 `rollbackApplied`＝按 Journal 反向回滚；`keepApplied`＝保留已应用条目并留 Journal，`undone_by` 为空）。桌面壳对所有 apply 任务传 `keepApplied`，取消后询问「已完成 N 项，是否一并撤销？」，答复撤销走 `undoPlan`；c10 归档执行器只有保留通道。§4.3 `task://done` 追加 `kind`（apply/undo），使界面只对 apply 任务的取消发问。决策见 [ADR-0052](../adr/0052-取消处置的询问与保留语义.md)。 |
+| v1.43 | 2026-11-02 | §5 `merge` 载荷的执行方式：逐源 `read_stream`→`StreamTranscoder`→`write_atomic_with`，内存 O(块) 而非 O(产物)；目标 BOM 仍只写一次，源大小变化按 E2010 跳过；`FsAdapter` 新增 `read_stream`（设计 04 v1.11）。决策见 [ADR-0053](../adr/0053-流式读取端口与F04合并的流式执行.md)。 |

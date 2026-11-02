@@ -87,6 +87,23 @@ pub type RewriteCallback<'a> =
 
 pub trait FsAdapter: Send + Sync {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError>;
+    /// 以流式方式读取整个文件：按适配层自选块大小回调，回调返回错误即中止。
+    ///
+    /// 大文件路径（F04 合并、后续 C01/C11/C12 等）用它把内存压到 O(块)，
+    /// 不再整文件读入。适配层不支持时返回 E5001——调用方按契约拒绝该动作，
+    /// **不得静默降级为 read_bytes**（否则"流式"只是名义上的）。
+    fn read_stream(
+        &self,
+        _path: &str,
+        _read: &mut dyn FnMut(&[u8]) -> Result<(), KernelError>,
+    ) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "streaming read is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError>;
     /// 创建单级目录（父目录由计划保证已存在）。
     fn create_dir(&self, _path: &str) -> Result<(), KernelError> {

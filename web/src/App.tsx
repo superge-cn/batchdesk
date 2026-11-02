@@ -197,6 +197,13 @@ function App() {
   const [plannedSnapshot, setPlannedSnapshot] = useState<string | null>(null);
   /** 保护目录命中的危险二次确认（方案 §3.3＋§7.11）；仅在有待执行条目时出现。 */
   const [dangerOpen, setDangerOpen] = useState(false);
+  /**
+   * 取消后的处置询问（方案 §7.7）：取消只停止派发，已完成条目默认保留；
+   * N 项已落盘时问「是否一并撤销」，答复撤销再走 undoPlan（同一本 Journal）。
+   */
+  const [cancelReview, setCancelReview] = useState<{ planId: string; completed: number } | null>(
+    null
+  );
   const [taskViews, setTaskViews] = useState<Record<string, TaskView>>({});
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [undoTaskId, setUndoTaskId] = useState<string | null>(null);
@@ -289,6 +296,14 @@ function App() {
               total: detail.summary.total,
               message: detail.summary.message
             }));
+            // 方案 §7.7：取消后已完成条目默认保留在磁盘上并留在 Journal 里。
+            // 只在"确实有已完成的写入"时才问，空取消不打扰用户。
+            const completed = event.summary.entries.filter(
+              (entry) => entry.status === "ok" || entry.status === "overwritten"
+            ).length;
+            if (event.kind === "apply" && detail.summary.state === "cancelled" && completed > 0) {
+              setCancelReview({ planId: event.summary.planId, completed });
+            }
           })
           .catch(() => undefined);
       })
@@ -460,6 +475,38 @@ function App() {
       );
       setConfirmed(false);
       setNotice("任务已加入队列；执行进度与结果通过 task:// 事件推送。");
+    } catch (value) {
+      setError(toIpcError(value));
+    }
+  }
+
+  /** 取消后的「一并撤销」（方案 §7.7）：与普通撤销同一条 undoPlan/Journal 通道。 */
+  async function onCancelReviewConfirm() {
+    const pending = cancelReview;
+    if (!pending) return;
+    setCancelReview(null);
+    setError(null);
+    setNotice(null);
+    try {
+      const handle = await undoPlan(pending.planId);
+      setUndoTaskId(handle.taskId);
+      setTaskViews((previous) =>
+        previous[handle.taskId]
+          ? previous
+          : {
+              ...previous,
+              [handle.taskId]: {
+                taskId: handle.taskId,
+                state: "queued",
+                phase: "queued",
+                done: 0,
+                total: pending.completed
+              }
+            }
+      );
+      setNotice(
+        `已开始撤销取消前完成的 ${pending.completed} 项；回滚进度通过 task:// 事件推送。`
+      );
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -1369,6 +1416,26 @@ function App() {
           </div>
         </main>
       </div>
+
+      {/* 方案 §7.7：取消只停止派发，已完成项默认保留；有写入时才问是否一并撤销。
+          危险动作（撤销）不带默认焦点，初始焦点落「保留」。 */}
+      {cancelReview && (
+        <DangerConfirm
+          cancelLabel="保留已完成项"
+          confirmLabel="一并撤销"
+          items={[]}
+          title={`已完成 ${cancelReview.completed} 项，是否一并撤销？`}
+          body={
+            <>
+              取消已停止后续条目；这 <strong>{cancelReview.completed}</strong> 项已经写入磁盘并记入
+              Journal。撤销会按 Journal 反向还原（删除的从隔离目录取回、覆盖的还原备份）；选择保留则
+              随时可在任务面板再撤销。
+            </>
+          }
+          onCancel={() => setCancelReview(null)}
+          onConfirm={onCancelReviewConfirm}
+        />
+      )}
     </div>
   );
 }

@@ -217,11 +217,15 @@ async function cancelScenario() {
     `[...document.querySelectorAll(".task-panel")]
       .some((item) => item.textContent.includes("执行任务") && item.textContent.includes("已取消"))`
   );
+  // 方案 §7.7：取消只停止派发，已完成条目默认保留；界面必须问「是否一并撤销」。
+  await waitFor("cancel review dialog", 'document.body.innerText.includes("是否一并撤销")');
+  if (!(await clickByText("一并撤销"))) fail("cancel review confirm button is missing");
+  await waitUndoCompleted();
   if (fs.readdirSync(root).length !== count) {
-    fail("cancel did not restore every source file");
+    fail("confirming the cancel review did not restore every source file");
   }
   if (quarantineCount(storage[0]) !== before) {
-    fail("cancel left quarantine files behind");
+    fail("confirming the cancel review left quarantine files behind");
   }
 }
 
@@ -274,7 +278,7 @@ async function main() {
   await applyUndoScenario();
   console.log("PASS apply -> undo (WebView, real filesystem)");
   await cancelScenario();
-  console.log("PASS cancel mid-apply and rollback (WebView, real filesystem)");
+  console.log("PASS cancel mid-apply then confirm rollback via undo (WebView, real filesystem)");
   await revalidationScenario();
   console.log("PASS plan-to-apply content revalidation (WebView, real filesystem)");
 

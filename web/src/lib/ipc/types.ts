@@ -147,6 +147,8 @@ export interface TaskPage {
 
 export interface TaskDoneEvent {
   taskId: string;
+  /** 任务类别：取消后的"是否一并撤销"只对 apply 成立。 */
+  kind: "apply" | "undo";
   summary: ApplyReport;
 }
 

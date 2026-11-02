@@ -938,7 +938,7 @@ impl Inner {
     }
 
     fn finish(&self, task_id: &str, next: TaskState, report: ApplyReport, message: Option<String>) {
-        let (changed, pending) = {
+        let (changed, pending, kind) = {
             let mut state = self.state.lock().unwrap();
             let Some(record) = state.tasks.get_mut(task_id) else {
                 return;
@@ -951,7 +951,11 @@ impl Inner {
             record.summary.finished_at = Some(now_rfc3339());
             record.summary.message = message;
             record.entries = report.entries.clone();
-            (true, record.progress_gate.pending.take())
+            (
+                true,
+                record.progress_gate.pending.take(),
+                record.summary.kind.clone(),
+            )
         };
         // 终态顺序（设计 01 §4.3）：窗口内合帧的计数 → state → done。
         if let Some(event) = pending {
@@ -962,7 +966,12 @@ impl Inner {
         if changed {
             self.persist();
             self.emit_state(task_id, next);
-            self.emit(EVENT_DONE, json!({ "taskId": task_id, "summary": report }));
+            // `kind` 让订阅方能区分 apply/undo：取消后的撤销询问只对 apply 任务成立
+            // （撤销任务被取消时再问"是否撤销"没有意义）。
+            self.emit(
+                EVENT_DONE,
+                json!({ "taskId": task_id, "kind": kind, "summary": report }),
+            );
         }
     }
 

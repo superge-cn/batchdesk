@@ -24,7 +24,9 @@ use crate::csv_dedup::{dedup_records, render_records};
 use crate::csv_filter::{filter_records, render_records as render_filter_records, FilterOp};
 use crate::csv_merge::{column_keys, normalized_columns, parse_records, write_record};
 use crate::csv_rows::{select_row_window, RowWindow};
-use crate::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
+use crate::encoding::{
+    transcode, InvalidSequencePolicy, SourceEncoding, StreamTranscoder, TargetEncoding,
+};
 use crate::error::KernelError;
 use crate::fs::{CaseSense, ConflictPolicy, EntryKind, FsAdapter, PathOutcomeKind};
 use crate::journal::{FsOp, JournalStore};
@@ -347,7 +349,7 @@ pub fn apply_generic_plan(
         execute_serial(&mut exec, &view, plan, options, total)?
     };
 
-    if cancelled {
+    if cancelled && options.cancel_policy == crate::apply::CancelPolicy::RollbackApplied {
         report_progress_to(
             exec.progress,
             exec.task_id,
@@ -1153,6 +1155,18 @@ fn perform_listing(
 
 /// copy 覆盖与 edit-content 先备份原内容（`dataRef`），copy 新建的逆是
 /// "产物进隔离目录"（reverse=`Quarantine`，路径由适配层预留）。
+/// 把一块字节写入流式 writer；io 错误统一映射为 E3005（与内容改写同码）。
+fn write_stream(out: &mut dyn std::io::Write, bytes: &[u8]) -> Result<(), KernelError> {
+    out.write_all(bytes).map_err(|error| {
+        KernelError::new(
+            "E3005",
+            "stream write failed",
+            Some(error.to_string()),
+            false,
+        )
+    })
+}
+
 fn perform(
     view: &WorkerView<'_>,
     plan: &PlanDocument,
@@ -1337,37 +1351,49 @@ fn perform(
                 } else {
                     None
                 };
-                // BOM 只在合并产物最前面写一次；各输入自身 BOM 由 transcode 剥离。
-                let mut merged = Vec::new();
-                if let Some(prefix) = target_encoding.bom_prefix() {
-                    merged.extend_from_slice(prefix);
-                }
-                for source in &merge.sources {
-                    let encoding = source.encoding.ok_or_else(|| {
-                        KernelError::new(
-                            "E3001",
-                            format!(
-                                "source encoding requires manual confirmation: {}",
-                                source.path
-                            ),
-                            None,
-                            false,
-                        )
-                    })?;
-                    let data = view.fs.read_bytes(&source.path)?;
-                    if data.len() as u64 != source.size {
-                        return Err(KernelError::new(
-                            "E2010",
-                            format!("source size changed since plan preview: {}", source.path),
-                            None,
-                            false,
-                        ));
+                // 逐源流式解码并追加：内存占用与源大小无关（O(块)）。
+                // BOM 只在产物最前面写一次；各输入自身 BOM 由解码器剥离。
+                view.fs.write_atomic_with(target, &mut |writer| {
+                    if let Some(prefix) = target_encoding.bom_prefix() {
+                        write_stream(writer, prefix)?;
                     }
-                    let transcoded =
-                        transcode(&data, encoding, target_encoding.without_bom(), invalid)?;
-                    merged.extend_from_slice(&transcoded.bytes);
-                }
-                view.fs.write_atomic(target, &merged)?;
+                    for source in &merge.sources {
+                        let encoding = source.encoding.ok_or_else(|| {
+                            KernelError::new(
+                                "E3001",
+                                format!(
+                                    "source encoding requires manual confirmation: {}",
+                                    source.path
+                                ),
+                                None,
+                                false,
+                            )
+                        })?;
+                        let mut transcoder =
+                            StreamTranscoder::new(encoding, target_encoding.without_bom(), invalid);
+                        // 分块解码出的字节先落到小缓冲，再交给 writer；缓冲在块之间复用。
+                        let mut buffer = Vec::new();
+                        let mut seen = 0u64;
+                        view.fs.read_stream(&source.path, &mut |chunk| {
+                            seen += chunk.len() as u64;
+                            transcoder.push(chunk, &mut buffer)?;
+                            write_stream(writer, &buffer)?;
+                            buffer.clear();
+                            Ok(())
+                        })?;
+                        if seen != source.size {
+                            return Err(KernelError::new(
+                                "E2010",
+                                format!("source size changed since plan preview: {}", source.path),
+                                None,
+                                false,
+                            ));
+                        }
+                        transcoder.finish(&mut buffer)?;
+                        write_stream(writer, &buffer)?;
+                    }
+                    Ok(())
+                })?;
                 let final_path = target.to_string();
                 let reverse = match backup {
                     Some(backup) => FsOp::WriteAtomic {
@@ -3092,6 +3118,8 @@ mod tests {
         fail_writes: Mutex<Vec<String>>,
         /// 内存目录集合：支撑 create_dir / remove_dir_if_empty 臂（不模拟非空判定）。
         dirs: Mutex<Vec<String>>,
+        /// read_stream 每次回调的块大小：既证"走了流式口"，也刻意把多字节序列切开。
+        stream_chunks: Mutex<Vec<usize>>,
     }
 
     impl TestFs {
@@ -3152,6 +3180,26 @@ mod tests {
                 .get(path)
                 .cloned()
                 .ok_or_else(|| KernelError::new("E2001", "not found", None, false))
+        }
+
+        fn read_stream(
+            &self,
+            path: &str,
+            read: &mut dyn FnMut(&[u8]) -> Result<(), KernelError>,
+        ) -> Result<(), KernelError> {
+            let data = self
+                .files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            // 3 字节一片：故意在 GB18030 多字节序列中间切开，逼解码器跨块保持状态。
+            for chunk in data.chunks(3) {
+                self.stream_chunks.lock().unwrap().push(chunk.len());
+                read(chunk)?;
+            }
+            Ok(())
         }
 
         fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
@@ -3885,6 +3933,18 @@ mod tests {
         assert_eq!(outcome.state, ApplyState::Completed);
         assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
         assert_eq!(fs.read_file("/out/all.txt"), "A\n中\n".as_bytes());
+        // 流式证据：合并路径不得走 read_bytes（整文件读入），且确实按块喂入。
+        assert_eq!(
+            fs.read_bytes_calls.load(Ordering::Relaxed),
+            0,
+            "F04 合并必须走 read_stream，不得整文件读入"
+        );
+        let chunks = fs.stream_chunks.lock().unwrap().clone();
+        assert!(!chunks.is_empty(), "read_stream 必须真的被调用");
+        assert!(
+            chunks.iter().all(|size| *size <= 3),
+            "块大小应符合读取口的分块行为：{chunks:?}"
+        );
         assert_eq!(journal.entries.len(), 1);
         assert!(matches!(
             &journal.entries[0].forward,
@@ -4861,6 +4921,7 @@ mod tests {
             on_conflict: OnConflict::Overwrite,
             overwrite_confirmed: true,
             entry_concurrency: 1,
+            ..ApplyOptions::default()
         };
         let outcome = apply_generic_plan(
             &plan(vec![action_entry(
@@ -5183,6 +5244,59 @@ mod tests {
         assert_eq!(outcome.state, ApplyState::Cancelled);
         assert!(fs.exists("/data/a.txt"), "first entry is rolled back");
         assert!(fs.exists("/data/b.txt"));
+        assert!(!fs.exists("/data/a1.txt"));
+        assert_eq!(journal.entries[0].status, JournalStatus::Reverted);
+    }
+
+    #[test]
+    fn cancel_keeps_applied_entries_under_keep_policy_and_undo_restores_them() {
+        // 方案 §7.7：壳层先问、再决定。keepApplied 下取消只停派发：
+        // 已完成的改名与产物留在原处并保持 Journal 可撤销，undo 时一并还原。
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/b.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let ports = Ports::default();
+        *ports.cancel_after.lock().unwrap() = Some(1);
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.progress = Some(&ports);
+        ctx.cancel = Some(&ports);
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry(
+                    "e1",
+                    "/data/a.txt",
+                    Some("/data/a1.txt"),
+                    PlanAction::Rename,
+                ),
+                action_entry(
+                    "e2",
+                    "/data/b.txt",
+                    Some("/data/b1.txt"),
+                    PlanAction::Rename,
+                ),
+            ]),
+            &ApplyOptions {
+                cancel_policy: crate::apply::CancelPolicy::KeepApplied,
+                ..ApplyOptions::default()
+            },
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Cancelled);
+        assert_eq!(outcome.report.undone_by, None, "保留处置不声称已撤销");
+        assert!(!fs.exists("/data/a.txt"), "已完成条目保留在目标位置");
+        assert!(fs.exists("/data/a1.txt"));
+        assert!(fs.exists("/data/b.txt"), "未派发条目原地不动");
+        assert!(!fs.exists("/data/b1.txt"));
+        assert_eq!(
+            journal.entries[0].status,
+            JournalStatus::Applied,
+            "保留的条目必须仍可撤销"
+        );
+
+        let undo = crate::apply::undo_plan(PLAN_ID, &fs, &license, &mut journal).unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert!(fs.exists("/data/a.txt"));
         assert!(!fs.exists("/data/a1.txt"));
         assert_eq!(journal.entries[0].status, JournalStatus::Reverted);
     }
@@ -5788,6 +5902,7 @@ mod tests {
             on_conflict: OnConflict::Skip,
             overwrite_confirmed: false,
             entry_concurrency: concurrency,
+            ..ApplyOptions::default()
         }
     }
 

@@ -255,12 +255,13 @@ function finish(task: MockTask, state: TaskState, message?: string) {
   task.finishedAt = new Date().toISOString();
   task.message = message;
   emitState(task);
-  emit(TASK_EVENT.done, { taskId: task.taskId, summary: reportFor(task) });
+  emit(TASK_EVENT.done, { taskId: task.taskId, kind: task.kind, summary: reportFor(task) });
 }
 
 function tick(task: MockTask) {
   if (task.cancelled) {
-    finish(task, "cancelled", "已取消，已执行条目已回滚");
+    // 方案 §7.7：取消只停派发；已完成条目保留，由界面询问是否一并撤销。
+    finish(task, "cancelled", "已取消后续条目；已完成项保留在磁盘，可在提示中一并撤销");
     return;
   }
   if (task.paused) {
