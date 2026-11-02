@@ -1653,7 +1653,15 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!(
+            // 不落在 `std::env::temp_dir()`：S01 预检按**目标卷**的可用空间与
+            // 200 MiB 余量下限判定，宿主 /tmp 若是小容量 tmpfs（常见 10 MB）会让
+            // 「应当放行」的用例误红——那是测试环境事实，不是产品行为。
+            // 统一落在 crate 的 target/ 下，与构建产物同卷。
+            let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("test-tmp");
+            fs::create_dir_all(&base).unwrap();
+            let path = base.join(format!(
                 "batchdesk-tasks-{}-{nanos}-{sequence}",
                 std::process::id()
             ));

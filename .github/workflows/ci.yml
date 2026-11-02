@@ -214,7 +214,7 @@ jobs:
 
   # ── ⑤ 桌面壳检查（Tauri 独立 workspace）──────────────────────
   desktop:
-    name: desktop（Tauri cargo check）
+    name: desktop（Tauri cargo check ＋ 单元测试）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -241,6 +241,10 @@ jobs:
         working-directory: web
       - name: 桌面壳 cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml
+      # 壳层单测是 34 条「载体＝壳层命令」用例的执行位置（用例覆盖映射表），
+      # 只 check 不跑测试会让这些证据永远只有本地口径。
+      - name: 桌面壳单元测试（任务队列/预检门/恢复/日志）
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
   # ── ⑥ 性能基准（仅主分支；与基线对比，超阈值失败）────────────────
   bench:
