@@ -170,6 +170,7 @@
 - **下游联动**：`TC／TW／TS`、`U v1.1`、原型走查包、`docs/baseline/README.md` 方案锚点 v1.15 → v1.16，T 版本列 v1.8 → v1.9。
 
 ### Fixed
+- **文档表格串列缺陷收口 ＋ 表格门禁（2026-11-02）**：全仓扫描出 **17 行** Markdown 表格因代码段内的裸竖线被切错列（含 `docs/DEVELOPMENT-PLAN.md` §5/§6.1 与 `docs/design/TRACEABILITY.md` 的 13 CLI 行——该行被渲染成 17 列），统一改为转义形态，正文与语义零改动；`docs/DEVELOPMENT-PLAN.md` §5「下一批任务」表头此前只声明 5 列而 21 行实际带 6 格（第 5 格是剩余缺口），补为 6 列并把五行 5 格的末格按语义归位（缺者以破折号显式标注，不补造内容）。`scripts/check_docs.py` 新增**两条表格门禁**：列数与分隔行一致（只数未转义竖线）＋表格行必须以竖线收尾（防单元格内物理换行把行拆断）；覆盖 `docs/**.md` 与仓库根 `*.md`，跳过有哈希校验的 `docs/baseline`。遗留：`docs/baseline/产品方案-v1.16…v1.19` 各 1 行同样串列，属基线快照，需在人类基线修订时处理。
 
 - **功能视图 F02/F03 在导航中不可达（2026-11-01）**：`web/src/App.tsx` 的「TXT 分割 F01–03」按钮 `onClick` 只置 `f01`，已注册的 F02（按行数分割）与 F03（按份数分割）两个视图在界面上无法进入。拆成三个独立导航项；`pnpm build`（tsc＋vite）通过。**注：本条修复后视图仍显示不出来**——更深一层的"组件从未挂载"缺陷见下一条。
 - **功能视图从未挂载（2026-11-01，ADR-0045）**：`web/src/App.tsx` import 了 `FeaturePages` 却没有任何使用点，主区只有 `{activeView === "c09" ? …}`——点击任一功能导航项后主区**渲染空白**；而 ADR-0040…0044 的台账已把"组件就位"记成"视图已接入"。根因是验证手段缺口：tsc 不因未使用的导入分支报错、vite build 成功不代表组件可达、cargo 测试看不见前端。修复＝按 `activeView` 三元渲染 else 分支挂载，并由 `App.navigation.test.tsx` 把 23 视图可达性变成断言；证据：bundle 263.55 kB → 289.06 kB，`FeaturePages` 独有文案首次进入产物；`App.navigation.test.tsx` 现在把这件事变成 CI 断言（run 41317472334）。同时修正 `AGENTS.md` 常用命令里失效的 `cargo test -p kernel`（包名实为 `batchdesk-kernel`，`kernel` 是 `[lib]` 名）。

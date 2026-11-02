@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文档一致性门禁：链接/锚点、版本锚点、expected.md、错误码白名单、用例覆盖映射表。
+"""文档一致性门禁：链接/锚点、版本锚点、expected.md、错误码白名单、用例覆盖映射表、表格列数。
 
 只使用标准库；CI 的 lint job 必跑。规则以“当前锚点”为准，不检查历史修订记录
 （CHANGELOG、基线修订表、ADR 正文中的历史版本引用允许保留）。
@@ -282,6 +282,42 @@ def check_case_map(errors: list[str]) -> None:
             errors.append(f"{instance}: E4（任务控制）✅ 行须引用取消/暂停回滚断言")
 
 
+TABLE_SEP_RE = re.compile(r"^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$")
+BARE_PIPE_RE = re.compile(r"(?<!\\)\|")
+
+
+def check_table_arity(errors: list[str]) -> None:
+    """Markdown 表格的列数必须与分隔行一致：代码段里的裸竖线会串列（渲染时列会整体错位）。
+
+    docs/baseline 跳过——基线快照按 MANIFEST 哈希校验，改一字即破链，其缺陷由人类基线文档修。
+    """
+    targets = sorted((ROOT / "docs").rglob("*.md")) + sorted(ROOT.glob("*.md"))
+    for path in targets:
+        if "baseline" in path.parts:
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        index = 0
+        while index < len(lines):
+            if TABLE_SEP_RE.match(lines[index]) and index > 0:
+                expect = len(BARE_PIPE_RE.findall(lines[index]))
+                row = index + 1
+                while row < len(lines) and lines[row].lstrip().startswith("|") and not TABLE_SEP_RE.match(lines[row]):
+                    actual = len(BARE_PIPE_RE.findall(lines[row]))
+                    if actual != expect:
+                        errors.append(
+                            f"{path.relative_to(ROOT)}:{row + 1}: 表格列数 {actual - 1}≠分隔行的 {expect - 1}"
+                            "（代码段内的竖线须写成 \\|）"
+                        )
+                    if not lines[row].rstrip().endswith("|"):
+                        errors.append(
+                            f"{path.relative_to(ROOT)}:{row + 1}: 表格行未以竖线收尾——单元格内不得有物理换行"
+                        )
+                    row += 1
+                index = row
+            else:
+                index += 1
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -291,6 +327,7 @@ def main() -> int:
     check_error_codes(errors)
     check_baseline_hashes(errors)
     check_case_map(errors)
+    check_table_arity(errors)
 
     if errors:
         print("文档一致性检查失败：")
@@ -300,7 +337,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）。"
+        "错误码白名单、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、Markdown 表格列数。"
     )
     return 0
 

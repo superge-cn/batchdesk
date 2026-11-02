@@ -231,7 +231,7 @@ pub fn migration_chain() -> &'static [(u32, MigrationFn)];  // [(1, m1_to_2), (2
 | `resetScope` | `{scope}` | `ScopeView` | 恢复默认档（含 `performance` 的"恢复自动"，§6.7） |
 | `saveRecipe` | `{name, description?, match?, kind?, paramsSnapshot?, steps?}` | `RecipeDocumentV2/V3` | C37；Phase A 用 kind/params，Phase B 用 steps；参数按 schema 校验 |
 | `getRecipe` | `{recipeId}` | `RecipeDocumentV3` | Phase B 读取完整步骤；不重载 `loadRecipe` 返回类型 |
-| `listRecipes` | `{page}` | `RecipePage`（`type RecipePage = Page<RecipeDocumentV2 | RecipeDocumentV3>`，`Page` 见篇 01 §3.2） | 列表只读；载入前按需迁移 |
+| `listRecipes` | `{page}` | `RecipePage`（`type RecipePage = Page<RecipeDocumentV2 \| RecipeDocumentV3>`，`Page` 见篇 01 §3.2） | 列表只读；载入前按需迁移 |
 | `loadRecipe` | `{recipeId}` | `PlanDocument`（**直接产出预览计划**，不执行，§7.3） | 仅单步；与 `planOperation` 同出口；多步用 getRecipe + 分步 plan |
 | `deleteRecipe` | `{recipeId}` | `void`（幂等） | |
 | `exportRecipe` | `{recipeId}` | `{payload: string}`（序列化 `RecipeDocumentV2/V3` JSON，含 `schemaVersion`；落盘位置由壳层另存对话框决定，kernel 不碰磁盘） | §13.8 导出 |
