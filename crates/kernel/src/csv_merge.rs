@@ -224,6 +224,102 @@ pub fn write_record(fields: &[String], delimiter: u8, out: &mut String) {
     out.push('\n');
 }
 
+/// RFC 4180 增量记录供给器（A 类流式执行臂，ADR-0054）：跨块喂入 UTF-8 字节，
+/// 产出**完整结束**的记录。与 [`parse_records`] 共用同一状态机语义——引号转义、
+/// 引号内换行、`\r\n`/`\n` 结束记录、引号外裸 `\r` 忽略、空行按单字段空记录、
+/// 尾部无换行记录在 [`RecordFeeder::finish`] 冲刷。内存 O(单条未完记录)，
+/// 逐条结果与整段 `parse_records` 完全一致（由单测钉住）。
+pub struct RecordFeeder {
+    delimiter: u8,
+    in_quotes: bool,
+    after_quote: bool,
+    field_start: bool,
+    saw_field: bool,
+    record: Vec<String>,
+    field: Vec<u8>,
+}
+
+impl RecordFeeder {
+    pub fn new(delimiter: u8) -> Self {
+        Self {
+            delimiter,
+            in_quotes: false,
+            after_quote: false,
+            field_start: true,
+            saw_field: false,
+            record: Vec::new(),
+            field: Vec::new(),
+        }
+    }
+
+    /// 喂入一段字节，返回其中完整结束的记录（按序、可为空）。
+    pub fn push(&mut self, data: &[u8]) -> Vec<Vec<String>> {
+        let mut records = Vec::new();
+        for &byte in data {
+            if self.in_quotes {
+                if self.after_quote {
+                    if byte == b'"' {
+                        self.field.push(b'"');
+                        self.after_quote = false;
+                    } else {
+                        self.in_quotes = false;
+                        self.after_quote = false;
+                        if byte == self.delimiter {
+                            finish_field(&mut self.record, &mut self.field, &mut self.saw_field);
+                            self.field_start = true;
+                        } else if byte == b'\n' {
+                            finish_field(&mut self.record, &mut self.field, &mut self.saw_field);
+                            records.push(std::mem::take(&mut self.record));
+                            self.saw_field = false;
+                            self.field_start = true;
+                        } else if byte != b'\r' {
+                            self.field.push(byte);
+                            self.field_start = false;
+                            self.saw_field = true;
+                        }
+                    }
+                    continue;
+                }
+                if byte == b'"' {
+                    self.after_quote = true;
+                } else {
+                    self.field.push(byte);
+                }
+                continue;
+            }
+
+            if self.field_start && byte == b'"' {
+                self.in_quotes = true;
+                self.field_start = false;
+                self.saw_field = true;
+            } else if byte == self.delimiter {
+                finish_field(&mut self.record, &mut self.field, &mut self.saw_field);
+                self.field_start = true;
+            } else if byte == b'\n' {
+                finish_field(&mut self.record, &mut self.field, &mut self.saw_field);
+                records.push(std::mem::take(&mut self.record));
+                self.saw_field = false;
+                self.field_start = true;
+            } else if byte != b'\r' {
+                self.field.push(byte);
+                self.field_start = false;
+                self.saw_field = true;
+            }
+        }
+        records
+    }
+
+    /// 输入结束：冲刷尾部记录（与 `parse_records` 的 EOF 语义一致）。
+    pub fn finish(mut self) -> Vec<Vec<String>> {
+        let mut records = Vec::new();
+        if !self.field.is_empty() || self.saw_field || !self.record.is_empty() {
+            finish_field(&mut self.record, &mut self.field, &mut self.saw_field);
+            records.push(std::mem::take(&mut self.record));
+        }
+        records
+    }
+}
+
 /// 生成 F06 计划：一条 `merge` 条目按输入顺序汇总全部文件。
 #[allow(clippy::too_many_lines)]
 pub fn plan_f06(input: PlanF06Input) -> Result<PlanDocument, KernelError> {
@@ -699,6 +795,38 @@ mod tests {
     use super::*;
 
     const PLAN_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    #[test]
+    fn record_feeder_matches_parse_records_across_arbitrary_chunk_boundaries() {
+        // 引号转义、引号内换行与分隔符、CRLF、引号外裸 \r、空行、末行无换行。
+        let sample = "a,\"b\"\"x\",c\r\n\"multi\nline\",2,\r\r\n\nlast,no-eol";
+        let expected = parse_records(sample.as_bytes(), b',');
+
+        // 1 字节一片：任何状态机边界都被切开。
+        let mut feeder = RecordFeeder::new(b',');
+        let mut streamed = Vec::new();
+        for byte in sample.as_bytes() {
+            streamed.extend(feeder.push(std::slice::from_ref(byte)));
+        }
+        streamed.extend(feeder.finish());
+        assert_eq!(streamed, expected);
+
+        // 3 字节一片与整段一次喂入同样一致。
+        for chunk_size in [3usize, sample.len()] {
+            let mut feeder = RecordFeeder::new(b',');
+            let mut streamed = Vec::new();
+            for chunk in sample.as_bytes().chunks(chunk_size) {
+                streamed.extend(feeder.push(chunk));
+            }
+            streamed.extend(feeder.finish());
+            assert_eq!(streamed, expected);
+        }
+        assert_eq!(
+            expected.len(),
+            4,
+            "裸 \\r 不结束记录：multi\\nline,2, 与空行各一条"
+        );
+    }
 
     fn file(path: &str, columns: &[&str], label: Option<&str>) -> PlanF06File {
         PlanF06File {

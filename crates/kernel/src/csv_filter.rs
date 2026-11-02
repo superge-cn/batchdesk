@@ -162,6 +162,69 @@ fn numeric_matches(number: f64, limit: f64, op: FilterOp) -> bool {
     }
 }
 
+/// 单行判定结果：`NonNumeric` 供 `filter_records` 维持既有计数口径
+/// （非数值单元格对任何数值算子都不满足判定，含 `ne`，避免意外保留/剔除）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowMatch {
+    Match,
+    NoMatch,
+    NonNumeric,
+}
+
+/// 单行判定器（整段 `filter_records` 与流式执行臂共用，ADR-0054）：
+/// 数值阈值只解析一次；逐行判定与整段路径逐行语义一致。
+pub struct RowPredicate {
+    column_index: usize,
+    op: FilterOp,
+    value: String,
+    limit: Option<f64>,
+}
+
+impl RowPredicate {
+    pub fn new(column_index: usize, op: FilterOp, value: &str) -> Self {
+        let limit = if op.is_numeric() {
+            value.parse::<f64>().ok()
+        } else {
+            None
+        };
+        Self {
+            column_index,
+            op,
+            value: value.to_string(),
+            limit,
+        }
+    }
+
+    pub fn classify(&self, record: &[String]) -> RowMatch {
+        let cell = record
+            .get(self.column_index)
+            .map(String::as_str)
+            .unwrap_or_default();
+        match self.op {
+            FilterOp::Contains if cell.contains(&self.value) => RowMatch::Match,
+            FilterOp::NotContains if !cell.contains(&self.value) => RowMatch::Match,
+            FilterOp::Contains | FilterOp::NotContains => RowMatch::NoMatch,
+            FilterOp::NumEq
+            | FilterOp::NumNe
+            | FilterOp::NumGt
+            | FilterOp::NumGe
+            | FilterOp::NumLt
+            | FilterOp::NumLe => match cell.parse::<f64>() {
+                Ok(number) => match self.limit {
+                    Some(limit) if numeric_matches(number, limit, self.op) => RowMatch::Match,
+                    Some(_) => RowMatch::NoMatch,
+                    None => RowMatch::NoMatch,
+                },
+                Err(_) => RowMatch::NonNumeric,
+            },
+        }
+    }
+
+    pub fn matches(&self, record: &[String]) -> bool {
+        matches!(self.classify(record), RowMatch::Match)
+    }
+}
+
 /// 返回（保留的记录，匹配行数，非数值单元格计数）。
 /// 非数值单元格对任何数值算子都不满足判定（含 `ne`，避免意外保留/剔除）。
 pub fn filter_records(
@@ -177,41 +240,22 @@ pub fn filter_records(
     } else {
         records
     };
-    let limit = if op.is_numeric() {
-        value.parse::<f64>().ok()
-    } else {
-        None
-    };
+    let predicate = RowPredicate::new(column_index, op, value);
     let mut kept = Vec::new();
     let mut matched = 0u64;
     let mut non_numeric = 0u64;
     for record in data {
-        let cell = record
-            .get(column_index)
-            .map(String::as_str)
-            .unwrap_or_default();
-        let is_match = match op {
-            FilterOp::Contains => cell.contains(value),
-            FilterOp::NotContains => !cell.contains(value),
-            FilterOp::NumEq
-            | FilterOp::NumNe
-            | FilterOp::NumGt
-            | FilterOp::NumGe
-            | FilterOp::NumLt
-            | FilterOp::NumLe => match cell.parse::<f64>() {
-                Ok(number) => match limit {
-                    Some(limit) => numeric_matches(number, limit, op),
-                    None => false,
-                },
-                Err(_) => {
-                    non_numeric += 1;
-                    false
-                }
-            },
+        let is_match = match predicate.classify(record) {
+            RowMatch::Match => {
+                matched += 1;
+                true
+            }
+            RowMatch::NoMatch => false,
+            RowMatch::NonNumeric => {
+                non_numeric += 1;
+                false
+            }
         };
-        if is_match {
-            matched += 1;
-        }
         if is_match == mode_keep {
             kept.push(record.clone());
         }

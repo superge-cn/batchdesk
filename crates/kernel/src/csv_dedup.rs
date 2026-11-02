@@ -110,7 +110,8 @@ fn resolve_key_columns(
     Ok(resolved)
 }
 
-fn key_of(record: &[String], key_columns: &[PlanCsvDedupColumn]) -> String {
+/// 判重键：整行或指定列拼键的 JSON 序列化（流式执行臂与 `dedup_records` 同口径）。
+pub(crate) fn key_of(record: &[String], key_columns: &[PlanCsvDedupColumn]) -> String {
     if key_columns.is_empty() {
         serde_json::to_string(record).unwrap_or_default()
     } else {
