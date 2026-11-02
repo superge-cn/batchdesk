@@ -259,6 +259,10 @@ def check_case_map(errors: list[str]) -> None:
         "generic_apply::tests": fns("crates/kernel/src/generic_apply.rs"),
         "apply_flow": fns("crates/cli/tests/apply_flow.rs"),
         "corpus.rs": fns("crates/kernel/tests/corpus.rs"),
+        # 壳层与 platform 的命名空间也在内：锚点写了 tasks::tests::x 就必须真存在
+        "tasks::tests": fns("src-tauri/src/tasks.rs"),
+        "platform::preflight::tests": fns("crates/platform/src/preflight.rs"),
+        "kernel::preflight::tests": fns("crates/kernel/src/preflight.rs"),
     }
     for row in rows:
         instance, cell = row["实例ID"], row["自动化锚点"]

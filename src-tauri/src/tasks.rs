@@ -1761,6 +1761,292 @@ mod tests {
         )
     }
 
+    /// 带 expected 大小的 c09 计划：预检的磁盘判定要用它算需用空间。
+    fn plan_with_sizes(plan_id: &str, files: &[(PathBuf, u64)]) -> PlanDocument {
+        let mut params = BTreeMap::new();
+        params.insert("mode".to_string(), PlanParamValue::String("full".to_string()));
+        let entries = files
+            .iter()
+            .enumerate()
+            .map(|(index, (path, size))| PlanEntry {
+                entry_id: format!("{plan_id}-e{}", index + 1),
+                source: path.to_string_lossy().into_owned(),
+                target: None,
+                action: kernel::plan::PlanAction::Delete,
+                relation: None,
+                reason: "test duplicate".to_string(),
+                conflict: None,
+                resolution: None,
+                blocked: None,
+                expected: Some(kernel::plan::PlanExpected {
+                    size: *size,
+                    algorithm: "size".to_string(),
+                    hash: None,
+                }),
+                range: None,
+                merge: None,
+                csv: None,
+                csv_merge: None,
+                csv_extract: None,
+                csv_rows: None,
+                csv_dedup: None,
+                csv_filter: None,
+                csv_columns: None,
+                csv_sort: None,
+            })
+            .collect();
+        PlanDocument {
+            plan_id: plan_id.to_string(),
+            kind: "c09".to_string(),
+            params,
+            entries,
+            stats: PlanStats::default(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn stored(plan: PlanDocument) -> StoredPlan {
+        StoredPlan {
+            plan,
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            protected_source: ProtectedSource::Params,
+        }
+    }
+
+    /// 远超任何真实磁盘的安全余量下限（方案 §9.1 判定式里的可配置常数），
+    /// 用来确定性地逼出"余量不足"，不依赖测试机的实际空闲空间。
+    const UNREACHABLE_MARGIN_FLOOR: u64 = 1 << 60;
+
+    #[test]
+    fn preflight_gate_blocks_dispatch_with_e2004_when_disk_margin_is_exceeded() {
+        // TC-S01-PRE-03（命中阻断，E2004）：预检结论为整任务阻断时，派发前就返回 E2004。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        let quarantine = temp.0.join("quarantine");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&quarantine).unwrap();
+        let first = root.join("a.txt");
+        fs::write(&first, b"same").unwrap();
+        let plan_id = new_ulid("preflight-plan");
+        let stored = stored(plan_with_sizes(
+            &plan_id,
+            &[(first.clone(), 4), (root.join("b.txt"), 4)],
+        ));
+
+        let blocked = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            UNREACHABLE_MARGIN_FLOOR,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检本身不应失败");
+        assert!(blocked.is_task_blocked(), "余量不足必须整任务阻断");
+        let error = crate::apply_gate_block(&blocked).expect("阻断时必须给出 E2004");
+        assert_eq!(error.code, "E2004");
+        assert!(error.retryable, "余量不足属可重试（清理磁盘后重来）");
+        let detail = error.detail.unwrap_or_default();
+        assert!(
+            detail.contains("disk-space"),
+            "detail 要带上预检报告供界面逐项显示：{detail}"
+        );
+
+        // 对照：同一份计划用缺省余量下限不阻断——证明阻断来自判定式而非夹具坏了。
+        let passed = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检采集不应失败");
+        assert!(!passed.is_task_blocked());
+        assert!(crate::apply_gate_block(&passed).is_none());
+    }
+
+    #[test]
+    fn blocked_preflight_leaves_the_disk_untouched_and_the_plan_stored() {
+        // TC-S01-RBK-01（不通过零副作用）：阻断路径上既不写 Journal、也不动隔离目录与源文件。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        let quarantine = temp.0.join("quarantine");
+        let journal = temp.0.join("journal.jsonl");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&quarantine).unwrap();
+        let first = root.join("a.txt");
+        let second = root.join("b.txt");
+        fs::write(&first, b"same").unwrap();
+        fs::write(&second, b"same").unwrap();
+        let stored = stored(plan_with_sizes(
+            &new_ulid("blocked-plan"),
+            &[(first.clone(), 4), (second.clone(), 4)],
+        ));
+
+        let report = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            UNREACHABLE_MARGIN_FLOOR,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检采集不应失败");
+        assert!(crate::apply_gate_block(&report).is_some());
+
+        assert!(first.exists() && second.exists(), "源文件必须原地不动");
+        assert_eq!(fs::read(&first).unwrap(), b"same");
+        assert!(
+            fs::read_dir(&quarantine).unwrap().next().is_none(),
+            "隔离目录不得出现任何条目"
+        );
+        assert!(!journal.exists(), "阻断路径不得创建 Journal");
+    }
+
+    #[test]
+    fn preflight_gate_is_recomputed_every_call_so_a_changed_environment_flips_the_verdict() {
+        // TC-S01-PRE-04（环境变化重算）：同一份计划、不重新预览，逐次调用要反映当下事实。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        let quarantine = temp.0.join("quarantine");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&quarantine).unwrap();
+        let first = root.join("a.txt");
+        fs::write(&first, b"same").unwrap();
+        let stored = stored(plan_with_sizes(&new_ulid("recheck-plan"), &[(first.clone(), 4)]));
+        let gate = |floor: u64| {
+            crate::preflight_gate(
+                &stored,
+                &quarantine,
+                floor,
+                platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+            )
+            .expect("预检采集不应失败")
+        };
+
+        let before = gate(platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES);
+        assert!(!before.is_task_blocked());
+        let tight = gate(UNREACHABLE_MARGIN_FLOOR);
+        assert!(tight.is_task_blocked(), "第二次调用要用上新的余量下限（不得缓存）");
+        let after = gate(platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES);
+        assert!(
+            !after.is_task_blocked(),
+            "余量恢复后同一计划重新判定为可执行——报告不是缓存"
+        );
+
+        // 文件系统状态变化同样要被下一次调用看见：把源文件设为只读 → 出现 E2002 提示项。
+        let mut permissions = fs::metadata(&first).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&first, permissions).unwrap();
+        let readonly = gate(platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES);
+        let hit = readonly
+            .items
+            .iter()
+            .find(|item| item.kind == "readonly")
+            .expect("只读目标要作为环境事实出现在下一次预检报告里");
+        assert_eq!(hit.code.as_deref(), Some("E2002"));
+        assert!(!readonly.is_task_blocked(), "只读是条目级提示，不整任务阻断");
+
+        // 还原写位（临时目录随后整体删除，但保持夹具可复用）。Unix 上 set_readonly(false)
+        // 会变成全局可写，因此按平台各走各的：POSIX 用精确 mode，Windows 才用该 setter。
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&first, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let mut writable = fs::metadata(&first).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            writable.set_readonly(false);
+            fs::set_permissions(&first, writable).unwrap();
+        }
+    }
+
+    #[test]
+    fn preflight_gate_warns_on_unreachable_unc_without_blocking_the_task() {
+        // TC-S01-PRE-05（UNC 不可达降级不阻塞，方案 §4.9）：探测超时/不可达都只降级为提示。
+        let temp = TempDir::new();
+        let quarantine = temp.0.join("quarantine");
+        fs::create_dir_all(&quarantine).unwrap();
+        // 用 POSIX 风格 UNC（`//host/share/…`）：两个平台的路径解析都能取到 `\\host\share`
+        // 这一根级，`is_network_path` 的两个分支之一就是它（篇 04 §网络路径）。
+        let remote = PathBuf::from("//batchdesk.invalid.host/share/a.txt");
+        let stored = stored(plan_with_sizes(
+            &new_ulid("unc-plan"),
+            &[(remote.clone(), 4), (temp.0.join("local.txt"), 4)],
+        ));
+
+        let report = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检采集不应失败");
+        assert!(
+            report
+                .items
+                .iter()
+                .any(|item| item.kind == "unc" && item.level != kernel::preflight::PreflightLevel::Pass),
+            "网络路径要给出**实际探测过**的 UNC 预检项，而不是\\\"无网络路径\\\"的通过项：{:?}",
+            report
+                .items
+                .iter()
+                .map(|item| (item.kind.as_str(), item.level.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !report.is_task_blocked(),
+            "不可达／超时按暂不可达降级，不得整任务阻断"
+        );
+        assert!(
+            report.items.iter().any(|item| item.code.as_deref() == Some("E2005")),
+            "该提示要带 E2005 码位（06 码表）"
+        );
+    }
+
+    #[test]
+    fn preflight_passing_plan_then_applies_through_the_queue_and_quarantines_files() {
+        // TC-S01-EXE-01（预检通过→执行）：闸放行 → 入队 → 真跑完 → 重复文件进隔离目录。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        let quarantine = temp.0.join("quarantine");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&quarantine).unwrap();
+        let first = root.join("a.txt");
+        let second = root.join("b.txt");
+        fs::write(&first, b"same").unwrap();
+        fs::write(&second, b"same").unwrap();
+        let stored = stored(plan_with_sizes(
+            &new_ulid("pass-then-apply"),
+            &[(first.clone(), 4), (second.clone(), 4)],
+        ));
+
+        let report = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检采集不应失败");
+        assert!(
+            crate::apply_gate_block(&report).is_none(),
+            "预检必须放行，否则下面的入队不代表真实链路"
+        );
+
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: quarantine.clone(),
+                journal_path: temp.0.join("journal.jsonl"),
+                queue_path: temp.0.join("tasks.json"),
+                oplog_path: temp.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_, _| {}),
+        );
+        let apply_id = queue.enqueue_apply(stored, ApplyOptions::default());
+        let applied = wait_terminal(&queue, &apply_id);
+        assert_eq!(applied.summary.state, TaskState::Completed);
+        assert!(!first.exists() && !second.exists(), "预检放行的计划要真的执行完");
+        assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 2);
+    }
+
     fn write_snapshot(paths: &TaskPaths, task_id: &str, plan: &PlanDocument, state: TaskState) {
         let summary = TaskSummary {
             task_id: task_id.to_string(),

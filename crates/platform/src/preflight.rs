@@ -229,6 +229,26 @@ pub fn is_network_path(path: &Path) -> bool {
     value.starts_with("\\\\") || value.starts_with("//")
 }
 
+/// 取网络路径的**共享根**（`//host/share`）；非网络路径或信息不足时返回 `None`。
+///
+/// 为什么不能复用 `probe_root`：它找的是"最近的存在目录"（为卷剩余空间服务），
+/// 而共享不可达时 `\\host\share` 本身就不存在，会一路退到本机根目录——于是 S01 的
+/// 可达性探测实际探的是本机盘，方案 §4.9 要求的 E2005「暂不可达」降级永远不出现。
+/// 两种写法（`\\` 与 `//`）都归一到 `//host/share`，交给 `probe_unc` 探测。
+pub fn unc_share_root(path: &Path) -> Option<PathBuf> {
+    if !is_network_path(path) {
+        return None;
+    }
+    let value = path.to_string_lossy().replace('\\', "/");
+    let mut segments = value.split('/').filter(|segment| !segment.is_empty());
+    let host = segments.next()?;
+    let share = segments.next()?;
+    if host.is_empty() || share.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(format!("//{host}/{share}")))
+}
+
 /// 探测 UNC 路径可达性；非网络路径返回 `None`。
 ///
 /// 超时返回 `None`（暂不可达），调用方按方案 §4.9 降级为提示而非阻断。
@@ -384,6 +404,30 @@ mod tests {
             permissions.set_readonly(false);
             fs::set_permissions(&path, permissions).unwrap();
         }
+    }
+
+    #[test]
+    fn unc_share_root_picks_the_share_not_the_local_root() {
+        // 共享不可达时 probe_root 会退到本机根目录，可达性预检就变成探本机盘（S01 的
+        // E2005 永不出现）。共享根解析必须停在 `//host/share`。
+        for (spelling, expected) in [
+            (r"\\nas01\资料\2026\a.txt", "//nas01/资料"),
+            ("//nas01/资料/2026/a.txt", "//nas01/资料"),
+            (r"\\NAS01\资料", "//NAS01/资料"),
+        ] {
+            let share = unc_share_root(Path::new(spelling))
+                .unwrap_or_else(|| panic!("{spelling} 应解析出共享根"));
+            assert_eq!(
+                share.to_string_lossy().replace('\\', "/"),
+                expected,
+                "{spelling} 解析结果不对"
+            );
+        }
+        // 主机或共享名为空 → 不猜；本地路径 → None。
+        assert!(unc_share_root(Path::new(r"\\nas01")).is_none());
+        assert!(unc_share_root(Path::new("\\\\")).is_none());
+        assert!(unc_share_root(Path::new("/data/out/a.txt")).is_none());
+        assert!(unc_share_root(Path::new("C:\\data\\out")).is_none());
     }
 
     #[test]

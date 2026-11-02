@@ -1906,6 +1906,83 @@ fn f11_plan_apply_and_undo_creates_multi_level_directories() {
 }
 
 #[test]
+fn f11_undo_keeps_a_directory_that_became_non_empty_and_reports_the_failure() {
+    let dir = TempDir::new();
+    let root = dir.0.join("target");
+    let list = dir.0.join("list.csv");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(&list, "路径\na/b\nc\n".as_bytes()).unwrap();
+
+    let plan = batchdesk(&[
+        "f11",
+        "--list",
+        path_text(&list),
+        "--root",
+        path_text(&root),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success(), "f11 plan failed");
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success(), "f11 apply failed");
+
+    // 计划之后目录里出现了别人的文件：撤销只能删空目录，禁止递归删。
+    fs::write(root.join("a/planted.txt"), b"keep me").unwrap();
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    let report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(
+        report["failed"].as_array().unwrap().len(),
+        1,
+        "the non-empty directory must be reported as a failed undo entry\nstdout:\n{}",
+        String::from_utf8_lossy(&undo.stdout)
+    );
+    assert_eq!(report["reverted"].as_u64().unwrap(), 2);
+    assert_eq!(
+        report["failed"][0]["error"]["code"].as_str().unwrap(),
+        "E2008"
+    );
+    assert!(
+        root.join("a").is_dir(),
+        "a non-empty directory is not removed"
+    );
+    assert!(
+        root.join("a/planted.txt").is_file(),
+        "undo must never delete recursively"
+    );
+    assert!(
+        !root.join("a/b").exists(),
+        "the empty child is still reverted"
+    );
+    assert!(
+        !root.join("c").exists(),
+        "unaffected entries are still reverted"
+    );
+}
+
+#[test]
 fn f11_accepts_the_f10_listing_format_and_reports_invalid_rows() {
     let dir = TempDir::new();
     let root = dir.0.join("target");
@@ -2047,6 +2124,214 @@ fn f11_skips_branches_whose_parent_position_is_an_existing_file() {
     assert!(root.join("d").join("e").is_dir(), "无冲突分支应照常创建");
     assert!(!Path::new(&a_b).exists(), "被文件挡住的分支不得落盘");
     assert!(root.join("a").is_file(), "挡住路径的文件本身不受影响");
+}
+
+#[test]
+fn empty_protected_list_blocks_nothing_while_a_hit_blocks_and_writes_nothing() {
+    // TC-S02-PRE-01（默认空名单不误拦）与 TC-S02-EXE-02（默认名单态写入不误拦）此前只由
+    // "各功能单测隐含"，没有一条显式断言。这里逐功能钉住三件事：
+    // 空名单 → blocked=0；名单命中 → blocked≥1 且带 E2009；执行面 → 空名单真写入、命中零变更。
+    let dir = TempDir::new();
+    let tree = dir.0.join("tree");
+    let out = dir.0.join("out");
+    fs::create_dir_all(tree.join("sub")).unwrap();
+    fs::create_dir_all(&out).unwrap();
+    let source = tree.join("a.txt");
+    fs::write(&source, b"one\n").unwrap();
+    fs::write(tree.join("src1.txt"), b"x\n").unwrap();
+    fs::write(tree.join("src2.txt"), b"y\n").unwrap();
+
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    // (功能, 计划旗标, 该计划的落点所在目录——保护它就该命中)
+    let cases: Vec<(&str, Vec<String>, PathBuf)> = vec![
+        (
+            "f01",
+            vec![
+                "--file".into(),
+                text(&source),
+                "--target-bytes".into(),
+                "2".into(),
+                "--output-dir".into(),
+                text(&tree.join("parts")),
+            ],
+            tree.clone(),
+        ),
+        (
+            "f04",
+            vec![
+                "--file".into(),
+                text(&tree.join("src1.txt")),
+                "--file".into(),
+                text(&tree.join("src2.txt")),
+                "--output".into(),
+                text(&tree.join("merged.txt")),
+                "--target".into(),
+                "utf-8".into(),
+                "--sample-window".into(),
+                "64".into(),
+                "--sample-blocks".into(),
+                "0".into(),
+            ],
+            tree.clone(),
+        ),
+        (
+            "f10",
+            vec![
+                "--root".into(),
+                text(&tree),
+                "--output".into(),
+                text(&out.join("list.csv")),
+            ],
+            out.clone(),
+        ),
+        (
+            "f12",
+            vec!["--dir".into(), text(&tree), "--prefix".into(), "x_".into()],
+            tree.clone(),
+        ),
+        (
+            "c01",
+            vec![
+                "--file".into(),
+                text(&source),
+                "--target".into(),
+                "gb18030".into(),
+                "--source".into(),
+                "utf-8".into(),
+                "--sample-window".into(),
+                "64".into(),
+                "--sample-blocks".into(),
+                "0".into(),
+            ],
+            tree.clone(),
+        ),
+    ];
+
+    for (kind, args, landing) in &cases {
+        let plain = plan_for(kind, args, None);
+        assert_eq!(
+            plain["stats"]["blocked"], 0,
+            "{kind} 空名单不得出现 blocked：{plain}"
+        );
+        assert!(
+            plain["stats"]["total"].as_u64().unwrap_or(0) >= 1,
+            "{kind} 夹具应至少产出一条条目：{plain}"
+        );
+        let hit = plan_for(kind, args, Some(landing));
+        assert!(
+            hit["stats"]["blocked"].as_u64().unwrap_or(0) >= 1,
+            "{kind} 落点被保护时必须 blocked：{hit}"
+        );
+        assert!(
+            hit["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["blocked"]["code"] == "E2009"),
+            "{kind} 命中要带 06 码表的 E2009：{hit}"
+        );
+    }
+
+    // 执行面：空名单的 c01 真的写；同一份计划把落点保护起来后执行零变更。
+    // 源文本用中文——纯 ASCII 在 UTF-8 与 GB18030 下逐字节相同，验不出"真的写了"。
+    let utf8_original = "中文一行\n".as_bytes().to_vec();
+    fs::write(&source, &utf8_original).unwrap();
+    let expected_gb18030 = kernel::encoding::transcode(
+        &utf8_original,
+        kernel::encoding::SourceEncoding::Utf8,
+        kernel::encoding::TargetEncoding::Gb18030,
+        kernel::encoding::InvalidSequencePolicy::ReplaceAndCount,
+    )
+    .expect("夹具应能转成 GB18030")
+    .bytes;
+    assert_ne!(
+        expected_gb18030, utf8_original,
+        "夹具必须让两种编码的字节不同"
+    );
+    let plan_path = dir.0.join("c01.json");
+    let (_, c01_args, c01_landing) = cases
+        .iter()
+        .find(|(kind, _, _)| *kind == "c01")
+        .expect("用例里应有 c01");
+    let plain = plan_for("c01", c01_args, None);
+    fs::write(&plan_path, serde_json::to_vec(&plain).unwrap()).unwrap();
+    let applied = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("q1")),
+        "--journal",
+        path_text(&dir.0.join("j1.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        applied.status.success(),
+        "c01 apply 失败：{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        expected_gb18030,
+        "空名单下转码要真的落盘"
+    );
+    fs::write(&source, &utf8_original).unwrap();
+
+    let hit = plan_for("c01", c01_args, Some(c01_landing));
+    let hit_path = dir.0.join("c01-protected.json");
+    fs::write(&hit_path, serde_json::to_vec(&hit).unwrap()).unwrap();
+    let protected_apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&hit_path),
+        "--protected-dir",
+        path_text(c01_landing),
+        "--quarantine-dir",
+        path_text(&dir.0.join("q2")),
+        "--journal",
+        path_text(&dir.0.join("j2.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        protected_apply.status.success(),
+        "命中保护的条目应被跳过而不是整单失败：{}",
+        String::from_utf8_lossy(&protected_apply.stderr)
+    );
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        utf8_original,
+        "保护命中的条目一个字节都不许改"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&protected_apply.stdout).unwrap();
+    assert_eq!(report["report"]["entries"][0]["status"], "skipped");
+    assert_eq!(
+        report["report"]["entries"][0]["error"]["code"], "E2009",
+        "跳过原因要带码位"
+    );
+}
+
+/// 用同一组旗标跑一次 `plan`，可选带上 `--protected-dir`。
+fn plan_for(kind: &str, args: &[String], protected: Option<&Path>) -> serde_json::Value {
+    let mut argv: Vec<String> = vec![kind.to_string()];
+    argv.extend(args.iter().cloned());
+    if let Some(dir) = protected {
+        argv.extend_from_slice(&[
+            "--protected-dir".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ]);
+    }
+    argv.extend_from_slice(&[
+        "--plan-id".to_string(),
+        PLAN_ID.to_string(),
+        "--json".to_string(),
+    ]);
+    let out = batchdesk_str(&argv);
+    assert!(
+        out.status.success(),
+        "{kind} 计划失败：{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("计划应是合法 JSON")
 }
 
 #[test]

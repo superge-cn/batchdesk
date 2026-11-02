@@ -193,8 +193,9 @@ def load_map_rows() -> list[list[str]]:
     return rows[1:]
 
 
-def resolve(anchor: str, carrier: str, rust: dict[str, str], vitest: list[dict], playwright: list[dict]):
-    """→ (判定, 解析层, 解析明细)"""
+def resolve(anchor: str, carrier: str, rust: dict[str, str], vitest: list[dict],
+            playwright: list[dict], out: list[str] | None = None):
+    """→ (判定, 解析层, 解析明细)；out 非空时回收命中的清单键，用于按真实运行位置填「实测命令」"""
     if "真人工" in carrier:
         return ("待人工执行", "人工", "载体为真人工／受控环境，本脚本不代跑")
 
@@ -237,6 +238,29 @@ def resolve(anchor: str, carrier: str, rust: dict[str, str], vitest: list[dict],
             notes.append(f"通配 {star}* 展开为 {len(keys)} 项")
         else:
             missing.append(f"{star}*")
+
+    # 1c) 完整命名空间路径形态的锚点（"tasks::tests::x"、"platform::preflight::tests::x"、
+    #     "kernel::preflight::tests::x"）：清单键以该路径结尾即可定位，覆盖全部 crate/壳层命名空间。
+    for path in re.findall(r"\b(?:[a-z][a-z0-9_]*::){1,5}[a-z][a-z0-9_]+\b", anchor):
+        if len(path.split("::")[-1]) < 12:
+            continue
+        matches = sorted(key for key in rust if key.endswith(path))
+        if matches:
+            hits.extend((key, rust[key]) for key in matches)
+            notes.append(f"按命名空间路径定位：{path.rsplit('::', 1)[-1]}")
+
+    # 1d) 锚点里"＋裸用例名"的写法（"…::tests::a＋b"）：整段精确查清单。
+    #     过去这类第二段直接被忽略，锚点声称两个用例、实际只核一个也算绿——查不到就记名不符。
+    for segment in re.split(r"[＋、]", anchor)[1:]:
+        token = re.sub(r"\b(?:[a-z][a-z0-9_]*::){1,6}[a-z][a-z0-9_]+", "", segment).strip()
+        if "_" not in token or not re.fullmatch(r"[a-z][a-z0-9_]{11,}", token):
+            continue
+        matches = sorted(key for key in rust if key.split("::")[-1] == token)
+        if matches:
+            hits.extend((key, rust[key]) for key in matches)
+            notes.append(f"按裸用例名精确定位：{token}")
+        else:
+            missing.append(token)
 
     # 2) 壳层裸测试名（载体为壳层时，锚点常直接写名字）
     if not hits and ("壳层" in carrier or "壳层" in anchor):
@@ -335,6 +359,8 @@ def resolve(anchor: str, carrier: str, rust: dict[str, str], vitest: list[dict],
                 break
 
     resolved = hits + module_hits + frontend
+    if out is not None:
+        out.extend(name for name, _ in resolved)
     if not resolved:
         if missing:
             return ("名不符", "逐名", "锚点指向的测试名不在实测清单：" + "、".join(sorted(set(missing))))
@@ -452,26 +478,44 @@ def write_summary(ledger_rows: list[list[str]], counts: dict[str, int], tiers: d
     lines += ["", f"合计 {len(ledger_rows)} 行；解析层分布：" +
               "／".join(f"{tier} {tiers.get(tier, 0)}" for tier in ("逐名", "模块级", "文件级", "人工", "未解析")), ""]
 
-    lines += [
-        "## 3. 待办：把不可机器核对的锚点改成可核对",
-        "",
-        f"- **锚点需精确化（{counts.get('锚点需精确化', 0)} 条）**：改成「crate `模块` N 项」或直接点名用例——"
-        "多数形如\"kernel `csv` 多行表头 E3004 单测\"，整组确实在跑，缺的是指名。"
-        f" 实例：{'、'.join(ids('锚点需精确化')[:12])} 等。",
-        f"- **锚点不可机器定位（{counts.get('锚点不可机器定位', 0)} 条）**："
-        f"{'、'.join(ids('锚点不可机器定位'))}——其中 {s01_count} 条是 S01 的预检／执行阻断面"
-        f"（`preflightPlan`／`applyPlan` 的 E2004 前置阻断与零变更），在壳层实测清单里没有对应用例，"
-        f"属**真缺测试**而非文字问题；{s02_count} 条是 S02 的\"各功能隐含成立\"，"
-        "要么补一条显式断言，要么改判状态。",
-        f"- **锚点缺失（{counts.get('锚点缺失', 0)} 条）**：{'、'.join(ids('锚点缺失'))}——"
-        "并发运行中调参「下一批生效」既无 kernel 断言也无 UI，按 ⛔ 待实现处理更准确（改判需走方案 §11.6）。",
-        "",
-        "## 4. 口径边界（不谎报）",
-        "",
-        "- 「实测通过」**不等于**用例验收通过：模块级／文件级判定的证据是\"整组在跑且绿\"，"
+    loose = ids("锚点需精确化")
+    unlocatable = ids("锚点不可机器定位")
+    missing_anchor = ids("锚点缺失")
+    lines += ["## 3. 待办：把不可机器核对的锚点改成可核对", ""]
+    if loose:
+        lines.append(
+            f"- **锚点需精确化（{len(loose)} 条）**：改成「crate `模块` N 项」或直接点名用例——"
+            "多数形如\"kernel `csv` 多行表头 E3004 单测\"，整组确实在跑，缺的是指名。"
+            f" 实例：{'、'.join(loose[:12])} 等。")
+    else:
+        lines.append(
+            "- **锚点需精确化（0 条）**：2026-11-02 把上一轮的 43 条整组式锚点逐条改写为具体用例名"
+            "（`crate::模块::tests::用例`／`apply_flow::用例`／`tasks::tests::用例`）或"
+            "「crate `模块` N 项」整组口径，本类清零。")
+    if unlocatable:
+        lines.append(
+            f"- **锚点不可机器定位（{len(unlocatable)} 条）**：{'、'.join(unlocatable)}——"
+            f"其中 {s01_count} 条是 S01 的预检／执行阻断面"
+            "（`preflightPlan`／`applyPlan` 的 E2004 前置阻断与零变更），在壳层实测清单里没有对应用例，"
+            f"属**真缺测试**而非文字问题；{s02_count} 条是 S02 的\"各功能隐含成立\"，"
+            "要么补一条显式断言，要么改判状态。")
+    else:
+        lines.append(
+            "- **锚点不可机器定位（0 条）**：2026-11-02 补齐了上一轮 5 条 S01 壳层断言"
+            "（`tasks::tests::preflight_gate_*` 前置阻断 E2004／零变更／逐次重算、UNC 不可达只警告、"
+            "通过后可执行并进隔离目录）与 1 条 S02 隐含面断言，本类清零。")
+    if missing_anchor:
+        lines.append(
+            f"- **锚点缺失（{len(missing_anchor)} 条）**：{'、'.join(missing_anchor)}——"
+            "并发运行中调参「下一批生效」既无 kernel 断言也无 UI，按 ⛔ 待实现处理更准确（改判需走方案 §11.6）。")
+    else:
+        lines.append("- **锚点缺失（0 条）**：映射表 296 行的锚点列均写有可核证据或已注明人工载体。")
+    lines += ["", "## 4. 口径边界（不谎报）", "",
+              "- 「实测通过」**不等于**用例验收通过：模块级／文件级判定的证据是\"整组在跑且绿\"，"
         "该实例的判定点是否被完整覆盖仍以映射表状态列（✅／◐）与缺口列为准。",
         "- 覆盖率不因本台账而改变：本表只增加\"证据是否真跑\"这一层可核性。",
-        "- 34 条待人工执行行全部落在 Windows 实机日／受控环境（载体列已注明），Linux 预跑不代替。",
+        "- 34 条待人工执行行全部落在 Windows 实机日／受控环境（载体列已注明），Linux 预跑不代替。".replace(
+            "34 条", f"{counts.get('待人工执行', 0)} 条"),
         "- 门禁只放行：判定词法合法、与映射表 296 行一一对应、载体与判定一致、清单文件存在，"
         "且**计数不符／名不符／实测失败为 0**（这三类是证据链已断，出现即 CI 红）；"
         "锚点需精确化／不可机器定位／锚点缺失三类**不阻断 CI**，但必须在 §3 逐条列出、不得静默。",
@@ -523,18 +567,24 @@ def main() -> None:
     ]
     ledger_rows = []
     stats: dict[str, int] = {}
+
+    def pick_command(keys: list[str]) -> str:
+        """「实测命令」取解析到的清单键所属载体——锚点写壳层但根 workspace 也跑过的行不再误标。"""
+        crates = {key.split("::", 1)[0] for key in keys}
+        chosen = []
+        if crates - {"shell", "vitest", "playwright"}:
+            chosen.append(commands["kernel/platform/cli/corpus/apply_flow"])
+        for crate, label in (("shell", "shell"), ("vitest", "vitest"), ("playwright", "playwright")):
+            if crate in crates:
+                chosen.append(commands[label])
+        return "＋".join(chosen) if chosen else commands["kernel/platform/cli/corpus/apply_flow"]
+
     for row in load_map_rows():
         fid, fname, _stage, _prio, case_id, kind, _seq, _recipe, _points, _src, status, carrier, anchor, _gap = row
-        verdict, tier, detail = resolve(anchor, carrier, rust, vitest, playwright)
+        keys: list[str] = []
+        verdict, tier, detail = resolve(anchor, carrier, rust, vitest, playwright, keys)
         stats[verdict] = stats.get(verdict, 0) + 1
-        command = (
-            commands["shell"] if "壳层" in carrier else
-            commands["vitest"] if "Vitest" in tier or "vitest" in detail else
-            commands["playwright"] if "playwright" in detail else
-            commands["kernel/platform/cli/corpus/apply_flow"]
-        )
-        if verdict == "待人工执行":
-            command = "—（人工／受控环境）"
+        command = "—（人工／受控环境）" if verdict == "待人工执行" else pick_command(keys)
         ledger_rows.append([
             case_id, fname, kind, status, carrier, verdict, tier, detail,
             command, started, head, inventory.name,

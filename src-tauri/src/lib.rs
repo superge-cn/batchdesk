@@ -27,8 +27,8 @@ use platform::ids::{new_plan_id, new_ulid};
 use platform::journal::FileJournal;
 use platform::oplog::SqliteOperationLog;
 use platform::preflight::{
-    available_space, is_network_path, long_path_supported, path_check, probe_root, probe_unc,
-    same_volume, DEFAULT_DISK_MARGIN_FLOOR_BYTES, DEFAULT_DISK_MARGIN_RATIO,
+    available_space, long_path_supported, path_check, probe_unc, same_volume, unc_share_root,
+    DEFAULT_DISK_MARGIN_FLOOR_BYTES, DEFAULT_DISK_MARGIN_RATIO,
 };
 use platform::protected::{make_absolute, protected_dirs_from_strings};
 use platform::retention::{
@@ -357,14 +357,8 @@ fn applyPlan(
     }
     // S01：执行前预检；磁盘空间不足整任务阻断，零副作用，且不提供跳过入口。
     let report = preflight_stored_plan(&state, &stored).map_err(IpcError::from)?;
-    if report.is_task_blocked() {
-        return Err(IpcError {
-            code: "E2004".to_string(),
-            message: "preflight blocked: insufficient disk space".to_string(),
-            detail: serde_json::to_string(&report).ok(),
-            retryable: true,
-            task_id: None,
-        });
+    if let Some(error) = apply_gate_block(&report) {
+        return Err(error);
     }
     state.plans.lock().unwrap().remove(&plan_id);
     let task_id = state
@@ -544,9 +538,23 @@ fn same_protected_dirs(left: &[ProtectedDir], right: &[ProtectedDir]) -> bool {
 }
 
 /// S01：采集事实并交给 kernel 纯函数判定；不产生任何写操作。
+/// `State` 只负责提供数据目录与当前设置，判定本体在 `preflight_gate`（可单测）。
 fn preflight_stored_plan(
     state: &State<'_, AppState>,
     stored: &StoredPlan,
+) -> Result<PreflightReport, KernelError> {
+    let (_, margin_floor, margin_ratio) = security_settings(state);
+    preflight_gate(stored, &state.paths.quarantine_dir, margin_floor, margin_ratio)
+}
+
+/// 预检闸：每次调用都重新采集磁盘余量与路径事实，**不缓存预览期的结论**
+/// （TC-S01-PRE-04「环境变化重算」）。零写入：本函数只 stat/读空间，
+/// 由 `preflight_gate_writes_nothing` 钉住。
+pub(crate) fn preflight_gate(
+    stored: &StoredPlan,
+    quarantine_dir: &Path,
+    margin_floor_bytes: u64,
+    margin_ratio: f64,
 ) -> Result<PreflightReport, KernelError> {
     let plan = &stored.plan;
     let mut input = PreflightInput {
@@ -556,16 +564,12 @@ fn preflight_stored_plan(
     };
     let long_paths = long_path_supported();
     let mut unc_roots = BTreeSet::new();
-    if is_network_path(&state.paths.quarantine_dir) {
-        unc_roots.insert(
-            probe_root(&state.paths.quarantine_dir)
-                .to_string_lossy()
-                .into_owned(),
-        );
+    // 网络路径要按**共享根**探测（不是 probe_root 的"最近存在目录"，见 unc_share_root 注释）。
+    if let Some(share) = unc_share_root(quarantine_dir) {
+        unc_roots.insert(share.to_string_lossy().into_owned());
     }
 
     if plan.kind == "c09" {
-        let (_, margin_floor, margin_ratio) = security_settings(state);
         let mut required = 0u64;
         for entry in &plan.entries {
             if entry.blocked.is_some() || entry.resolution == Some(PlanResolution::Skip) {
@@ -576,15 +580,15 @@ fn preflight_stored_plan(
                 .as_ref()
                 .map(|expected| expected.size)
                 .unwrap_or(0);
-            if !same_volume(Path::new(&entry.source), &state.paths.quarantine_dir) {
+            if !same_volume(Path::new(&entry.source), quarantine_dir) {
                 required = required.saturating_add(size);
             }
         }
         input.disk = Some(DiskSpaceCheck {
             required_bytes: required,
-            available_bytes: available_space(&state.paths.quarantine_dir)?,
+            available_bytes: available_space(quarantine_dir)?,
             temp_peak_bytes: 0,
-            margin_floor_bytes: margin_floor,
+            margin_floor_bytes,
             margin_ratio,
         });
     }
@@ -598,8 +602,8 @@ fn preflight_stored_plan(
         if let Some(target) = &entry.target {
             input.paths.push(path_check(Path::new(target), long_paths));
         }
-        if is_network_path(source) {
-            unc_roots.insert(probe_root(source).to_string_lossy().into_owned());
+        if let Some(share) = unc_share_root(source) {
+            unc_roots.insert(share.to_string_lossy().into_owned());
         }
     }
     for root in unc_roots {
@@ -608,6 +612,21 @@ fn preflight_stored_plan(
         }
     }
     Ok(run_preflight(&input))
+}
+
+/// 预检结论 → 派发前的阻断错误（TC-S01-PRE-03／RBK-01）：返回 `Some` 时
+/// `applyPlan` 既没出队、也没写 Journal，任务零副作用。
+pub(crate) fn apply_gate_block(report: &PreflightReport) -> Option<IpcError> {
+    if !report.is_task_blocked() {
+        return None;
+    }
+    Some(IpcError {
+        code: "E2004".to_string(),
+        message: "preflight blocked: insufficient disk space".to_string(),
+        detail: serde_json::to_string(report).ok(),
+        retryable: true,
+        task_id: None,
+    })
 }
 
 fn to_value<T: Serialize>(value: &T) -> Result<Value, IpcError> {
