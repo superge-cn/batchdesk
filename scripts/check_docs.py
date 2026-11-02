@@ -290,8 +290,10 @@ def check_table_arity(errors: list[str]) -> None:
     """Markdown 表格的列数必须与分隔行一致：代码段里的裸竖线会串列（渲染时列会整体错位）。
 
     docs/baseline 跳过——基线快照按 MANIFEST 哈希校验，改一字即破链，其缺陷由人类基线文档修。
+    fixtures 纳入：环境台账与结果台账（C-4/env.md、bench/results.md）都是手写表格，与 docs 同风险。
     """
     targets = sorted((ROOT / "docs").rglob("*.md")) + sorted(ROOT.glob("*.md"))
+    targets += [p for p in sorted((ROOT / "fixtures").rglob("*.md")) if "out" not in p.parts]
     for path in targets:
         if "baseline" in path.parts:
             continue

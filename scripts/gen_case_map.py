@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""生成 docs/testing/用例覆盖映射表-v0.2.csv：TC v0.3 §3 的阶段 0 实例逐条 → 执行载体。
+"""生成 docs/testing/用例覆盖映射表-v0.2.csv：TC v0.4 §3 的阶段 0 实例逐条 → 执行载体。
 
 数据来源（均为本会话实测，不凭记忆）：
-- 实例矩阵与参数要点：docs/testing/测试用例库-TC-v0.3.md §3（25 行 × 槽位）、§1.2/§1.3（ID 与配方）、§3.1（296 条对账）
+- 实例矩阵与参数要点：docs/testing/测试用例库-TC-v0.4.md §3（25 行 × 槽位）、§1.2/§1.3（ID 与配方）、§3.1（296 条对账）
 - 功能阶段归属：docs/baseline/功能测试方案与验收标准-T-v1.12.md §2.2 与自检表②
 - 自动化锚点：cargo test 实测的 apply_flow 测试名、kernel/platform 每模块 #[test] 计数、
   crates/kernel/tests/assertions.tsv 语料状态、src-tauri 壳层测试名
