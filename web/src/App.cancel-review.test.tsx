@@ -18,6 +18,9 @@ vi.mock("./lib/ipc", () => ({
   applyPlan: vi.fn(async () => ({ taskId: "task-apply" })),
   undoPlan: vi.fn(async () => ({ taskId: "task-undo" })),
   cancelTask: vi.fn(async () => undefined),
+  // 设计 03 §11：App 挂载会读 UiState（上次目录），生成计划后会写；测试里给空记录即可。
+  getUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
+  setUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   retryTask: vi.fn(async () => ({ taskId: "task-retry" })),
   pauseTask: vi.fn(async () => undefined),
   resumeTask: vi.fn(async () => undefined),

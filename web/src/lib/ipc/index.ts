@@ -7,6 +7,7 @@ import {
   mockGetConfig,
   mockGetStorageInfo,
   mockGetTask,
+  mockGetUiState,
   mockListen,
   mockListTasks,
   mockMeta,
@@ -16,9 +17,11 @@ import {
   mockRecoverTask,
   mockRenamePreview,
   mockResetScope,
+  mockResetUiState,
   mockResume,
   mockRetry,
   mockSetConfig,
+  mockSetUiState,
   mockUndoDryRun,
   mockUndo
 } from "./mock";
@@ -40,7 +43,8 @@ import type {
   TaskDoneEvent,
   TaskHandle,
   TaskPage,
-  TaskStateEvent
+  TaskStateEvent,
+  UiState
 } from "./types";
 
 export const TASK_PROGRESS = "task://progress";
@@ -239,4 +243,26 @@ export function toIpcError(value: unknown): {
     message: value instanceof Error ? value.message : String(value),
     retryable: false
   };
+}
+
+/** 读本机界面状态（设计 03 §11）：只用来恢复上次目录与最近目录。 */
+export async function getUiState(): Promise<UiState> {
+  if (!isTauri()) return mockGetUiState();
+  return invoke<UiState>("getUiState");
+}
+
+/**
+ * 写界面状态（浅合并：只替换 patch 里的顶层分节）。
+ *
+ * 调用方必须读改写——`navigation` 是整个对象替换，不能只传一个字段。
+ */
+export async function setUiState(patch: Record<string, unknown>): Promise<UiState> {
+  if (!isTauri()) return mockSetUiState(patch);
+  return invoke<UiState>("setUiState", { patch });
+}
+
+/** 重置界面状态（只影响布局/最近位置，不动配置与任务，设计 03 §11.3）。 */
+export async function resetUiState(): Promise<UiState> {
+  if (!isTauri()) return mockResetUiState();
+  return invoke<UiState>("resetUiState");
 }

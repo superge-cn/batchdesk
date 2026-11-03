@@ -277,3 +277,23 @@ export interface ConfigDocument {
   updatedAt: string;
   scopes: Partial<Record<ConfigScope, Record<string, unknown>>>;
 }
+
+/** 界面状态里的导航段（设计 03 §11.2）。前端目前只读写这一段。 */
+export interface UiNavigationState {
+  lastSection?: string;
+  lastFeature?: string;
+  lastDirectory?: string;
+  recentDirectories?: string[];
+}
+
+/**
+ * 本机、可重置的界面/工作区上下文（设计 03 §11）。
+ *
+ * 只声明前端真正读写的字段：`window`/`layout`/`tables`/`templatePrefs` 由壳层
+ * 与后续的面板宽度/列宽联动消费，现在透传即可（patch 是浅合并，未触碰的分节原样保留）。
+ */
+export interface UiState {
+  uiStateVersion: number;
+  updatedAt: string;
+  navigation?: UiNavigationState;
+}

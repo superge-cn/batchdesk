@@ -24,7 +24,8 @@ import type {
   TaskHandle,
   TaskPage,
   TaskState,
-  TaskSummary
+  TaskSummary,
+  UiState
 } from "./types";
 
 const PLAN_ID = "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8";
@@ -612,4 +613,32 @@ export function mockResetScope(scope: string): ScopeView {
   scopeDefaults(scope);
   configUser[scope as ConfigScope] = {};
   return scopeView(scope);
+}
+
+// —— UiState（设计 03 §11）：浏览器假数据里只保留导航段 ——
+let uiState: UiState = { uiStateVersion: 1, updatedAt: "" };
+
+export function mockGetUiState(): UiState {
+  return {
+    uiStateVersion: uiState.uiStateVersion,
+    updatedAt: uiState.updatedAt,
+    navigation: uiState.navigation ? { ...uiState.navigation } : undefined
+  };
+}
+
+export function mockSetUiState(patch: Record<string, unknown>): UiState {
+  // 与壳层 `UiState::apply_patch` 同口径：这两个字段由壳层管，调用方不得写入。
+  if ("uiStateVersion" in patch || "updatedAt" in patch) {
+    fail("E1002", "uiStateVersion/updatedAt are managed by the shell");
+  }
+  const next = { ...uiState } as UiState & Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch)) next[key] = value;
+  next.updatedAt = new Date().toISOString();
+  uiState = next as UiState;
+  return mockGetUiState();
+}
+
+export function mockResetUiState(): UiState {
+  uiState = { uiStateVersion: 1, updatedAt: "" };
+  return mockGetUiState();
 }

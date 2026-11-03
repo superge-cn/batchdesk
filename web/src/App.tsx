@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -28,6 +28,7 @@ import {
   getStorageInfo,
   getTask,
   isTauri,
+  getUiState,
   listTasks,
   listenTaskDone,
   listenTaskProgress,
@@ -38,6 +39,7 @@ import {
   recoverTask,
   resumeTask,
   retryTask,
+  setUiState,
   toIpcError,
   undoPlan
 } from "./lib/ipc";
@@ -49,6 +51,7 @@ import { phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
 import { SettingsPage } from "./SettingsPage";
 import { I18nProvider, useI18n, type MessageKey } from "./i18n";
+import { preferredDirectory, rememberDirectory } from "./lib/uiState";
 import type {
   ApplyReport,
   CleanupOutcome,
@@ -58,6 +61,7 @@ import type {
   PlanDocument,
   PreflightReport,
   ProgressPhase,
+  UiNavigationState,
   RecoveryAction,
   StorageInfo,
   TaskState,
@@ -289,10 +293,33 @@ function AppShell() {
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
   const [activeView, setActiveView] = useState<View>("c09");
+  // 设计 03 §11.2：最近目录只用于"预填 + 候选"，不参与任何业务判定。
+  const [recentDirs, setRecentDirs] = useState<string[]>([]);
+  const navigationRef = useRef<UiNavigationState>({});
 
   useEffect(() => {
     getStorageInfo().then(setStorage).catch((value) => setError(toIpcError(value)));
     getIpcMeta().then(setMeta).catch(() => undefined);
+  }, []);
+
+  // 上次用的目录：读 UiState 后预填输入框（设计 03 §11.2/§11.3）。读失败按"没有记录"处理，
+  // 不打扰用户——UiState 是可丢的本机状态，丢了只回默认。
+  useEffect(() => {
+    let disposed = false;
+    getUiState()
+      .then((state) => {
+        if (disposed) return;
+        const navigation = state.navigation ?? {};
+        navigationRef.current = navigation;
+        setRecentDirs(navigation.recentDirectories ?? []);
+        const last = preferredDirectory(navigation);
+        // 只填空输入框：用户已经在敲的话不覆盖。
+        if (last) setRoot((current) => (current.trim() ? current : last));
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -442,6 +469,18 @@ function AppShell() {
   const undoFailures =
     undoTask?.report?.entries.filter((entry) => entry.status === "failed").length ?? 0;
 
+  /** 记住这次用的目录；写失败只影响"下次预填"，不打扰用户（设计 03 §11.1）。 */
+  const rememberRoot = useCallback(async (directory: string) => {
+    const navigation = rememberDirectory(navigationRef.current, directory);
+    navigationRef.current = navigation;
+    setRecentDirs(navigation.recentDirectories ?? []);
+    try {
+      await setUiState({ navigation });
+    } catch {
+      // 刻意静默：UiState 可丢，且此刻用户关心的是预览结果而不是"记住目录"是否成功。
+    }
+  }, []);
+
   async function onPlan() {
     if (!root.trim()) {
       // 表单还差一步：用提示条而不是错误横幅——它没有码位，也不该占用错误码空间。
@@ -476,6 +515,7 @@ function AppShell() {
       });
       setPlan(next);
       setPlannedSnapshot(planSignature);
+      void rememberRoot(root.trim());
       setNotice(
         t("c09.notice.planDone", {
           count: next.entries.length,
@@ -902,7 +942,15 @@ function AppShell() {
                         onChange={(event) => setRoot(event.target.value)}
                         placeholder={t("c09.root.placeholder")}
                         spellCheck={false}
+                        list={recentDirs.length > 0 ? "c09-recent-dirs" : undefined}
                       />
+                      {recentDirs.length > 0 && (
+                        <datalist id="c09-recent-dirs">
+                          {recentDirs.map((directory) => (
+                            <option key={directory} value={directory} />
+                          ))}
+                        </datalist>
+                      )}
                     </div>
                     <div className="field">
                       <label htmlFor="keep">{t("c09.keep.label")}</label>
