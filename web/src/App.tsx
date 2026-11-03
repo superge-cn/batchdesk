@@ -42,6 +42,9 @@ import {
 } from "./lib/ipc";
 import { FeaturePages } from "./FeaturePages";
 import { DangerConfirm } from "./DangerConfirm";
+import { VirtualList } from "./VirtualList";
+import { phaseLabel, stateBadge } from "./labels";
+import { TaskHistory } from "./TaskHistory";
 import type {
   ApplyReport,
   CleanupOutcome,
@@ -80,41 +83,12 @@ function isActive(task: TaskView | null): boolean {
   return Boolean(task && !TERMINAL_STATES.includes(task.state));
 }
 
-function phaseLabel(phase: ProgressPhase): string {
-  switch (phase) {
-    case "queued":
-      return "排队中";
-    case "scanning":
-      return "扫描中";
-    case "planning":
-      return "生成计划";
-    case "executing":
-      return "执行中";
-    case "journaling":
-      return "回滚 / 写 Journal";
-    case "finalizing":
-      return "收尾";
-  }
-}
-
 function statusBadge(plan: PlanDocument, entryId: string) {
   const entry = plan.entries.find((item) => item.entryId === entryId);
   if (entry?.blocked) {
     return <span className="badge badge-danger">受阻 {entry.blocked.code}</span>;
   }
   return <span className="badge">待清理</span>;
-}
-
-function stateBadge(state: TaskState) {
-  if (state === "completed") return <span className="badge badge-safe">已完成</span>;
-  if (state === "partial-failed") return <span className="badge badge-warn">部分失败</span>;
-  if (state === "cancelled") return <span className="badge badge-warn">已取消</span>;
-  if (state === "failed") return <span className="badge badge-danger">失败</span>;
-  if (state === "paused") return <span className="badge badge-warn">已暂停</span>;
-  if (state === "cancelling") return <span className="badge badge-warn">取消中</span>;
-  if (state === "interrupted") return <span className="badge badge-warn">已中断</span>;
-  if (state === "running") return <span className="badge">执行中</span>;
-  return <span className="badge">排队中</span>;
 }
 
 function TaskPanel({
@@ -219,7 +193,7 @@ function App() {
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
   const [activeView, setActiveView] = useState<
-    "c09" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f06" | "f07" | "f08" | "f09" | "f10" | "f11" | "f12" | "c04" | "c07" | "c08" | "c10" | "c11" | "c12" | "c13" | "c14"
+    "c09" | "tasks" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f06" | "f07" | "f08" | "f09" | "f10" | "f11" | "f12" | "c04" | "c07" | "c08" | "c10" | "c11" | "c12" | "c13" | "c14"
   >("c09");
 
   useEffect(() => {
@@ -913,11 +887,15 @@ function App() {
                 </span>
                 <span className="soon">C03</span>
               </button>
-              <button className="nav-item" type="button" disabled>
+              <button
+                className={`nav-item${activeView === "tasks" ? " active" : ""}`}
+                type="button"
+                onClick={() => setActiveView("tasks")}
+              >
                 <span>
                   <History size={16} /> 任务与撤销
                 </span>
-                <span className="soon">后续</span>
+                <span className="soon">队列</span>
               </button>
               <button className="nav-item" type="button" disabled>
                 <span>
@@ -1152,20 +1130,24 @@ function App() {
                       </div>
 
                       <div className="table">
-                        <div className="table-scroll">
-                          <div className="row row-head">
-                            <span>待清理文件</span>
-                            <span>保留依据 / 原因</span>
-                            <span>状态</span>
-                          </div>
-                          {plan.entries.map((entry) => (
-                            <div className={`row${entry.blocked ? " blocked" : ""}`} key={entry.entryId}>
+                        <div className="row row-head">
+                          <span>待清理文件</span>
+                          <span>保留依据 / 原因</span>
+                          <span>状态</span>
+                        </div>
+                        {/* 方案 6.2：大列表只挂窗口内的行；去重的计划可能有上万条。 */}
+                        <VirtualList
+                          label="待清理文件"
+                          items={plan.entries}
+                          getKey={(entry) => entry.entryId}
+                          renderRow={(entry) => (
+                            <div className={`row${entry.blocked ? " blocked" : ""}`}>
                               <span className="path" title={entry.source}>{entry.source}</span>
                               <span className="reason" title={entry.reason}>{entry.reason}</span>
                               <span>{statusBadge(plan, entry.entryId)}</span>
                             </div>
-                          ))}
-                        </div>
+                          )}
+                        />
                       </div>
 
                       {plan.warnings.length > 0 && (
@@ -1359,16 +1341,38 @@ function App() {
                   )}
 
                   {applyTask?.report && (
-                    <div className="result-list">
-                      {applyTask.report.entries.map((entry) => (
-                        <div className="result-row" key={entry.entryId}>
-                          <span className="path">{entry.entryId}</span>
-                          <span className={`badge ${entry.status === "ok" ? "badge-safe" : entry.status === "failed" ? "badge-danger" : "badge-warn"}`}>
-                            {entry.status}
-                          </span>
-                          {entry.error && <span className="path">{entry.error.code} · {entry.error.message}</span>}
-                        </div>
-                      ))}
+                    <div className="table">
+                      <div className="row row-head">
+                        <span>条目</span>
+                        <span>错误</span>
+                        <span>结果</span>
+                      </div>
+                      <VirtualList
+                        label="执行结果条目"
+                        items={applyTask.report.entries}
+                        getKey={(entry) => entry.entryId}
+                        renderRow={(entry) => (
+                          <div className="row">
+                            <span className="path" title={entry.entryId}>{entry.entryId}</span>
+                            <span className="reason" title={entry.error?.message}>
+                              {entry.error ? `${entry.error.code} · ${entry.error.message}` : "—"}
+                            </span>
+                            <span>
+                              <span
+                                className={`badge ${
+                                  entry.status === "ok"
+                                    ? "badge-safe"
+                                    : entry.status === "failed"
+                                      ? "badge-danger"
+                                      : "badge-warn"
+                                }`}
+                              >
+                                {entry.status}
+                              </span>
+                            </span>
+                          </div>
+                        )}
+                      />
                     </div>
                   )}
 
@@ -1410,6 +1414,8 @@ function App() {
               </div>
             </div>
             </div>
+            ) : activeView === "tasks" ? (
+              <TaskHistory live={taskViews} onBack={() => setActiveView("c09")} />
             ) : (
               <FeaturePages view={activeView} onBack={() => setActiveView("c09")} />
             )}

@@ -130,6 +130,8 @@ export interface TaskSummary {
   phase: ProgressPhase;
   done: number;
   total: number;
+  /** 计划 ID：任务列表据此走 undoPlan（撤销按 plan 走共享 Journal）。旧快照可能没有。 */
+  planId?: string;
   startedAt?: string;
   finishedAt?: string;
   message?: string;

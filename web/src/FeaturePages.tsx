@@ -16,6 +16,7 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { DangerConfirm } from "./DangerConfirm";
+import { VirtualList } from "./VirtualList";
 import type {
   IpcError,
   PlanDocument,
@@ -788,7 +789,8 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     placeholder: string,
     wide = false
   ) => (
-    <div className={`field${wide ? " wide" : ""}`}>
+    // key 由调用方在列表里透传（字段网格按 spec 逐项渲染，缺 key 会触发 React 警告）。
+    <div className={`field${wide ? " wide" : ""}`} key={name}>
       <label htmlFor={`${view}-${name}`}>{label}</label>
       <input
         id={`${view}-${name}`}
@@ -908,21 +910,25 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 <span className="plan-id" title={plan.planId}>{plan.planId}</span>
               </div>
               <div className="table">
-                <div className="table-scroll">
-                  <div className="row row-head">
-                    <span>源</span>
-                    <span>目标 / 说明</span>
-                  </div>
-                  {plan.entries.map((entry) => (
-                    <div className="row" key={entry.entryId}>
+                <div className="row row-head">
+                  <span>源</span>
+                  <span>目标 / 说明</span>
+                </div>
+                {/* 方案 6.2：按目录处理的计划动辄上千条，只挂窗口内的行。 */}
+                <VirtualList
+                  label="计划条目"
+                  items={plan.entries}
+                  getKey={(entry) => entry.entryId}
+                  renderRow={(entry) => (
+                    <div className="row">
                       <span className="path" title={entry.source}>{entry.source}</span>
                       <span className="path" title={entry.target ?? entry.reason}>
                         {entry.target ?? entry.reason}
                         {entry.blocked ? ` · ${entry.blocked.code}` : ""}
                       </span>
                     </div>
-                  ))}
-                </div>
+                  )}
+                />
               </div>
               {/* 集中报告：无效行/重复行/父路径为文件等都在计划级 warnings 里，功能页必须逐项点名，
                   只有计数会让用户看不到"哪几行被排除、为什么"。 */}
@@ -1036,12 +1042,17 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
               <div className="banner banner-info" role="status">
                 <div>
                   <strong>回滚预演</strong> · 冲突 {dryRun.conflictCount} · 缺失 {dryRun.missingCount}
-                  {dryRun.entries.map((entry) => (
-                    <div className="muted" key={entry.entryId}>
-                      {entry.entryId} · {entry.status}
-                      {entry.detail ? ` · ${entry.detail}` : ""}
-                    </div>
-                  ))}
+                  <VirtualList
+                    label="回滚预演条目"
+                    items={dryRun.entries}
+                    getKey={(entry) => entry.entryId}
+                    renderRow={(entry) => (
+                      <div className="muted">
+                        {entry.entryId} · {entry.status}
+                        {entry.detail ? ` · ${entry.detail}` : ""}
+                      </div>
+                    )}
+                  />
                 </div>
               </div>
             )}

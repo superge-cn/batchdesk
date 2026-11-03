@@ -187,6 +187,8 @@ interface MockTask {
   startedAt?: string;
   finishedAt?: string;
   entries: ApplyEntryReport[];
+  /** 任务对应的计划：任务列表据此提供「撤销」。 */
+  planId?: string;
   cursor: number;
   cancelled: boolean;
   paused: boolean;
@@ -224,6 +226,7 @@ function summary(task: MockTask): TaskSummary {
     phase: task.phase,
     done: task.done,
     total: task.total,
+    planId: task.planId,
     startedAt: task.startedAt,
     finishedAt: task.finishedAt,
     message: task.message
@@ -308,11 +311,13 @@ function launch(task: MockTask) {
 
 function createTask(
   kind: "apply" | "undo",
-  entries: ApplyEntryReport[]
+  entries: ApplyEntryReport[],
+  planId?: string
 ): MockTask {
   const task: MockTask = {
     taskId: nextTaskId(kind),
     kind,
+    planId,
     state: "queued",
     phase: "queued",
     done: 0,
@@ -359,7 +364,7 @@ export async function mockApply(planId: string): Promise<TaskHandle> {
       retryable: true
     };
   }
-  const task = createTask("apply", entries);
+  const task = createTask("apply", entries, planId);
   return { taskId: task.taskId };
 }
 
@@ -368,7 +373,7 @@ export async function mockUndo(planId: string): Promise<TaskHandle> {
   const entries: ApplyEntryReport[] = lastPlan.entries
     .filter((entry) => !entry.blocked)
     .map((entry) => ({ entryId: entry.entryId, status: "ok" }));
-  const task = createTask("undo", entries);
+  const task = createTask("undo", entries, planId);
   return { taskId: task.taskId };
 }
 
@@ -413,7 +418,7 @@ export function mockRetry(taskId: string): TaskHandle {
     entryId: entry.entryId,
     status: "ok"
   }));
-  const retry = createTask("apply", entries);
+  const retry = createTask("apply", entries, task.planId);
   retry.message = `重试任务 ${taskId}`;
   return { taskId: retry.taskId };
 }

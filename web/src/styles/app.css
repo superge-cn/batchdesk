@@ -511,6 +511,22 @@ button {
   scrollbar-gutter: stable;
 }
 
+/* 虚拟滚动（方案 6.2）：DOM 里只保留窗口内的行。
+   占位层用「条数 × 行高」撑出真实滚动范围，窗口层整体平移，行高由组件实测后写死。 */
+.vlist-spacer {
+  position: relative;
+}
+
+.vlist-window {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+}
+
+.vlist-item {
+  overflow: hidden;
+}
+
 .row {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(0, 1.2fr) 84px;
@@ -540,6 +556,18 @@ button {
 
 .row.blocked {
   background: var(--status-danger-surface);
+}
+
+/* 任务列表：任务 / 进度 / 状态 / 操作 四列。
+   操作列不换行——行高在虚拟列表里是统一的，换行会让后续行错位。 */
+.row-tasks {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.7fr) auto minmax(0, 1.6fr);
+}
+
+.task-row-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
 }
 
 .path {

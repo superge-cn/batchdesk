@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import App from "./App";
@@ -72,6 +72,23 @@ describe("功能视图导航可达", () => {
     const nav = screen.getByRole("navigation", { name: "功能导航" });
     await userEvent.click(navButton(nav, "CSV 合并", "F06"));
     expect(within(main).getByText("CSV 合并（F06）")).toBeVisible();
+    await userEvent.click(within(main).getByRole("button", { name: /返回 C09/ }));
+    expect(main.textContent).toContain("重复文件查找");
+  });
+
+  it("「任务与撤销」是能点开的真实视图，不是 disabled 占位", async () => {
+    // 与上面同一类回归：侧栏项存在 ≠ 视图被渲染。
+    render(<App />);
+    const nav = screen.getByRole("navigation", { name: "功能导航" });
+    const main = screen.getByRole("main");
+    const entry = within(nav).getByRole("button", { name: /任务与撤销/ });
+    expect(entry).toBeEnabled();
+
+    await userEvent.click(entry);
+    expect(within(main).getByRole("heading", { name: "任务与撤销" })).toBeVisible();
+    // 空队列也要给出下一步指引，而不是留一块空白
+    await waitFor(() => expect(main.textContent).toContain("还没有任务记录"));
+
     await userEvent.click(within(main).getByRole("button", { name: /返回 C09/ }));
     expect(main.textContent).toContain("重复文件查找");
   });
