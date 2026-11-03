@@ -19,6 +19,7 @@ import {
   Undo2,
   X
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   applyPlan,
   cancelTask,
@@ -43,8 +44,10 @@ import {
 import { FeaturePages } from "./FeaturePages";
 import { DangerConfirm } from "./DangerConfirm";
 import { VirtualList } from "./VirtualList";
-import { phaseLabel, stateBadge } from "./labels";
+import { phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
+import { SettingsPage } from "./SettingsPage";
+import { I18nProvider, useI18n, type MessageKey } from "./i18n";
 import type {
   ApplyReport,
   CleanupOutcome,
@@ -59,6 +62,34 @@ import type {
   TaskState,
   TaskSummary
 } from "./lib/ipc/types";
+
+type View =
+  | "c09"
+  | "tasks"
+  | "settings"
+  | "f01"
+  | "f02"
+  | "f03"
+  | "f04"
+  | "c01"
+  | "c02"
+  | "c03"
+  | "f05"
+  | "f06"
+  | "f07"
+  | "f08"
+  | "f09"
+  | "f10"
+  | "f11"
+  | "f12"
+  | "c04"
+  | "c07"
+  | "c08"
+  | "c10"
+  | "c11"
+  | "c12"
+  | "c13"
+  | "c14";
 
 type Busy = "plan" | "cleanup" | null;
 
@@ -79,16 +110,77 @@ const TERMINAL_STATES: TaskState[] = [
   "cancelled"
 ];
 
+/** 侧栏导航：可见名走资源包，右侧短码是功能标识（不翻译）。 */
+const NAV_ITEMS: Array<{ id: View; label: MessageKey; tag: string; Icon: LucideIcon }> = [
+  { id: "c09", label: "nav.c09", tag: "C09", Icon: FolderSearch },
+  { id: "f05", label: "nav.f05", tag: "F05", Icon: Files },
+  { id: "f06", label: "nav.f06", tag: "F06", Icon: Files },
+  { id: "f07", label: "nav.f07", tag: "F07", Icon: Files },
+  { id: "f08", label: "nav.f08", tag: "F08", Icon: Files },
+  { id: "f09", label: "nav.f09", tag: "F09", Icon: Files },
+  { id: "f10", label: "nav.f10", tag: "F10", Icon: Files },
+  { id: "c04", label: "nav.c04", tag: "C04", Icon: Files },
+  { id: "c11", label: "nav.c11", tag: "C11", Icon: Files },
+  { id: "c12", label: "nav.c12", tag: "C12", Icon: Files },
+  { id: "c13", label: "nav.c13", tag: "C13", Icon: Files },
+  { id: "c14", label: "nav.c14", tag: "C14", Icon: Files },
+  { id: "c07", label: "nav.c07", tag: "C07", Icon: Files },
+  { id: "c08", label: "nav.c08", tag: "C08", Icon: Files },
+  { id: "c10", label: "nav.c10", tag: "C10", Icon: Files },
+  { id: "f11", label: "nav.f11", tag: "F11", Icon: Files },
+  { id: "f12", label: "nav.f12", tag: "F12", Icon: Files },
+  { id: "f01", label: "nav.f01", tag: "F01", Icon: Files },
+  { id: "f02", label: "nav.f02", tag: "F02", Icon: Files },
+  { id: "f03", label: "nav.f03", tag: "F03", Icon: Files },
+  { id: "f04", label: "nav.f04", tag: "F04", Icon: Files },
+  { id: "c01", label: "nav.c01", tag: "C01", Icon: Files },
+  { id: "c02", label: "nav.c02", tag: "C02", Icon: Files },
+  { id: "c03", label: "nav.c03", tag: "C03", Icon: Files },
+  { id: "tasks", label: "nav.tasks", tag: "QUEUE", Icon: History },
+  { id: "settings", label: "nav.settings", tag: "SET", Icon: Settings }
+];
+
+/** 顶栏标题：C09 用页面自己的两行说明，其余视图用导航名（卡片内另有区块标题）。 */
+const VIEW_TITLES: Partial<Record<View, MessageKey>> = {
+  tasks: "nav.tasks",
+  settings: "nav.settings",
+  f01: "nav.f01",
+  f02: "nav.f02",
+  f03: "nav.f03",
+  f04: "nav.f04",
+  c01: "nav.c01",
+  c02: "nav.c02",
+  c03: "nav.c03",
+  f05: "nav.f05",
+  f06: "nav.f06",
+  f07: "nav.f07",
+  f08: "nav.f08",
+  f09: "nav.f09",
+  f10: "nav.f10",
+  c04: "nav.c04",
+  c07: "nav.c07",
+  c08: "nav.c08",
+  c10: "nav.c10",
+  c11: "nav.c11",
+  c12: "nav.c12",
+  c13: "nav.c13",
+  c14: "nav.c14",
+  f11: "nav.f11",
+  f12: "nav.f12"
+};
+
 function isActive(task: TaskView | null): boolean {
   return Boolean(task && !TERMINAL_STATES.includes(task.state));
 }
 
-function statusBadge(plan: PlanDocument, entryId: string) {
+function statusBadge(t: Translate, plan: PlanDocument, entryId: string) {
   const entry = plan.entries.find((item) => item.entryId === entryId);
   if (entry?.blocked) {
-    return <span className="badge badge-danger">受阻 {entry.blocked.code}</span>;
+    return (
+      <span className="badge badge-danger">{t("c09.badge.blocked", { code: entry.blocked.code })}</span>
+    );
   }
-  return <span className="badge">待清理</span>;
+  return <span className="badge">{t("c09.badge.pending")}</span>;
 }
 
 function TaskPanel({
@@ -105,6 +197,7 @@ function TaskPanel({
   onResume: (taskId: string) => void;
 }) {
   const active = isActive(task);
+  const { t } = useI18n();
   const percent =
     task.total > 0
       ? Math.min(100, Math.round((task.done / task.total) * 100))
@@ -114,8 +207,10 @@ function TaskPanel({
   return (
     <div className="task-panel">
       <div className="task-head">
-        <span className="task-role">{role === "apply" ? "执行任务" : "撤销任务"}</span>
-        {stateBadge(task.state)}
+        <span className="task-role">
+          {role === "apply" ? t("task.role.apply") : t("task.role.undo")}
+        </span>
+        {stateBadge(t, task.state)}
         <span className="task-id" title={task.taskId}>{task.taskId}</span>
       </div>
       <div
@@ -124,7 +219,7 @@ function TaskPanel({
         aria-valuemin={0}
         aria-valuemax={task.total}
         aria-valuenow={task.done}
-        aria-label={`${role} 进度`}
+        aria-label={role === "apply" ? t("task.progress.apply") : t("task.progress.undo")}
       >
         <div
           className={`progress-fill${task.state === "failed" ? " danger" : ""}`}
@@ -132,14 +227,14 @@ function TaskPanel({
         />
       </div>
       <div className="hint">
-        {phaseLabel(task.phase)} · {task.done}/{task.total}
+        {phaseLabel(t, task.phase)} · {task.done}/{task.total}
         {task.message ? ` · ${task.message}` : ""}
       </div>
       {active && (
         <div className="button-row task-actions">
           {task.state === "paused" ? (
             <button className="button button-secondary" type="button" onClick={() => onResume(task.taskId)}>
-              <Play size={14} /> 继续
+              <Play size={14} /> {t("common.resume")}
             </button>
           ) : (
             <button
@@ -148,11 +243,11 @@ function TaskPanel({
               onClick={() => onPause(task.taskId)}
               disabled={task.state !== "running" && task.state !== "queued"}
             >
-              <Pause size={14} /> 暂停
+              <Pause size={14} /> {t("common.pause")}
             </button>
           )}
           <button className="button button-danger" type="button" onClick={() => onCancel(task.taskId)}>
-            <X size={14} /> 取消任务
+            <X size={14} /> {t("common.cancelTask")}
           </button>
         </div>
       )}
@@ -160,8 +255,8 @@ function TaskPanel({
   );
 }
 
-function App() {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+function AppShell() {
+  const { t, resolvedTheme, setTheme } = useI18n();
   const [root, setRoot] = useState("");
   const [keep, setKeep] = useState<KeepPolicy>("earliest");
   const [quickWindow, setQuickWindow] = useState("");
@@ -192,13 +287,7 @@ function App() {
   const [meta, setMeta] = useState<IpcMeta | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
-  const [activeView, setActiveView] = useState<
-    "c09" | "tasks" | "f01" | "f02" | "f03" | "f04" | "c01" | "c02" | "c03" | "f05" | "f06" | "f07" | "f08" | "f09" | "f10" | "f11" | "f12" | "c04" | "c07" | "c08" | "c10" | "c11" | "c12" | "c13" | "c14"
-  >("c09");
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+  const [activeView, setActiveView] = useState<View>("c09");
 
   useEffect(() => {
     getStorageInfo().then(setStorage).catch((value) => setError(toIpcError(value)));
@@ -354,12 +443,12 @@ function App() {
 
   async function onPlan() {
     if (!root.trim()) {
-      setError({ code: "E1001", message: "请填写要扫描的目录", retryable: false });
+      setError({ code: "E1001", message: t("c09.error.rootRequired"), retryable: false });
       return;
     }
     const quick = quickWindow.trim();
     if (quick && (!Number.isInteger(Number(quick)) || Number(quick) <= 0)) {
-      setError({ code: "E1002", message: "快速哈希窗口必须是正整数（留空表示跳过）", retryable: false });
+      setError({ code: "E1002", message: t("c09.error.quickWindow"), retryable: false });
       return;
     }
     setBusy("plan");
@@ -385,7 +474,12 @@ function App() {
       });
       setPlan(next);
       setPlannedSnapshot(planSignature);
-      setNotice(`计划已生成：${next.entries.length} 条待清理，${next.stats.blocked} 条受阻。请核对预览后执行。`);
+      setNotice(
+        t("c09.notice.planDone", {
+          count: next.entries.length,
+          blocked: next.stats.blocked
+        })
+      );
       try {
         setPreflight(await preflightPlan(next.planId));
       } catch (value) {
@@ -410,8 +504,8 @@ function App() {
       if (plannedSnapshot !== null && latestSignatureRef.current !== plannedSnapshot) {
         setError({
           code: "E1002",
-          message: "参数已改动，旧计划预览失效：请重新生成计划再执行",
-          detail: "预检期间参数发生变化，未派发任何写操作（零副作用）",
+          message: t("c09.error.stale"),
+          detail: t("c09.error.staleDetail"),
           retryable: false
         });
         return;
@@ -422,7 +516,7 @@ function App() {
         );
         setError({
           code: blocking?.code ?? "E2004",
-          message: "预检阻断：磁盘空间不足，任务未执行（零副作用）",
+          message: t("c09.error.diskBlocked"),
           detail: blocking?.message,
           retryable: true
         });
@@ -448,7 +542,7 @@ function App() {
             }
       );
       setConfirmed(false);
-      setNotice("任务已加入队列；执行进度与结果通过 task:// 事件推送。");
+      setNotice(t("c09.notice.queued"));
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -478,9 +572,7 @@ function App() {
               }
             }
       );
-      setNotice(
-        `已开始撤销取消前完成的 ${pending.completed} 项；回滚进度通过 task:// 事件推送。`
-      );
+      setNotice(t("c09.notice.cancelUndo", { count: pending.completed }));
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -524,7 +616,7 @@ function App() {
           })
         )
         .catch(() => undefined);
-      setNotice("撤销任务已加入队列；回滚进度通过 task:// 事件推送。");
+      setNotice(t("c09.notice.undoQueued"));
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -551,7 +643,7 @@ function App() {
               }
             }
       );
-      setNotice("重试任务已加入队列；只重跑失败条目，已完成条目按 Journal 幂等跳过。");
+      setNotice(t("c09.notice.retryQueued"));
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -605,12 +697,12 @@ function App() {
                 }
               }
         );
-        setNotice("未完成任务已续跑；已完成条目会按 Journal 幂等跳过。");
+        setNotice(t("c09.notice.recoverResume"));
       } else if (action === "rollback") {
         setUndoTaskId(handle.taskId);
-        setNotice("已按 Journal 回滚未完成任务，回滚任务已加入队列。");
+        setNotice(t("c09.notice.recoverRollback"));
       } else {
-        setNotice("已放弃恢复；已执行条目仍可通过 Journal 撤销。");
+        setNotice(t("c09.notice.recoverDiscard"));
       }
     } catch (value) {
       setError(toIpcError(value));
@@ -626,8 +718,11 @@ function App() {
       setCleanupOutcome(outcome);
       setNotice(
         outcome.dryRun
-          ? "清理演练完成，未删除任何文件。勾选永久删除后才会执行。"
-          : `清理完成：移除 ${outcome.removedEntries} 条 Journal 记录、${outcome.removedFiles} 个隔离文件。`
+          ? t("c09.notice.cleanupDry")
+          : t("c09.notice.cleanupDone", {
+              entries: outcome.removedEntries,
+              files: outcome.removedFiles
+            })
       );
     } catch (value) {
       setError(toIpcError(value));
@@ -644,265 +739,26 @@ function App() {
             <div className="brand-mark">B</div>
             <div>
               <div className="brand-name">BatchDesk</div>
-              <div className="brand-sub">本地批量文件工作台</div>
+              <div className="brand-sub">{t("app.brand.sub")}</div>
             </div>
           </div>
 
           <div>
-            <div className="nav-label">工作区</div>
-            <nav className="nav" aria-label="功能导航">
-              <button className="nav-item active" type="button">
-                <span>
-                  <FolderSearch size={16} /> 重复文件查找
-                </span>
-                <span className="soon">C09</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f05" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f05")}
-              >
-                <span>
-                  <Files size={16} /> CSV 分割
-                </span>
-                <span className="soon">F05</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f06" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f06")}
-              >
-                <span>
-                  <Files size={16} /> CSV 合并
-                </span>
-                <span className="soon">F06</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f07" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f07")}
-              >
-                <span>
-                  <Files size={16} /> CSV 抽取列
-                </span>
-                <span className="soon">F07</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f08" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f08")}
-              >
-                <span>
-                  <Files size={16} /> CSV 前后 N 行
-                </span>
-                <span className="soon">F08</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f09" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f09")}
-              >
-                <span>
-                  <Files size={16} /> CSV 行区间
-                </span>
-                <span className="soon">F09</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f10" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f10")}
-              >
-                <span>
-                  <Files size={16} /> 目录清单
-                </span>
-                <span className="soon">F10</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c04" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c04")}
-              >
-                <span>
-                  <Files size={16} /> 名称查找替换
-                </span>
-                <span className="soon">C04</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c11" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c11")}
-              >
-                <span>
-                  <Files size={16} /> CSV 去重
-                </span>
-                <span className="soon">C11</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c12" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c12")}
-              >
-                <span>
-                  <Files size={16} /> CSV 过滤
-                </span>
-                <span className="soon">C12</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c13" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c13")}
-              >
-                <span>
-                  <Files size={16} /> CSV 排序
-                </span>
-                <span className="soon">C13</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c14" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c14")}
-              >
-                <span>
-                  <Files size={16} /> CSV 列拆分/合并
-                </span>
-                <span className="soon">C14</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c07" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c07")}
-              >
-                <span>
-                  <Files size={16} /> 清单移动/复制
-                </span>
-                <span className="soon">C07</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c08" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c08")}
-              >
-                <span>
-                  <Files size={16} /> 按规则归档
-                </span>
-                <span className="soon">C08</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c10" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c10")}
-              >
-                <span>
-                  <Files size={16} /> ZIP 解压/压缩
-                </span>
-                <span className="soon">C10</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f11" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f11")}
-              >
-                <span>
-                  <Files size={16} /> 清单建档
-                </span>
-                <span className="soon">F11</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f12" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f12")}
-              >
-                <span>
-                  <Files size={16} /> 批量改名
-                </span>
-                <span className="soon">F12</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f01" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f01")}
-              >
-                <span>
-                  <Files size={16} /> TXT 按字节分割
-                </span>
-                <span className="soon">F01</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f02" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f02")}
-              >
-                <span>
-                  <Files size={16} /> TXT 按行数分割
-                </span>
-                <span className="soon">F02</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f03" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f03")}
-              >
-                <span>
-                  <Files size={16} /> TXT 按份数分割
-                </span>
-                <span className="soon">F03</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "f04" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("f04")}
-              >
-                <span>
-                  <Files size={16} /> TXT 合并
-                </span>
-                <span className="soon">F04</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c01" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c01")}
-              >
-                <span>
-                  <Files size={16} /> 编码转换
-                </span>
-                <span className="soon">C01</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c02" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c02")}
-              >
-                <span>
-                  <Files size={16} /> 换行转换
-                </span>
-                <span className="soon">C02</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "c03" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("c03")}
-              >
-                <span>
-                  <Files size={16} /> 查找替换
-                </span>
-                <span className="soon">C03</span>
-              </button>
-              <button
-                className={`nav-item${activeView === "tasks" ? " active" : ""}`}
-                type="button"
-                onClick={() => setActiveView("tasks")}
-              >
-                <span>
-                  <History size={16} /> 任务与撤销
-                </span>
-                <span className="soon">队列</span>
-              </button>
-              <button className="nav-item" type="button" disabled>
-                <span>
-                  <Settings size={16} /> 设置
-                </span>
-                <span className="soon">后续</span>
-              </button>
+            <div className="nav-label">{t("app.nav.workspace")}</div>
+            <nav className="nav" aria-label={t("app.nav.aria")}>
+              {NAV_ITEMS.map(({ id, label, tag, Icon }) => (
+                <button
+                  key={id}
+                  className={`nav-item${activeView === id ? " active" : ""}`}
+                  type="button"
+                  onClick={() => setActiveView(id)}
+                >
+                  <span>
+                    <Icon size={16} /> {t(label)}
+                  </span>
+                  <span className="soon">{tag}</span>
+                </button>
+              ))}
             </nav>
           </div>
 
@@ -910,36 +766,40 @@ function App() {
 
           <div className="storage">
             <div>
-              <ShieldCheck size={14} /> 隔离目录与 Journal
+              <ShieldCheck size={14} /> {t("app.storage.title")}
             </div>
             <div className="storage-path" title={storage?.quarantineDir}>
-              {storage?.quarantineDir ?? "读取中…"}
+              {storage?.quarantineDir ?? t("app.storage.loading")}
             </div>
             <div className="storage-path" title={storage?.journalFile}>
               {storage?.journalFile ?? ""}
             </div>
-            <div>保留期默认 7 天 · 可配 1–30 天</div>
+            <div>{t("app.storage.retention")}</div>
           </div>
         </aside>
 
         <main className="main">
           <header className="topbar">
             <div className="title-group">
-              <div className="eyebrow">C09 · 数据清理</div>
-              <h1 className="title">重复文件查找</h1>
-              <p className="subtitle">先预览、再执行、可回滚、有日志。</p>
+              <div className="eyebrow">
+                {activeView === "c09" ? t("c09.eyebrow") : "BatchDesk"}
+              </div>
+              <h1 className="title">
+                {activeView === "c09" ? t("c09.title") : t(VIEW_TITLES[activeView] ?? "nav.c09")}
+              </h1>
+              {activeView === "c09" && <p className="subtitle">{t("c09.subtitle")}</p>}
             </div>
             <div className="top-actions">
-              {!isTauri() && <span className="mock-banner">浏览器预览 · mock IPC</span>}
+              {!isTauri() && <span className="mock-banner">{t("app.mock")}</span>}
               <span className="badge">P0★ · G1</span>
               <button
                 className="theme-toggle"
                 type="button"
-                onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-                aria-label="切换主题"
+                onClick={() => setTheme(resolvedTheme === "light" ? "dark" : "light")}
+                aria-label={t("app.theme.toggle")}
               >
-                {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
-                {theme === "light" ? "深色" : "浅色"}
+                {resolvedTheme === "light" ? <Moon size={14} /> : <Sun size={14} />}
+                {resolvedTheme === "light" ? t("app.theme.toDark") : t("app.theme.toLight")}
               </button>
             </div>
           </header>
@@ -954,7 +814,7 @@ function App() {
                   {error.detail && <div className="muted">{error.detail}</div>}
                 </div>
                 <button className="button button-ghost" type="button" onClick={() => setError(null)}>
-                  关闭
+                  {t("common.close")}
                 </button>
               </div>
             )}
@@ -966,9 +826,9 @@ function App() {
             {recoverableTasks.length > 0 && (
               <div className="banner banner-info" role="status">
                 <div>
-                  <strong>检测到未完成任务</strong>
+                  <strong>{t("c09.recover.title")}</strong>
                   <div className="muted">
-                    应用上次异常退出。请选择续跑、回滚或放弃；系统不会自动执行。
+                    {t("c09.recover.body")}
                   </div>
                   {recoverableTasks.map((task) => (
                     <div className="button-row" key={task.taskId}>
@@ -978,21 +838,21 @@ function App() {
                         type="button"
                         onClick={() => onRecover(task.taskId, "resume")}
                       >
-                        <Play size={14} /> 续跑
+                        <Play size={14} /> {t("common.resumeRun")}
                       </button>
                       <button
                         className="button button-secondary"
                         type="button"
                         onClick={() => onRecover(task.taskId, "rollback")}
                       >
-                        <Undo2 size={14} /> 回滚
+                        <Undo2 size={14} /> {t("common.rollback")}
                       </button>
                       <button
                         className="button button-ghost"
                         type="button"
                         onClick={() => onRecover(task.taskId, "discard")}
                       >
-                        放弃
+                        {t("common.discard")}
                       </button>
                     </div>
                   ))}
@@ -1005,16 +865,23 @@ function App() {
                 role="status"
               >
                 <div>
-                  预检 · 通过 {preflight.pass} · 警告 {preflight.warn} · 阻断 {preflight.block}
+                  {t("c09.preflight.summary", {
+                    pass: preflight.pass,
+                    warn: preflight.warn,
+                    block: preflight.block
+                  })}
                   {preflight.taskBlocked && (
-                    <div className="muted">磁盘空间不足：执行已阻断，任务零副作用。</div>
+                    <div className="muted">{t("c09.preflight.blocked")}</div>
                   )}
                   {preflight.items
                     .filter((item) => item.level !== "pass")
                     .slice(0, 5)
                     .map((item, index) => (
                       <div className="muted" key={`${item.kind}-${index}`}>
-                        {item.level === "block" ? "阻断" : "警告"} · {item.kind}
+                        {item.level === "block"
+                          ? t("c09.preflight.levelBlock")
+                          : t("c09.preflight.levelWarn")}{" "}
+                        · {item.kind}
                         {item.code ? ` (${item.code})` : ""} · {item.message}
                       </div>
                     ))}
@@ -1027,64 +894,64 @@ function App() {
                 <section className="card" aria-labelledby="params-title">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title" id="params-title">扫描与清理参数</h2>
-                      <p className="card-sub">快速窗口留空时使用“大小 → 全量”两阶段；填写后启用三阶段。</p>
+                      <h2 className="card-title" id="params-title">{t("c09.params.title")}</h2>
+                      <p className="card-sub">{t("c09.params.sub")}</p>
                     </div>
-                    <span className="badge">只读扫描</span>
+                    <span className="badge">{t("c09.params.badge")}</span>
                   </div>
 
                   <div className="field-grid">
                     <div className="field wide">
-                      <label htmlFor="root">扫描目录</label>
+                      <label htmlFor="root">{t("c09.root.label")}</label>
                       <input
                         id="root"
                         className="input"
                         value={root}
                         onChange={(event) => setRoot(event.target.value)}
-                        placeholder="例如 D:\资料归档 或 /home/user/Documents"
+                        placeholder={t("c09.root.placeholder")}
                         spellCheck={false}
                       />
                     </div>
                     <div className="field">
-                      <label htmlFor="keep">保留策略</label>
+                      <label htmlFor="keep">{t("c09.keep.label")}</label>
                       <select
                         id="keep"
                         className="select"
                         value={keep}
                         onChange={(event) => setKeep(event.target.value as KeepPolicy)}
                       >
-                        <option value="earliest">最早（默认）</option>
-                        <option value="shortest-path">最短路径</option>
-                        <option value="newest">最新</option>
+                        <option value="earliest">{t("c09.keep.earliest")}</option>
+                        <option value="shortest-path">{t("c09.keep.shortest")}</option>
+                        <option value="newest">{t("c09.keep.newest")}</option>
                       </select>
                     </div>
                     <div className="field">
-                      <label htmlFor="quick">快速哈希窗口（字节）</label>
+                      <label htmlFor="quick">{t("c09.quick.label")}</label>
                       <input
                         id="quick"
                         className="input"
                         inputMode="numeric"
                         value={quickWindow}
                         onChange={(event) => setQuickWindow(event.target.value)}
-                        placeholder="留空 = 跳过"
+                        placeholder={t("c09.quick.placeholder")}
                       />
                     </div>
                     <div className="field wide">
-                      <label htmlFor="protected">保护目录（每行一个，可留空）</label>
+                      <label htmlFor="protected">{t("c09.protected.label")}</label>
                       <textarea
                         id="protected"
                         className="textarea"
                         value={protectedText}
                         onChange={(event) => setProtectedText(event.target.value)}
-                        placeholder="例如 D:\系统资料&#10;/home/user/important"
+                        placeholder={t("c09.protected.placeholder")}
                         spellCheck={false}
                       />
-                      <div className="hint">S02 保护目录在计划期标记受阻，执行期再次复核；命中后不会移动文件。</div>
+                      <div className="hint">{t("c09.protected.hint")}</div>
                     </div>
                   </div>
 
                   <div className="toolbar">
-                    <span className="hint">仅扫描，不写入；计划生成后可逐条核对。</span>
+                    <span className="hint">{t("c09.plan.hint")}</span>
                     <button
                       className="button button-primary"
                       type="button"
@@ -1092,7 +959,7 @@ function App() {
                       disabled={busy !== null || taskActive}
                     >
                       {busy === "plan" ? <Loader2 size={16} className="spin" /> : <FolderSearch size={16} />}
-                      {busy === "plan" ? "正在扫描与分组…" : "生成计划预览"}
+                      {busy === "plan" ? t("c09.plan.busy") : t("c09.plan.cta")}
                     </button>
                   </div>
                 </section>
@@ -1100,51 +967,51 @@ function App() {
                 <section className="card" aria-labelledby="plan-title">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title" id="plan-title">计划预览</h2>
-                      <p className="card-sub">每一行都是将要移入隔离目录的文件；受阻项不会执行。</p>
+                      <h2 className="card-title" id="plan-title">{t("c09.preview.title")}</h2>
+                      <p className="card-sub">{t("c09.preview.sub")}</p>
                     </div>
                     {plan && <span className="plan-id" title={plan.planId}>{plan.planId}</span>}
                   </div>
 
                   {!plan ? (
-                    <div className="empty">填写扫描目录并生成计划后，这里会显示重复组与清理条目。</div>
+                    <div className="empty">{t("c09.preview.empty")}</div>
                   ) : (
                     <>
                       <div className="stats">
                         <div className="stat">
-                          <div className="stat-label">总条目</div>
+                          <div className="stat-label">{t("c09.stats.total")}</div>
                           <div className="stat-value">{plan.stats.total}</div>
                         </div>
                         <div className="stat">
-                          <div className="stat-label">冲突</div>
+                          <div className="stat-label">{t("c09.stats.conflict")}</div>
                           <div className="stat-value">{plan.stats.conflict}</div>
                         </div>
                         <div className="stat">
-                          <div className="stat-label">警告</div>
+                          <div className="stat-label">{t("c09.stats.warning")}</div>
                           <div className="stat-value">{plan.stats.warning}</div>
                         </div>
                         <div className="stat">
-                          <div className="stat-label">受阻</div>
+                          <div className="stat-label">{t("c09.stats.blocked")}</div>
                           <div className="stat-value">{plan.stats.blocked}</div>
                         </div>
                       </div>
 
                       <div className="table">
                         <div className="row row-head">
-                          <span>待清理文件</span>
-                          <span>保留依据 / 原因</span>
-                          <span>状态</span>
+                          <span>{t("c09.table.file")}</span>
+                          <span>{t("c09.table.reason")}</span>
+                          <span>{t("c09.table.status")}</span>
                         </div>
                         {/* 方案 6.2：大列表只挂窗口内的行；去重的计划可能有上万条。 */}
                         <VirtualList
-                          label="待清理文件"
+                          label={t("c09.table.file")}
                           items={plan.entries}
                           getKey={(entry) => entry.entryId}
                           renderRow={(entry) => (
                             <div className={`row${entry.blocked ? " blocked" : ""}`}>
                               <span className="path" title={entry.source}>{entry.source}</span>
                               <span className="reason" title={entry.reason}>{entry.reason}</span>
-                              <span>{statusBadge(plan, entry.entryId)}</span>
+                              <span>{statusBadge(t, plan, entry.entryId)}</span>
                             </div>
                           )}
                         />
@@ -1172,10 +1039,10 @@ function App() {
                 <section className="card" aria-labelledby="execute-title">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title" id="execute-title">执行</h2>
-                      <p className="card-sub">删除动作只移入隔离目录；先核对预览，再确认执行。</p>
+                      <h2 className="card-title" id="execute-title">{t("c09.execute.title")}</h2>
+                      <p className="card-sub">{t("c09.execute.sub")}</p>
                     </div>
-                    {applyTask && stateBadge(applyTask.state)}
+                    {applyTask && stateBadge(t, applyTask.state)}
                   </div>
 
                   {(applyTask || undoTask) && (
@@ -1203,7 +1070,7 @@ function App() {
 
                   {planStale && (
                     <div className="banner banner-warn" role="status" data-testid="plan-stale">
-                      <div>参数已改动，旧计划预览失效：请重新生成计划再执行。</div>
+                      <div>{t("c09.stale")}</div>
                     </div>
                   )}
 
@@ -1215,7 +1082,7 @@ function App() {
                       onChange={(event) => setConfirmed(event.target.checked)}
                       disabled={!plan || Boolean(applyTask) || taskActive || busy !== null || planStale}
                     />
-                    我已核对预览，确认将 {deletableCount} 条文件移入隔离目录
+                    {t("c09.execute.confirm", { count: deletableCount })}
                   </label>
 
                   <div className="divider" />
@@ -1234,33 +1101,30 @@ function App() {
                       disabled={!canApply}
                     >
                       {isActive(applyTask) ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-                      {isActive(applyTask) ? "执行中…" : "移入隔离目录"}
+                      {isActive(applyTask) ? t("c09.execute.busy") : t("c09.execute.apply")}
                     </button>
                     <button className="button button-secondary" type="button" onClick={onUndo} disabled={!canUndo}>
                       {isActive(undoTask) ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
-                      {isActive(undoTask) ? "撤销中…" : "撤销本次计划"}
+                      {isActive(undoTask) ? t("c09.execute.undoBusy") : t("c09.execute.undo")}
                     </button>
                     {applyTask && ["partial-failed", "failed"].includes(applyTask.state) && (
                       <button className="button button-secondary" type="button" onClick={onRetry} disabled={!canRetry}>
-                        <RefreshCw size={16} /> 重试失败项
+                        <RefreshCw size={16} /> {t("common.retryFailed")}
                       </button>
                     )}
                   </div>
 
                   {dangerOpen && (
                     <DangerConfirm
-                      confirmLabel="已知悉，执行其余条目"
-                      items={protectionHits.map(
-                        (entry) => `${entry.target ?? entry.source}：${entry.blocked?.reason ?? "受保护目录"}`
+                      confirmLabel={t("c09.danger.confirm")}
+                      items={protectionHits.map((entry) =>
+                        t("c09.danger.item", {
+                          path: entry.target ?? entry.source,
+                          reason: entry.blocked?.reason ?? t("c09.danger.protectedReason")
+                        })
                       )}
-                      title="命中保护目录"
-                      body={
-                        <>
-                          本次计划里有 {protectionHits.length} 条落在保护目录内，
-                          <strong>这些条目已被禁止写入、不会执行</strong>
-                          （强制力在内核执行层，界面确认不改变该判定）。其余条目将继续执行，是否继续？
-                        </>
-                      }
+                      title={t("c09.danger.title")}
+                      body={t("c09.danger.body", { count: protectionHits.length })}
                       onCancel={() => setDangerOpen(false)}
                       onConfirm={() => {
                         setDangerOpen(false);
@@ -1272,26 +1136,26 @@ function App() {
                   {hasBlocked && (
                     <div className="warning danger" style={{ marginTop: "var(--space-3)" }}>
                       <AlertTriangle size={14} />
-                      <span>存在受阻条目；执行时会跳过，不会触碰保护目录。</span>
+                      <span>{t("c09.execute.blockedHint")}</span>
                     </div>
                   )}
 
                   <div className="hint" style={{ marginTop: "var(--space-3)" }}>
-                    撤销窗口默认 7 天；超过窗口后需先执行保留期清理。
+                    {t("c09.execute.windowHint")}
                   </div>
                 </section>
 
                 <section className="card" aria-labelledby="cleanup-title">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title" id="cleanup-title">保留期清理</h2>
-                      <p className="card-sub">默认演练；勾选永久删除后才会移除过期隔离文件与 Journal。</p>
+                      <h2 className="card-title" id="cleanup-title">{t("c09.cleanup.title")}</h2>
+                      <p className="card-sub">{t("c09.cleanup.sub")}</p>
                     </div>
                     <HardDrive size={18} />
                   </div>
 
                   <div className="field" style={{ marginBottom: "var(--space-3)" }}>
-                    <label htmlFor="retention">保留天数（1–30）</label>
+                    <label htmlFor="retention">{t("c09.cleanup.retention")}</label>
                     <input
                       id="retention"
                       className="input"
@@ -1310,11 +1174,13 @@ function App() {
                       checked={purge}
                       onChange={(event) => setPurge(event.target.checked)}
                     />
-                    永久删除过期隔离文件（不可撤销）
+                    {t("c09.cleanup.purge")}
                   </label>
 
                   <div className="toolbar">
-                    <span className="hint">{purge ? "本次将永久删除。" : "演练模式，不删除文件。"}</span>
+                    <span className="hint">
+                      {purge ? t("c09.cleanup.hintPurge") : t("c09.cleanup.hintDry")}
+                    </span>
                     <button
                       className="button button-danger"
                       type="button"
@@ -1322,7 +1188,11 @@ function App() {
                       disabled={busy !== null || taskActive}
                     >
                       {busy === "cleanup" ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
-                      {busy === "cleanup" ? "正在处理保留期…" : purge ? "永久清理" : "演练清理"}
+                      {busy === "cleanup"
+                        ? t("c09.cleanup.busy")
+                        : purge
+                          ? t("c09.cleanup.ctaPurge")
+                          : t("c09.cleanup.ctaDry")}
                     </button>
                   </div>
                 </section>
@@ -1330,25 +1200,25 @@ function App() {
                 <section className="card" aria-labelledby="result-title">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title" id="result-title">执行结果</h2>
-                      <p className="card-sub">结果只来自引擎报告；没有静默处理。</p>
+                      <h2 className="card-title" id="result-title">{t("c09.result.title")}</h2>
+                      <p className="card-sub">{t("c09.result.sub")}</p>
                     </div>
                     <RefreshCw size={18} />
                   </div>
 
                   {!applyTask?.report && !undoTask?.report && !cleanupOutcome && (
-                    <div className="empty">执行后显示每条结果。</div>
+                    <div className="empty">{t("c09.result.empty")}</div>
                   )}
 
                   {applyTask?.report && (
                     <div className="table">
                       <div className="row row-head">
-                        <span>条目</span>
-                        <span>错误</span>
-                        <span>结果</span>
+                        <span>{t("c09.result.entry")}</span>
+                        <span>{t("c09.result.error")}</span>
+                        <span>{t("c09.result.status")}</span>
                       </div>
                       <VirtualList
-                        label="执行结果条目"
+                        label={t("c09.result.entry")}
                         items={applyTask.report.entries}
                         getKey={(entry) => entry.entryId}
                         renderRow={(entry) => (
@@ -1380,8 +1250,12 @@ function App() {
                     <div className="banner banner-info" style={{ marginTop: "var(--space-3)" }}>
                       <CheckCircle2 size={16} />
                       <span>
-                        Journal 已恢复 {undoReverted} 项
-                        {undoFailures ? `，${undoFailures} 项失败` : ""}。
+                        {t("c09.result.journal", {
+                          count: undoReverted,
+                          tail: undoFailures
+                            ? t("c09.result.journalTail", { count: undoFailures })
+                            : ""
+                        })}
                       </span>
                     </div>
                   )}
@@ -1390,8 +1264,12 @@ function App() {
                     <div className="banner banner-info" style={{ marginTop: "var(--space-3)" }}>
                       <CheckCircle2 size={16} />
                       <span>
-                        截止 {cleanupOutcome.cutoff}：过期 {cleanupOutcome.expiredEntries} 条，
-                        移除 {cleanupOutcome.removedEntries} 条记录 / {cleanupOutcome.removedFiles} 个文件。
+                        {t("c09.result.cutoff", {
+                          cutoff: cleanupOutcome.cutoff,
+                          expired: cleanupOutcome.expiredEntries,
+                          records: cleanupOutcome.removedEntries,
+                          files: cleanupOutcome.removedFiles
+                        })}
                       </span>
                     </div>
                   )}
@@ -1400,15 +1278,18 @@ function App() {
                 <section className="card" aria-labelledby="about-title">
                   <div className="card-header">
                     <div>
-                      <h2 className="card-title" id="about-title">当前形态</h2>
-                      <p className="card-sub">桌面壳：本地文件系统；Web/壳零授权强制力。</p>
+                      <h2 className="card-title" id="about-title">{t("c09.about.title")}</h2>
+                      <p className="card-sub">{t("c09.about.sub")}</p>
                     </div>
                   </div>
                   <div className="hint">
-                    内核 {meta?.kernelVersion ?? "…"} · 契约 v{meta?.contractVersion ?? "…"}
+                    {t("c09.about.meta", {
+                      kernel: meta?.kernelVersion ?? "…",
+                      contract: meta?.contractVersion ?? "…"
+                    })}
                   </div>
                   <div className="hint" style={{ marginTop: "var(--space-2)" }}>
-                    执行与撤销已走桌面任务队列；进度、暂停、取消与终态通过 task:// 事件推送。
+                    {t("c09.about.hint")}
                   </div>
                 </section>
               </div>
@@ -1416,6 +1297,8 @@ function App() {
             </div>
             ) : activeView === "tasks" ? (
               <TaskHistory live={taskViews} onBack={() => setActiveView("c09")} />
+            ) : activeView === "settings" ? (
+              <SettingsPage onBack={() => setActiveView("c09")} />
             ) : (
               <FeaturePages view={activeView} onBack={() => setActiveView("c09")} />
             )}
@@ -1427,22 +1310,24 @@ function App() {
           危险动作（撤销）不带默认焦点，初始焦点落「保留」。 */}
       {cancelReview && (
         <DangerConfirm
-          cancelLabel="保留已完成项"
-          confirmLabel="一并撤销"
+          cancelLabel={t("c09.cancelReview.keep")}
+          confirmLabel={t("c09.cancelReview.confirm")}
           items={[]}
-          title={`已完成 ${cancelReview.completed} 项，是否一并撤销？`}
-          body={
-            <>
-              取消已停止后续条目；这 <strong>{cancelReview.completed}</strong> 项已经写入磁盘并记入
-              Journal。撤销会按 Journal 反向还原（删除的从隔离目录取回、覆盖的还原备份）；选择保留则
-              随时可在任务面板再撤销。
-            </>
-          }
+          title={t("c09.cancelReview.title", { count: cancelReview.completed })}
+          body={t("c09.cancelReview.body", { count: cancelReview.completed })}
           onCancel={() => setCancelReview(null)}
           onConfirm={onCancelReviewConfirm}
         />
       )}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <I18nProvider>
+      <AppShell />
+    </I18nProvider>
   );
 }
 

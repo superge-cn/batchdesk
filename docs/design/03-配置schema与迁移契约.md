@@ -311,3 +311,5 @@ interface UiState {
 | v1.1 | 2026-10-28 | 补 `ScopeView` 定义；澄清 `logging.retentionDays` 仅指操作日志保留并修正 §9.6 引用；修正篇 01 §9 引用；迁移样本字段名/枚举与 §4.1 对齐并由 `check_schema.py` 校验。 |
 | v1.2 | 2026-10-28 | `GeneralScope.theme` 工程默认由 `"system"` 改为 `"light"`（U v1.3 §5 D-U5 浅色默认，用户确认）；枚举 `system/light/dark` 不变。 |
 | v1.3 | 2026-10-28 | RecipeDocument v2/v3（match/steps/迁移、CURRENT_RECIPE_SCHEMA_VERSION=3）；新增 getRecipe 与 UiState 契约（get/set/reset、独立 uiStateVersion、重置规则）；对应方案 §15 与 OQ-26/27。 |
+
+> **实现记录（不改契约，2026-11-03）**：设置区 UI 已落地（`web/src/SettingsPage.tsx`，设计 12 v0.18），按本篇 §4.1 的五个可写 scope 一组一页签面板渲染——字段清单与枚举值取自 §4.1，来源标记读 `SettingValue.effectiveSource`（`user` 显示"已自定义"、`default` 显示"默认值"），分组重置走 `resetScope`（**不**逐项 `setConfig`），高版本只读以 `E1007` 呈现为只读横幅并回读现值。`general.language`／`general.theme` 的写入路径与界面即时生效的关系见设计 09 v0.2 §8；字段注册表在 `web/src/SettingsPage.tsx` 的 `SCOPES`（加字段＝加一行，不改渲染代码）。本篇 schema、默认值、错误码与迁移链**均未变更**。

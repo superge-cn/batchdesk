@@ -64,6 +64,12 @@ vi.mock("./lib/ipc", () => ({
   listenTaskProgress: () => Promise.resolve(() => undefined),
   listenTaskState: () => Promise.resolve(() => undefined),
   listenTaskDone: () => Promise.resolve(() => undefined),
+  getConfig: vi.fn(async (scope: string) => ({
+    scope,
+    values: {}
+  })),
+  setConfig: vi.fn(async (scope: string) => ({ scope, values: {} })),
+  resetScope: vi.fn(async (scope: string) => ({ scope, values: {} })),
   toIpcError: (value: unknown) => value
 }));
 

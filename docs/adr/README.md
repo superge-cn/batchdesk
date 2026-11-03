@@ -89,6 +89,7 @@
 | [0056](./0056-桌面壳edit-content重写器装配与TranscodeRewriter上提.md) | `TranscodeRewriter` 上提到 kernel＋三个重写器提供 `from_plan`；桌面壳按计划 kind 装配 `content_rewriter`，修掉 C01–C03「能预览不能执行」 | 已采纳 |
 | [0057](./0057-C03流式替换的重叠窗口与正则边界.md) | C03 流式替换：plain 精确重叠窗口、cell 记录级增量、regex 保留整段（可证正确性优先） | 已采纳 |
 | [0058](./0058-拉取式读取端口与C13外排流式归并.md) | 拉取式读取端口 `open_read_stream`＋`CsvRecordStream`；C13 外排两相有界归并＋块文件守卫清理 | 已采纳 |
+| [0059](./0059-文案资源层与设置区的实现边界.md) | 文案资源层与设置区：自写 `I18nProvider`（不引 i18next）＋`MessageKey` 编译期约束＋缺 key 回退；门禁七项与三类例外；`SCOPES` 数据驱动＋`FieldKind` 分派 | 已采纳 |
 | [0015](./0015-F01分片计划与撤销语义.md) | F01 分片计划与撤销语义（split 动作＋range＋流式区间复制） | 已采纳 |
 | [0016](./0016-F04合并计划与编码统一语义.md) | F04 合并计划与编码统一语义（merge 动作＋单条 entry＋BOM 只写一次） | 已采纳 |
 | [0017](./0017-F05-CSV分片记录边界与多区间原子写.md) | F05 CSV 分片记录边界与多区间原子写（csv 载荷＋copy_ranges_atomic） | 已采纳 |

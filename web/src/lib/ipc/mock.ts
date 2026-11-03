@@ -6,6 +6,8 @@ import type {
   RenamePreviewRow,
   ApplyReport,
   CleanupOutcome,
+  ConfigDocument,
+  ConfigScope,
   IpcError,
   IpcMeta,
   PlanDocument,
@@ -15,6 +17,8 @@ import type {
   PreflightReport,
   ProgressEvent,
   ProgressPhase,
+  ScopeView,
+  SettingValue,
   StorageInfo,
   TaskDetail,
   TaskHandle,
@@ -515,4 +519,97 @@ export function mockUndoDryRun(planId: string) {
     conflictCount: 0,
     missingCount: 0
   };
+}
+
+// ── 配置（设计 03 §4.1 工程默认值／§4.2 安全默认值）────────────────────
+// 浏览器预览没有真实配置文件：用户档只放内存，刷新即回默认。
+const CONFIG_DEFAULTS: Record<ConfigScope, Record<string, unknown>> = {
+  general: {
+    language: "zh-CN",
+    theme: "light",
+    defaultOutputDir: null,
+    launchBehavior: "normal"
+  },
+  processing: {
+    onConflict: "skip",
+    encodingPolicy: "auto",
+    newlinePolicy: "keep",
+    deletionMode: "move-to-quarantine",
+    keepBackup: true
+  },
+  performance: {
+    concurrency: "auto",
+    memoryBudget: "auto",
+    largeFileThreshold: "auto"
+  },
+  security: {
+    protectedDirs: [],
+    quarantineDir: null,
+    quarantineRetentionDays: null,
+    placeholderPolicy: "skip",
+    diskSpaceMarginFloorBytes: null,
+    diskSpaceMarginRatio: null
+  },
+  logging: {
+    retentionDays: null,
+    logFullPaths: false
+  }
+};
+
+const configUser: Record<ConfigScope, Record<string, unknown>> = {
+  general: {},
+  processing: {},
+  performance: {},
+  security: {},
+  logging: {}
+};
+
+function scopeDefaults(scope: string): Record<string, unknown> {
+  const defaults = CONFIG_DEFAULTS[scope as ConfigScope];
+  if (!defaults) fail("E1002", `unknown config scope: ${scope}`);
+  return defaults;
+}
+
+function scopeView(scope: string): ScopeView {
+  const defaults = scopeDefaults(scope);
+  const user = configUser[scope as ConfigScope];
+  const values: Record<string, SettingValue> = {};
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    const hasUser = Object.prototype.hasOwnProperty.call(user, key);
+    values[key] = {
+      value: hasUser ? user[key] : defaultValue,
+      effectiveSource: hasUser ? "user" : "default",
+      ...(hasUser ? { userValue: user[key] } : {}),
+      defaultValue
+    };
+  }
+  return { scope: scope as ConfigScope, values };
+}
+
+export function mockGetConfig(scope?: string): ConfigDocument | ScopeView {
+  if (scope) return scopeView(scope);
+  const scopes: ConfigDocument["scopes"] = {};
+  for (const key of Object.keys(CONFIG_DEFAULTS) as ConfigScope[]) {
+    const user = configUser[key];
+    if (Object.keys(user).length > 0) scopes[key] = { ...user };
+  }
+  return { configVersion: 1, updatedAt: new Date().toISOString(), scopes };
+}
+
+export function mockSetConfig(scope: string, patch: Record<string, unknown>): ScopeView {
+  const defaults = scopeDefaults(scope);
+  for (const [key, value] of Object.entries(patch)) {
+    if (!Object.prototype.hasOwnProperty.call(defaults, key)) {
+      fail("E1002", `unknown config key: ${scope}.${key}`);
+    }
+    if (value === null || value === undefined) delete configUser[scope as ConfigScope][key];
+    else configUser[scope as ConfigScope][key] = value;
+  }
+  return scopeView(scope);
+}
+
+export function mockResetScope(scope: string): ScopeView {
+  scopeDefaults(scope);
+  configUser[scope as ConfigScope] = {};
+  return scopeView(scope);
 }

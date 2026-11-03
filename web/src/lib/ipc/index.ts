@@ -4,6 +4,7 @@ import {
   mockApply,
   mockCancel,
   mockCleanup,
+  mockGetConfig,
   mockGetStorageInfo,
   mockGetTask,
   mockListen,
@@ -14,14 +15,19 @@ import {
   mockPreflightPlan,
   mockRecoverTask,
   mockRenamePreview,
+  mockResetScope,
   mockResume,
   mockRetry,
+  mockSetConfig,
   mockUndoDryRun,
   mockUndo
 } from "./mock";
 import type {
   CleanupOutcome,
+  ConfigDocument,
+  ConfigScope,
   RenamePreview,
+  ScopeView,
   UndoDryRun,
   IpcMeta,
   PreflightReport,
@@ -176,6 +182,33 @@ export async function cleanupRetention(
   return isTauri()
     ? invoke<CleanupOutcome>("cleanupRetention", { retentionDays, apply })
     : mockCleanup(retentionDays, apply);
+}
+
+// ── 配置（设计 03 §7；命令由壳层 `lib.rs` 提供，Web 形态走尽力而为 mock）──
+export async function getConfig(): Promise<ConfigDocument>;
+export async function getConfig(scope: ConfigScope): Promise<ScopeView>;
+export async function getConfig(scope?: ConfigScope): Promise<ConfigDocument | ScopeView> {
+  if (isTauri()) {
+    return scope
+      ? invoke<ScopeView>("getConfig", { scope })
+      : invoke<ConfigDocument>("getConfig", {});
+  }
+  return mockGetConfig(scope);
+}
+
+export async function setConfig(
+  scope: ConfigScope,
+  patch: Record<string, unknown>
+): Promise<ScopeView> {
+  return isTauri()
+    ? invoke<ScopeView>("setConfig", { scope, patch })
+    : mockSetConfig(scope, patch);
+}
+
+export async function resetScope(scope: ConfigScope): Promise<ScopeView> {
+  return isTauri()
+    ? invoke<ScopeView>("resetScope", { scope })
+    : mockResetScope(scope);
 }
 
 export function toIpcError(value: unknown): {

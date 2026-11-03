@@ -17,6 +17,9 @@ import {
 } from "./lib/ipc";
 import { DangerConfirm } from "./DangerConfirm";
 import { VirtualList } from "./VirtualList";
+import { useI18n, type MessageKey } from "./i18n";
+import type { Translate } from "./labels";
+import { phaseLabel } from "./labels";
 import type {
   IpcError,
   PlanDocument,
@@ -340,263 +343,371 @@ function splitNumbers(value: string | undefined): number[] {
 
 function isNoHeader(value: string | undefined) {
   const normalized = (value ?? "").trim().toLowerCase();
-  return normalized === "无" || normalized === "no" || normalized === "false";
+  // 这是"表头 有|无"输入框的取值判定，不是界面文案。
+  return normalized === "无" || normalized === "no" || normalized === "false"; // i18n-exempt
 }
 
-function statusBadge(status: string) {
-  if (status === "normal") return <span className="badge badge-safe">正常</span>;
-  if (status === "conflict") return <span className="badge badge-danger">冲突</span>;
-  if (status === "invalid") return <span className="badge badge-danger">非法</span>;
-  if (status === "too-long") return <span className="badge badge-warn">超长</span>;
-  if (status === "protected") return <span className="badge badge-danger">保护</span>;
+function statusBadge(t: Translate, status: string) {
+  if (status === "normal") return <span className="badge badge-safe">{t("feature.status.normal")}</span>;
+  if (status === "conflict") return <span className="badge badge-danger">{t("feature.status.conflict")}</span>;
+  if (status === "invalid") return <span className="badge badge-danger">{t("feature.status.invalid")}</span>;
+  if (status === "too-long") return <span className="badge badge-warn">{t("feature.status.tooLong")}</span>;
+  if (status === "protected") return <span className="badge badge-danger">{t("feature.status.protected")}</span>;
   return <span className="badge">{status}</span>;
 }
 
-const FEATURE_TITLES: Record<View, string> = {
-  f01: "TXT 按字节分割（F01）",
-  f02: "TXT 按行数分割（F02）",
-  f03: "TXT 按份数分割（F03）",
-  f04: "TXT 合并（F04）",
-  c01: "编码转换（C01）",
-  c02: "换行符转换（C02）",
-  c03: "查找替换（C03）",
-  f05: "CSV 分割（F05）",
-  f06: "CSV 合并（F06）",
-  f07: "CSV 抽取指定列（F07）",
-  f08: "CSV 抽取前/后 N 行（F08）",
-  f09: "CSV 抽取位置行区间（F09）",
-  f10: "生成目录清单（F10）",
-  c04: "名称查找替换（C04）",
-  c11: "CSV 去重（C11）",
-  c12: "CSV 过滤（C12）",
-  c13: "CSV 排序（C13）",
-  c14: "CSV 列拆分/合并（C14）",
-  c07: "清单驱动移动/复制（C07）",
-  c08: "按规则归档（C08）",
-  c10: "ZIP 解压/压缩（C10）",
-  f11: "清单建档（F11）",
-  f12: "批量改名（F12）"
+const FEATURE_TITLES: Record<View, MessageKey> = {
+  f01: "feature.title.f01",
+  f02: "feature.title.f02",
+  f03: "feature.title.f03",
+  f04: "feature.title.f04",
+  c01: "feature.title.c01",
+  c02: "feature.title.c02",
+  c03: "feature.title.c03",
+  f05: "feature.title.f05",
+  f06: "feature.title.f06",
+  f07: "feature.title.f07",
+  f08: "feature.title.f08",
+  f09: "feature.title.f09",
+  f10: "feature.title.f10",
+  c04: "feature.title.c04",
+  c11: "feature.title.c11",
+  c12: "feature.title.c12",
+  c13: "feature.title.c13",
+  c14: "feature.title.c14",
+  c07: "feature.title.c07",
+  c08: "feature.title.c08",
+  c10: "feature.title.c10",
+  f11: "feature.title.f11",
+  f12: "feature.title.f12"
 };
 
 interface FieldSpec {
   name: string;
-  label: string;
+  labelKey: MessageKey;
+  /** 纯技术示例（路径/编码/枚举）原样展示；含中文的提示走 placeholderKey。 */
   placeholder?: string;
+  placeholderKey?: MessageKey;
   wide?: boolean;
   kind?: "textarea";
-  hint?: string;
+  hintKey?: MessageKey;
 }
 
 const FILE_LIST: FieldSpec = {
   name: "files",
-  label: "文件列表（每行一个路径）",
+  labelKey: "feature.field.files",
   kind: "textarea",
   placeholder: "/path/a.csv\n/path/b.csv\n"
 };
 
 const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
   f01: [
-    { name: "file", label: "源 TXT 文件", placeholder: "/path/a.txt", wide: true },
-    { name: "targetBytes", label: "目标分片字节", placeholder: "8" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true }
+    { name: "file", labelKey: "feature.field.file", placeholder: "/path/a.txt", wide: true },
+    { name: "targetBytes", labelKey: "feature.field.targetBytes", placeholder: "8" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true }
   ],
   f02: [
-    { name: "file", label: "源 TXT 文件", placeholder: "/path/a.txt", wide: true },
-    { name: "linesPerPart", label: "每片行数", placeholder: "100" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true }
+    { name: "file", labelKey: "feature.field.file", placeholder: "/path/a.txt", wide: true },
+    { name: "linesPerPart", labelKey: "feature.field.linesPerPart", placeholder: "100" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true }
   ],
   f03: [
-    { name: "file", label: "源 TXT 文件", placeholder: "/path/a.txt", wide: true },
-    { name: "parts", label: "目标份数", placeholder: "4" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true }
+    { name: "file", labelKey: "feature.field.file", placeholder: "/path/a.txt", wide: true },
+    { name: "parts", labelKey: "feature.field.parts", placeholder: "4" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true }
   ],
   f04: [
     FILE_LIST,
-    { name: "output", label: "合并产物路径", placeholder: "/path/merged.txt", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" }
+    { name: "output", labelKey: "feature.field.output", placeholder: "/path/merged.txt", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" }
   ],
   c01: [
     FILE_LIST,
-    { name: "target", label: "目标编码", placeholder: "utf-8", wide: true },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8", wide: true },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   c02: [
     FILE_LIST,
-    { name: "target", label: "目标换行符 (crlf|lf|cr)", placeholder: "lf", wide: true },
-    { name: "sampleBytes", label: "采样字节", placeholder: "4096" }
+    { name: "target", labelKey: "feature.field.target", placeholder: "crlf|lf|cr", wide: true },
+    { name: "sampleBytes", labelKey: "feature.field.sampleBytes", placeholder: "4096" }
   ],
   c03: [
     FILE_LIST,
-    { name: "mode", label: "模式 (plain|regex)", placeholder: "plain" },
-    { name: "find", label: "查找文本", placeholder: "查找…", wide: true },
-    { name: "replacement", label: "替换为", placeholder: "替换…", wide: true }
+    { name: "mode", labelKey: "feature.field.mode", placeholder: "plain" },
+    { name: "find", labelKey: "feature.field.find", placeholderKey: "feature.placeholder.find", wide: true },
+    {
+      name: "replacement",
+      labelKey: "feature.field.replacement",
+      placeholderKey: "feature.placeholder.replacement",
+      wide: true
+    }
   ],
   f05: [
-    { name: "file", label: "源 CSV 文件", placeholder: "/path/名单.csv", wide: true },
-    { name: "targetBytes", label: "分片目标字节（二选一）", placeholder: "留空则用行数" },
-    { name: "rows", label: "分片行数（二选一）", placeholder: "留空则用字节" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," }
+    { name: "file", labelKey: "feature.field.file", placeholder: "/path/list.csv", wide: true },
+    {
+      name: "targetBytes",
+      labelKey: "feature.field.targetBytes",
+      placeholderKey: "feature.placeholder.byRows"
+    },
+    { name: "rows", labelKey: "feature.field.rows", placeholderKey: "feature.placeholder.byBytes" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," }
   ],
   f06: [
     FILE_LIST,
-    { name: "output", label: "合并产物路径", placeholder: "/path/merged.csv", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
-    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
-    { name: "sourceColumnName", label: "来源列名（留空则不加来源列）", placeholder: "来源文件", wide: true },
-    { name: "strict", label: "严格列对齐 strict", placeholder: "填 yes 启用" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "output", labelKey: "feature.field.output", placeholder: "/path/merged.csv", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," },
+    {
+      name: "header",
+      labelKey: "feature.field.header",
+      placeholderKey: "feature.placeholder.headerYes"
+    },
+    {
+      name: "sourceColumnName",
+      labelKey: "feature.field.sourceColumnName",
+      placeholder: "source",
+      wide: true
+    },
+    {
+      name: "strict",
+      labelKey: "feature.field.strict",
+      placeholderKey: "feature.placeholder.strictYes"
+    },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   f07: [
     FILE_LIST,
-    { name: "columns", label: "列名（逗号分隔，按选择顺序）", placeholder: "姓名,部门", wide: true },
-    { name: "columnIndexes", label: "列序号（逗号分隔，1-based）", placeholder: "1,3" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
-    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    {
+      name: "columns",
+      labelKey: "feature.field.columns",
+      placeholder: "name,dept",
+      wide: true
+    },
+    { name: "columnIndexes", labelKey: "feature.field.columnIndexes", placeholder: "1,3" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," },
+    {
+      name: "header",
+      labelKey: "feature.field.header",
+      placeholderKey: "feature.placeholder.headerYes"
+    },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   f08: [
     FILE_LIST,
-    { name: "window", label: "窗口 first|last", placeholder: "first" },
-    { name: "count", label: "行数 N（0 合法）", placeholder: "10" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
-    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "window", labelKey: "feature.field.window", placeholder: "first" },
+    { name: "count", labelKey: "feature.field.count", placeholder: "10" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," },
+    {
+      name: "header",
+      labelKey: "feature.field.header",
+      placeholderKey: "feature.placeholder.headerYes"
+    },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   f09: [
     FILE_LIST,
-    { name: "startRow", label: "起始数据行 X（1-based）", placeholder: "2" },
-    { name: "endRow", label: "结束数据行 Y（≥X）", placeholder: "5" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
-    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "startRow", labelKey: "feature.field.startRow", placeholder: "2" },
+    { name: "endRow", labelKey: "feature.field.endRow", placeholder: "5" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," },
+    {
+      name: "header",
+      labelKey: "feature.field.header",
+      placeholderKey: "feature.placeholder.headerYes"
+    },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   f10: [
     {
       name: "roots",
-      label: "根目录（每行一个）",
+      labelKey: "feature.field.roots",
       kind: "textarea",
       placeholder: "/path/root-a\n/path/root-b\n",
-      hint: "UTF-8 BOM CSV，列：相对路径/名称/类型/大小/修改时间/层级；不读文件内容。"
+      hintKey: "feature.field.f10.hint"
     },
-    { name: "outputDir", label: "清单输出目录", placeholder: "/path/out", wide: true }
+    { name: "outputDir", labelKey: "feature.field.listingOutputDir", placeholder: "/path/out", wide: true }
   ],
   c04: [
-    { name: "dir", label: "目录", placeholder: "/path/dir", wide: true },
-    { name: "mode", label: "模式 plain|regex", placeholder: "plain" },
-    { name: "scope", label: "作用范围 full|stem|ext", placeholder: "full" },
-    { name: "find", label: "查找文本", placeholder: "字面或正则", wide: true },
-    { name: "replace", label: "替换为（支持 $1/\${name}）", placeholder: "替换文本", wide: true }
+    { name: "dir", labelKey: "feature.field.dir", placeholder: "/path/dir", wide: true },
+    { name: "mode", labelKey: "feature.field.mode", placeholder: "plain" },
+    { name: "scope", labelKey: "feature.field.scope", placeholder: "full" },
+    {
+      name: "find",
+      labelKey: "feature.field.find",
+      placeholderKey: "feature.placeholder.literalOrRegex",
+      wide: true
+    },
+    {
+      name: "replace",
+      labelKey: "feature.field.replace",
+      placeholderKey: "feature.placeholder.replaceText",
+      wide: true
+    }
   ],
   c11: [
     FILE_LIST,
-    { name: "keyColumns", label: "键列名（逗号分隔，留空＝整行）", placeholder: "订单号,客户", wide: true },
-    { name: "keyColumnIndexes", label: "键列序号（逗号分隔，1-based）", placeholder: "1" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "delimiter", label: "分隔符（可留空嗅探）", placeholder: "," },
-    { name: "header", label: "表头 有|无", placeholder: "有（默认）" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    {
+      name: "keyColumns",
+      labelKey: "feature.field.keyColumns",
+      placeholder: "id,user",
+      wide: true
+    },
+    { name: "keyColumnIndexes", labelKey: "feature.field.keyColumnIndexes", placeholder: "1" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," },
+    {
+      name: "header",
+      labelKey: "feature.field.header",
+      placeholderKey: "feature.placeholder.headerYes"
+    },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   c12: [
     FILE_LIST,
-    { name: "column", label: "条件列名", placeholder: "金额" },
-    { name: "columnIndex", label: "条件列序号（与列名二选一）", placeholder: "3" },
-    { name: "op", label: "算子 contains|not-contains|eq|ne|gt|ge|lt|le", placeholder: "gt", wide: true },
-    { name: "value", label: "比较值", placeholder: "100" },
-    { name: "filterMode", label: "选向 keep|drop", placeholder: "keep" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "column", labelKey: "feature.field.column", placeholder: "amount" },
+    { name: "columnIndex", labelKey: "feature.field.columnIndex", placeholder: "3" },
+    { name: "op", labelKey: "feature.field.op", placeholder: "gt", wide: true },
+    { name: "value", labelKey: "feature.field.value", placeholder: "100" },
+    { name: "filterMode", labelKey: "feature.field.filterMode", placeholder: "keep" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   c13: [
     FILE_LIST,
-    { name: "sortColumns", label: "排序键列名（逗号分隔）", placeholder: "金额", wide: true },
-    { name: "sortColumnIndexes", label: "排序键列序号（逗号分隔）", placeholder: "" },
-    { name: "order", label: "顺序 asc|desc", placeholder: "asc" },
-    { name: "externalChunkRows", label: "外排块行数（留空＝内存排序）", placeholder: "5000" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "sortColumns", labelKey: "feature.field.sortColumns", placeholder: "amount", wide: true },
+    { name: "sortColumnIndexes", labelKey: "feature.field.sortColumnIndexes", placeholder: "" },
+    { name: "order", labelKey: "feature.field.order", placeholder: "asc" },
+    {
+      name: "externalChunkRows",
+      labelKey: "feature.field.externalChunkRows",
+      placeholder: "5000"
+    },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   c14: [
     FILE_LIST,
-    { name: "splitColumn", label: "拆分源列名", placeholder: "标签" },
-    { name: "splitColumnIndex", label: "拆分源列序号（与列名二选一）", placeholder: "" },
-    { name: "splitSeparator", label: "拆分分隔符", placeholder: ";" },
-    { name: "splitRegex", label: "拆分正则（与分隔符二选一）", placeholder: "[;,]" },
-    { name: "mergeColumns", label: "合并源列名（逗号分隔，与拆分互斥）", placeholder: "姓,名", wide: true },
-    { name: "mergeJoinWith", label: "合并连接符", placeholder: "-" },
-    { name: "mergeName", label: "合并新列名", placeholder: "姓名" },
-    { name: "outputDir", label: "输出目录", placeholder: "/path/out", wide: true },
-    { name: "target", label: "目标编码", placeholder: "utf-8" },
-    { name: "sampleWindow", label: "采样窗口字节", placeholder: "4096" }
+    { name: "splitColumn", labelKey: "feature.field.splitColumn", placeholder: "tags" },
+    { name: "splitColumnIndex", labelKey: "feature.field.splitColumnIndex", placeholder: "" },
+    { name: "splitSeparator", labelKey: "feature.field.splitSeparator", placeholder: ";" },
+    { name: "splitRegex", labelKey: "feature.field.splitRegex", placeholder: "[;,]" },
+    {
+      name: "mergeColumns",
+      labelKey: "feature.field.mergeColumns",
+      placeholder: "first,last",
+      wide: true
+    },
+    { name: "mergeJoinWith", labelKey: "feature.field.mergeJoinWith", placeholder: "-" },
+    { name: "mergeName", labelKey: "feature.field.mergeName", placeholder: "fullName" },
+    { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true },
+    { name: "target", labelKey: "feature.field.target", placeholder: "utf-8" },
+    { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   c07: [
-    { name: "manifest", label: "清单 CSV（两列：名称,目标子目录）", placeholder: "/path/manifest.csv", wide: true },
-    { name: "sourceRoot", label: "源根目录", placeholder: "/path/src", wide: true },
-    { name: "targetRoot", label: "目标根目录", placeholder: "/path/dst", wide: true },
-    { name: "operation", label: "操作 move|copy", placeholder: "move" },
-    { name: "missing", label: "缺失项 skip|error", placeholder: "skip" },
-    { name: "delimiter", label: "清单分隔符（可留空嗅探）", placeholder: "," }
+    {
+      name: "manifest",
+      labelKey: "feature.field.manifest",
+      placeholder: "/path/manifest.csv",
+      wide: true
+    },
+    { name: "sourceRoot", labelKey: "feature.field.sourceRoot", placeholder: "/path/src", wide: true },
+    { name: "targetRoot", labelKey: "feature.field.targetRoot", placeholder: "/path/dst", wide: true },
+    { name: "operation", labelKey: "feature.field.operation", placeholder: "move" },
+    { name: "missing", labelKey: "feature.field.missing", placeholder: "skip" },
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," }
   ],
   c08: [
-    { name: "sourceRoot", label: "源目录", placeholder: "/path/src", wide: true },
-    { name: "targetRoot", label: "归档目标目录", placeholder: "/path/dst", wide: true },
+    { name: "sourceRoot", labelKey: "feature.field.sourceRoot", placeholder: "/path/src", wide: true },
+    { name: "targetRoot", labelKey: "feature.field.targetRoot", placeholder: "/path/dst", wide: true },
     {
       name: "rules",
-      label: "规则链（每行 <子目录>|<type>:<params>，首中生效）",
+      labelKey: "feature.field.rules",
       kind: "textarea",
-      placeholder: "images|ext:jpg,png\n2024|mtime:2024-01-01..2024-12-31\nbig|size:1048576..\nlogs|name:log\n",
-      hint: "四类条件：ext / mtime(from..to) / size(字节 min..max) / name 关键字；未命中默认留在原位。"
+      placeholder:
+        "images|ext:jpg,png\n2024|mtime:2024-01-01..2024-12-31\nbig|size:1048576..\nlogs|name:log\n",
+      hintKey: "feature.field.c08.hint"
     },
-    { name: "recursive", label: "递归 yes", placeholder: "yes" },
-    { name: "unclassifiedDir", label: "未分类去向（留空＝留在原位）", placeholder: "unsorted", wide: true }
+    { name: "recursive", labelKey: "feature.field.recursive", placeholder: "yes" },
+    {
+      name: "unclassifiedDir",
+      labelKey: "feature.field.unclassifiedDir",
+      placeholder: "unsorted",
+      wide: true
+    }
   ],
   c10: [
-    { name: "mode", label: "模式 extract|compress", placeholder: "extract" },
-    { name: "archive", label: "压缩包路径（解压）", placeholder: "/path/a.zip", wide: true },
-    { name: "outputDir", label: "解压输出目录（须已存在）", placeholder: "/path/out", wide: true },
-    { name: "maxTotalBytes", label: "解压总量上限字节（必填）", placeholder: "104857600" },
-    { name: "maxRatio", label: "解压比例上限（必填，如 100）", placeholder: "100" },
-    { name: "output", label: "压缩产物路径（压缩模式）", placeholder: "/path/bundle.zip", wide: true },
+    { name: "mode", labelKey: "feature.field.mode", placeholder: "extract" },
+    { name: "archive", labelKey: "feature.field.archive", placeholder: "/path/a.zip", wide: true },
+    {
+      name: "outputDir",
+      labelKey: "feature.field.extractOutputDir",
+      placeholder: "/path/out",
+      wide: true
+    },
+    { name: "maxTotalBytes", labelKey: "feature.field.maxTotalBytes", placeholder: "104857600" },
+    { name: "maxRatio", labelKey: "feature.field.maxRatio", placeholder: "100" },
+    {
+      name: "output",
+      labelKey: "feature.field.compressOutput",
+      placeholder: "/path/bundle.zip",
+      wide: true
+    },
     {
       name: "sources",
-      label: "压缩源（每行一个路径，压缩模式）",
+      labelKey: "feature.field.sources",
       kind: "textarea",
       placeholder: "/path/src\n/path/other.txt\n"
     },
-    { name: "compression", label: "压缩算法（压缩模式）", placeholder: "deflate" }
+    { name: "compression", labelKey: "feature.field.compression", placeholder: "deflate" }
   ],
   f11: [
-    { name: "root", label: "目标根目录", placeholder: "/path/root", wide: true },
+    { name: "root", labelKey: "feature.field.targetRoot", placeholder: "/path/root", wide: true },
     {
       name: "list",
-      label: "清单（每行一个相对路径）",
+      labelKey: "feature.field.list",
       kind: "textarea",
       placeholder: "folder-a\nfolder-b/sub\n",
-      hint: "路径相对目标根目录；禁止 .. 逃逸（E1003）。"
+      hintKey: "feature.field.f11.hint"
     }
   ],
   f12: [
-    { name: "dir", label: "改名目录", placeholder: "/path/dir", wide: true },
-    { name: "prefix", label: "前缀", placeholder: "追加到词根前" },
-    { name: "suffix", label: "后缀", placeholder: "追加到词根后" },
-    { name: "find", label: "查找文本", placeholder: "字面查找" },
-    { name: "replace", label: "替换为", placeholder: "替换文本" },
-    { name: "scope", label: "作用范围 full|stem|ext", placeholder: "full" }
+    { name: "dir", labelKey: "feature.field.renameDir", placeholder: "/path/dir", wide: true },
+    {
+      name: "prefix",
+      labelKey: "feature.field.prefix",
+      placeholderKey: "feature.placeholder.prefixAppend"
+    },
+    {
+      name: "suffix",
+      labelKey: "feature.field.suffix",
+      placeholderKey: "feature.placeholder.suffixAppend"
+    },
+    {
+      name: "find",
+      labelKey: "feature.field.find",
+      placeholderKey: "feature.placeholder.literalFind"
+    },
+    {
+      name: "replace",
+      labelKey: "feature.field.replace",
+      placeholderKey: "feature.placeholder.replaceText"
+    },
+    { name: "scope", labelKey: "feature.field.scope", placeholder: "full" }
   ]
 };
 
 export function FeaturePages({ view, onBack }: { view: View; onBack: () => void }) {
-  const title = FEATURE_TITLES[view] ?? view;
+  const { t } = useI18n();
+  const title = t(FEATURE_TITLES[view] ?? "nav.c09");
   const [form, setForm] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<PlanDocument | null>(null);
   const [preview, setPreview] = useState<RenamePreview | null>(null);
@@ -674,7 +785,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
           setPreview(null);
         }
       }
-      setNotice(`计划已生成：${next.entries.length} 条。核对预览后执行。`);
+      setNotice(t("feature.notice.planDone", { count: next.entries.length }));
     } catch (value) {
       setError(toIpcError(value));
     } finally {
@@ -700,7 +811,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
         done: 0,
         total: plan.entries.length
       });
-      setNotice("任务已加入队列；进度通过 task:// 事件推送。");
+      setNotice(t("feature.notice.queued"));
     } catch (value) {
       setError(toIpcError(value));
     } finally {
@@ -723,7 +834,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
         done: 0,
         total: 0
       });
-      setNotice("撤销任务已加入队列；回滚进度通过 task:// 事件推送。");
+      setNotice(t("feature.notice.undoQueued"));
     } catch (value) {
       setError(toIpcError(value));
     } finally {
@@ -736,7 +847,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     setError(null);
     try {
       await cancelTask(task.taskId);
-      setNotice("已请求取消：在执行中条目边界停止并回滚已完成条目。");
+      setNotice(t("feature.notice.cancelRequested"));
     } catch (value) {
       setError(toIpcError(value));
     }
@@ -756,7 +867,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
         done: 0,
         total: task.total
       });
-      setNotice("重试任务已入队（新 taskId 引用原 planId，仅重跑失败条目）。");
+      setNotice(t("feature.notice.retryQueued"));
     } catch (value) {
       setError(toIpcError(value));
     } finally {
@@ -811,7 +922,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             <strong>{error.code}</strong> · {error.message}
           </div>
           <button className="button button-ghost" type="button" onClick={() => setError(null)}>
-            关闭
+            {t("common.close")}
           </button>
         </div>
       )}
@@ -827,10 +938,10 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             <div className="card-header">
               <div>
                 <h2 className="card-title" id="feature-params">{title}</h2>
-                <p className="card-sub">先预览、再执行、可撤销（C18 干跑：plan 命令即零落盘预览）。</p>
+                <p className="card-sub">{t("feature.subtitle")}</p>
               </div>
               <button className="button button-ghost" type="button" onClick={onBack}>
-                返回 C09
+                {t("common.backC09")}
               </button>
             </div>
 
@@ -838,44 +949,48 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
               {(FEATURE_FIELDS[view] ?? []).map((spec) =>
                 spec.kind === "textarea" ? (
                   <div className="field wide" key={spec.name}>
-                    <label htmlFor={`${view}-${spec.name}`}>{spec.label}</label>
+                    <label htmlFor={`${view}-${spec.name}`}>{t(spec.labelKey)}</label>
                     <textarea
                       id={`${view}-${spec.name}`}
                       className="textarea"
                       value={form[spec.name] ?? ""}
                       onChange={(event) => setField(spec.name, event.target.value)}
-                      placeholder={spec.placeholder}
+                      placeholder={
+                        spec.placeholderKey ? t(spec.placeholderKey) : spec.placeholder
+                      }
                       rows={6}
                       spellCheck={false}
                     />
-                    {spec.hint && <div className="hint">{spec.hint}</div>}
+                    {spec.hintKey && <div className="hint">{t(spec.hintKey)}</div>}
                   </div>
                 ) : (
-                  field(spec.label, spec.name, spec.placeholder ?? "", spec.wide)
+                  field(
+                    t(spec.labelKey),
+                    spec.name,
+                    spec.placeholderKey ? t(spec.placeholderKey) : spec.placeholder ?? "",
+                    spec.wide
+                  )
                 )
               )}
             </div>
 
             {stale && (
               <div className="banner banner-warn" role="status" data-testid="plan-stale">
-                <div>参数已改动，旧计划预览失效：请重新生成计划再执行。</div>
+                <div>{t("feature.stale")}</div>
               </div>
             )}
 
             {dangerOpen && (
               <DangerConfirm
-                confirmLabel="已知悉，执行其余条目"
-                items={protectionHits.map(
-                  (entry) => `${entry.target ?? entry.source}：${entry.blocked?.reason ?? "受保护目录"}`
+                confirmLabel={t("c09.danger.confirm")}
+                items={protectionHits.map((entry) =>
+                  t("c09.danger.item", {
+                    path: entry.target ?? entry.source,
+                    reason: entry.blocked?.reason ?? t("c09.danger.protectedReason")
+                  })
                 )}
-                title="命中保护目录"
-                body={
-                  <>
-                    本次计划里有 {protectionHits.length} 条落在保护目录内，
-                    <strong>这些条目已被禁止写入、不会执行</strong>
-                    （强制力在内核执行层，界面确认不改变该判定）。其余条目将继续执行，是否继续？
-                  </>
-                }
+                title={t("c09.danger.title")}
+                body={t("c09.danger.body", { count: protectionHits.length })}
                 onCancel={() => setDangerOpen(false)}
                 onConfirm={() => {
                   setDangerOpen(false);
@@ -885,7 +1000,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             )}
 
             <div className="toolbar">
-              <span className="hint">plan 命令即干跑预览（C18）：零落盘、重复预览幂等。</span>
+              <span className="hint">{t("feature.plan.hint")}</span>
               <button
                 className="button button-primary"
                 type="button"
@@ -893,7 +1008,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 disabled={busy !== null || active}
               >
                 {busy === "plan" ? <Loader2 size={16} className="spin" /> : null}
-                {busy === "plan" ? "正在生成计划…" : "生成计划预览"}
+                {busy === "plan" ? t("feature.plan.busy") : t("feature.plan.cta")}
               </button>
             </div>
           </section>
@@ -902,21 +1017,25 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             <section className="card" aria-labelledby="feature-plan">
               <div className="card-header">
                 <div>
-                  <h2 className="card-title" id="feature-plan">计划预览</h2>
+                  <h2 className="card-title" id="feature-plan">{t("feature.preview.title")}</h2>
                   <p className="card-sub">
-                    {plan.entries.length} 条 ·受阻 {plan.stats.blocked} ·警告 {plan.stats.warning}
+                    {t("feature.preview.summary", {
+                      count: plan.entries.length,
+                      blocked: plan.stats.blocked,
+                      warning: plan.stats.warning
+                    })}
                   </p>
                 </div>
                 <span className="plan-id" title={plan.planId}>{plan.planId}</span>
               </div>
               <div className="table">
                 <div className="row row-head">
-                  <span>源</span>
-                  <span>目标 / 说明</span>
+                  <span>{t("feature.table.source")}</span>
+                  <span>{t("feature.table.target")}</span>
                 </div>
                 {/* 方案 6.2：按目录处理的计划动辄上千条，只挂窗口内的行。 */}
                 <VirtualList
-                  label="计划条目"
+                  label={t("feature.preview.list")}
                   items={plan.entries}
                   getKey={(entry) => entry.entryId}
                   renderRow={(entry) => (
@@ -953,8 +1072,8 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
           <section className="card" aria-labelledby="feature-execute">
             <div className="card-header">
               <div>
-                <h2 className="card-title" id="feature-execute">执行与撤销</h2>
-                <p className="card-sub">C06：撤销前可回滚预演；回滚为终态。</p>
+                <h2 className="card-title" id="feature-execute">{t("feature.execute.title")}</h2>
+                <p className="card-sub">{t("feature.execute.sub")}</p>
               </div>
             </div>
             <div className="button-row">
@@ -973,7 +1092,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 }
               >
                 {busy === "apply" ? <Loader2 size={16} className="spin" /> : null}
-                {active ? "执行中…" : "执行"}
+                {active ? t("feature.execute.applying") : t("feature.execute.apply")}
               </button>
               {active && (
                 <button
@@ -983,7 +1102,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                   onClick={onCancel}
                   disabled={task?.state === "cancelling"}
                 >
-                  {task?.state === "cancelling" ? "取消中…" : "取消"}
+                  {task?.state === "cancelling"
+                    ? t("common.cancelling")
+                    : t("common.cancelAction")}
                 </button>
               )}
               {task !== null &&
@@ -997,7 +1118,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                     onClick={onRetryFailed}
                     disabled={busy !== null}
                   >
-                    重试失败项
+                    {t("common.retryFailed")}
                   </button>
                 )}
               <button
@@ -1006,7 +1127,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 onClick={onUndoDryRun}
                 disabled={!plan || stale}
               >
-                回滚预演
+                {t("feature.execute.dryRun")}
               </button>
               <button
                 className="button button-secondary"
@@ -1015,7 +1136,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 disabled={!plan || busy !== null || active || stale}
               >
                 {busy === "undo" ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
-                撤销
+                {t("common.undo")}
               </button>
             </div>
             {task && (
@@ -1024,7 +1145,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                   <span className="task-id" title={task.taskId}>{task.taskId}</span>
                   <span className="badge">{task.state}</span>
                 </div>
-                <div className="progress" role="progressbar" aria-label="进度">
+                <div className="progress" role="progressbar" aria-label={t("common.progress")}>
                   <div
                     className="progress-fill"
                     style={{
@@ -1033,7 +1154,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                   />
                 </div>
                 <div className="hint">
-                  {task.phase} · {task.done}/{task.total}
+                  {phaseLabel(t, task.phase)} · {task.done}/{task.total}
                   {task.message ? ` · ${task.message}` : ""}
                 </div>
               </div>
@@ -1041,9 +1162,13 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             {dryRun && (
               <div className="banner banner-info" role="status">
                 <div>
-                  <strong>回滚预演</strong> · 冲突 {dryRun.conflictCount} · 缺失 {dryRun.missingCount}
+                  <strong>{t("feature.dryRun.title")}</strong> ·{" "}
+                  {t("feature.dryRun.summary", {
+                    conflict: dryRun.conflictCount,
+                    missing: dryRun.missingCount
+                  })}
                   <VirtualList
-                    label="回滚预演条目"
+                    label={t("feature.dryRun.title")}
                     items={dryRun.entries}
                     getKey={(entry) => entry.entryId}
                     renderRow={(entry) => (
@@ -1058,7 +1183,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             )}
             {terminalOk && (
               <div className="banner banner-info" role="status">
-                <div>执行完成；如需恢复可点击「撤销」（回滚为终态，不可二次回滚）。</div>
+                <div>{t("feature.execute.done")}</div>
               </div>
             )}
           </section>
@@ -1067,22 +1192,29 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
             <section className="card" aria-labelledby="c05-preview">
               <div className="card-header">
                 <div>
-                  <h2 className="card-title" id="c05-preview">C05 预览与冲突检测</h2>
+                  <h2 className="card-title" id="c05-preview">{t("feature.c05.title")}</h2>
                   <p className="card-sub">
-                    将处理 {preview.counts.toProcess} · 跳过 {preview.counts.skipped} · 冲突{" "}
-                    {preview.counts.conflicts} · 异常 {preview.counts.blocked}
+                    {t("feature.c05.summary", {
+                      process: preview.counts.toProcess,
+                      skipped: preview.counts.skipped,
+                      conflicts: preview.counts.conflicts,
+                      blocked: preview.counts.blocked
+                    })}
                   </p>
                 </div>
               </div>
               <div className="table">
                 <div className="table-scroll">
                   <div className="row row-head">
-                    <span>状态</span>
-                    <span>旧名 → 新名</span>
+                    <span>{t("feature.c05.table.status")}</span>
+                    <span>{t("feature.c05.table.rename")}</span>
                   </div>
                   {preview.rows.map((row) => (
                     <div className="row" key={row.entryId}>
-                      <span>{statusBadge(row.status as PreviewStatus)}{row.twoPhase ? " (两阶段)" : ""}</span>
+                      <span>
+                        {statusBadge(t, row.status as PreviewStatus)}
+                        {row.twoPhase ? t("feature.c05.twoPhase") : ""}
+                      </span>
                       <span className="path">
                         {row.oldPath} → {row.newPath}
                         {row.detail ? ` · ${row.detail}` : ""}
@@ -1106,9 +1238,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
           <section className="card">
             <div className="card-header">
               <div>
-                <h2 className="card-title">形态</h2>
+                <h2 className="card-title">{t("feature.form.title")}</h2>
                 <p className="card-sub">
-                  {isTauri() ? "桌面壳：本地文件系统" : "浏览器预览 · mock IPC（无真实计划）"}
+                  {isTauri() ? t("feature.form.desktop") : t("feature.form.web")}
                 </p>
               </div>
             </div>

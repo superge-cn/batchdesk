@@ -92,4 +92,20 @@ describe("功能视图导航可达", () => {
     await userEvent.click(within(main).getByRole("button", { name: /返回 C09/ }));
     expect(main.textContent).toContain("重复文件查找");
   });
+
+  it("「设置」是能点开的真实视图：五组配置与语言选择都在", async () => {
+    // 侧栏原先的 disabled 占位换成真页面后，要能证明它真的渲染了设置项。
+    render(<App />);
+    const nav = screen.getByRole("navigation", { name: "功能导航" });
+    const main = screen.getByRole("main");
+    const entry = within(nav).getByRole("button", { name: /设置/ });
+    expect(entry).toBeEnabled();
+
+    await userEvent.click(entry);
+    for (const title of ["通用", "处理", "性能", "安全", "日志"]) {
+      expect(await within(main).findByRole("heading", { name: title })).toBeVisible();
+    }
+    expect(within(main).getByLabelText("界面语言")).toBeVisible();
+    expect(within(main).getByLabelText("界面语言")).toHaveValue("zh-CN");
+  });
 });

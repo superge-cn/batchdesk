@@ -9,7 +9,8 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { VirtualList } from "./VirtualList";
-import { isActiveState, phaseLabel, stateBadge } from "./labels";
+import { isActiveState, phaseLabel, stateBadge, type Translate } from "./labels";
+import { useI18n } from "./i18n";
 import type { IpcError, TaskState, TaskSummary } from "./lib/ipc/types";
 
 /** 本会话内由 task:// 事件推动的实时态；列表里的静态摘要用它覆盖。 */
@@ -29,9 +30,9 @@ function shortId(taskId: string) {
   return taskId.length > 20 ? `…${taskId.slice(-10)}` : taskId;
 }
 
-function progressText(task: TaskSummary) {
+function progressText(t: Translate, task: TaskSummary) {
   const percent = task.total > 0 ? Math.min(100, Math.round((task.done / task.total) * 100)) : 0;
-  return `${phaseLabel(task.phase)} · ${task.done}/${task.total}${task.total > 0 ? ` · ${percent}%` : ""}`;
+  return `${phaseLabel(t, task.phase)} · ${task.done}/${task.total}${task.total > 0 ? ` · ${percent}%` : ""}`;
 }
 
 function timeText(task: TaskSummary) {
@@ -63,6 +64,7 @@ export function TaskHistory({
   const [notice, setNotice] = useState<string | null>(null);
   const [busyTask, setBusyTask] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { t } = useI18n();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -118,10 +120,10 @@ export function TaskHistory({
           type="button"
           disabled={busy}
           onClick={() =>
-            void run(task, () => recoverTask(task.taskId, "resume"), "已提交续跑；进度见上方任务面板。")
+            void run(task, () => recoverTask(task.taskId, "resume"), t("tasks.notice.resumed"))
           }
         >
-          <Play size={14} /> 续跑
+          <Play size={14} /> {t("common.resumeRun")}
         </button>,
         <button
           key="rollback"
@@ -129,19 +131,21 @@ export function TaskHistory({
           type="button"
           disabled={busy}
           onClick={() =>
-            void run(task, () => recoverTask(task.taskId, "rollback"), "已提交回滚。")
+            void run(task, () => recoverTask(task.taskId, "rollback"), t("tasks.notice.rollback"))
           }
         >
-          <Undo2 size={14} /> 回滚
+          <Undo2 size={14} /> {t("common.rollback")}
         </button>,
         <button
           key="discard"
           className="button button-ghost"
           type="button"
           disabled={busy}
-          onClick={() => void run(task, () => recoverTask(task.taskId, "discard"), "已放弃恢复。")}
+          onClick={() =>
+            void run(task, () => recoverTask(task.taskId, "discard"), t("tasks.notice.discard"))
+          }
         >
-          放弃
+          {t("common.discard")}
         </button>
       );
       return buttons;
@@ -154,10 +158,12 @@ export function TaskHistory({
           className="button button-danger"
           type="button"
           disabled={busy}
-          aria-label={`取消任务 ${task.taskId}`}
-          onClick={() => void run(task, () => cancelTask(task.taskId), "取消已提交；未落盘的条目不再执行。")}
+          aria-label={t("tasks.aria.cancel", { id: task.taskId })}
+          onClick={() =>
+            void run(task, () => cancelTask(task.taskId), t("tasks.notice.cancel"))
+          }
         >
-          <X size={14} /> 取消
+          <X size={14} /> {t("common.cancelAction")}
         </button>
       );
     }
@@ -169,10 +175,10 @@ export function TaskHistory({
           className="button button-secondary"
           type="button"
           disabled={busy}
-          aria-label={`重试失败项 ${task.taskId}`}
-          onClick={() => void run(task, () => retryTask(task.taskId), "已提交重试；只重跑失败条目。")}
+          aria-label={t("tasks.aria.retry", { id: task.taskId })}
+          onClick={() => void run(task, () => retryTask(task.taskId), t("tasks.notice.retry"))}
         >
-          <RotateCcw size={14} /> 重试
+          <RotateCcw size={14} /> {t("common.retry")}
         </button>
       );
     }
@@ -186,12 +192,12 @@ export function TaskHistory({
           className="button button-secondary"
           type="button"
           disabled={busy}
-          aria-label={`撤销计划 ${planId}`}
+          aria-label={t("tasks.aria.undo", { plan: planId })}
           onClick={() =>
-            void run(task, () => undoPlan(planId), "已提交撤销；回滚为终态。")
+            void run(task, () => undoPlan(planId), t("tasks.notice.undo"))
           }
         >
-          <Undo2 size={14} /> 撤销
+          <Undo2 size={14} /> {t("common.undo")}
         </button>
       );
     }
@@ -210,7 +216,7 @@ export function TaskHistory({
             {error.detail && <div className="muted">{error.detail}</div>}
           </div>
           <button className="button button-ghost" type="button" onClick={() => setError(null)}>
-            关闭
+            {t("common.close")}
           </button>
         </div>
       )}
@@ -223,9 +229,9 @@ export function TaskHistory({
       <section className="card" aria-labelledby="tasks-title">
         <div className="card-header">
           <div>
-            <h2 className="card-title" id="tasks-title">任务与撤销</h2>
+            <h2 className="card-title" id="tasks-title">{t("tasks.detail")}</h2>
             <p className="card-sub">
-              共 {total} 条任务 · 进行中 {activeCount} 条 · 撤销走共享 Journal，回滚为终态。
+              {t("tasks.summary", { total, active: activeCount })}
             </p>
           </div>
           <div className="button-row">
@@ -235,28 +241,28 @@ export function TaskHistory({
               onClick={() => void refresh()}
               disabled={loading}
             >
-              <RefreshCw size={14} className={loading ? "spin" : undefined} /> 刷新
+              <RefreshCw size={14} className={loading ? "spin" : undefined} /> {t("common.refresh")}
             </button>
             <button className="button button-ghost" type="button" onClick={onBack}>
-              返回 C09
+              {t("common.backC09")}
             </button>
           </div>
         </div>
 
         {rows.length === 0 ? (
           <div className="empty">
-            还没有任务记录。去「数据清理」或任一功能页生成预览并执行，任务会出现在这里。
+            {t("tasks.empty")}
           </div>
         ) : (
           <div className="table">
             <div className="row row-tasks row-head">
-              <span>任务</span>
-              <span>进度</span>
-              <span>状态</span>
-              <span>操作</span>
+              <span>{t("tasks.table.task")}</span>
+              <span>{t("tasks.table.progress")}</span>
+              <span>{t("tasks.table.state")}</span>
+              <span>{t("tasks.table.actions")}</span>
             </div>
             <VirtualList
-              label="任务列表"
+              label={t("tasks.detail")}
               items={rows}
               getKey={(task) => task.taskId}
               renderRow={(task) => (
@@ -265,13 +271,13 @@ export function TaskHistory({
                     {task.kind} · {shortId(task.taskId)}
                   </span>
                   <span className="reason" title={task.message}>
-                    {progressText(task)}
+                    {progressText(t, task)}
                     {task.message ? ` · ${task.message}` : ""}
                   </span>
-                  <span>{stateBadge(task.state)}</span>
+                  <span>{stateBadge(t, task.state)}</span>
                   <span className="button-row task-row-actions">
                     {timeText(task) !== "—" && (
-                      <span className="hint" title="开始 / 完成时间">{timeText(task)}</span>
+                      <span className="hint" title={t("tasks.time")}>{timeText(task)}</span>
                     )}
                     {actionsFor(task)}
                   </span>

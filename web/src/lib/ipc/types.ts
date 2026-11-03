@@ -247,3 +247,33 @@ export interface UndoDryRun {
   conflictCount: number;
   missingCount: number;
 }
+
+// ── 配置（设计 03 §2／§2.1／§4）───────────────────────────────────────
+export type ConfigScope =
+  | "general"
+  | "processing"
+  | "performance"
+  | "security"
+  | "logging";
+
+export type SettingSource = "default" | "user" | "recipe" | "task";
+
+/** 设置页"为什么是这个值"的数据支撑：生效值 + 来源 + 用户档 + 默认值。 */
+export interface SettingValue<T = unknown> {
+  value: T;
+  effectiveSource: SettingSource;
+  userValue?: T;
+  defaultValue: T;
+}
+
+/** 单 scope 的逐项来源视图（getConfig({scope}) / setConfig / resetScope 出参）。 */
+export interface ScopeView {
+  scope: ConfigScope;
+  values: Record<string, SettingValue>;
+}
+
+export interface ConfigDocument {
+  configVersion: number;
+  updatedAt: string;
+  scopes: Partial<Record<ConfigScope, Record<string, unknown>>>;
+}

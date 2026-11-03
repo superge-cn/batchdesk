@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
+import { useI18n } from "./i18n";
 
 /**
  * 危险级二次确认对话框（方案 §7.11：危险动作必须二次确认且确认按钮不带默认焦点；
@@ -12,7 +13,7 @@ export interface DangerConfirmProps {
   /** 高危条目清单（通常是命中保护目录的路径）。 */
   items: string[];
   confirmLabel: string;
-  /** 次要动作文案；缺省"取消"（危险确认的默认语义）。 */
+  /** 次要动作文案；缺省为资源包的「取消」（危险确认的默认语义）。 */
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
@@ -23,11 +24,12 @@ export function DangerConfirm({
   body,
   items,
   confirmLabel,
-  cancelLabel = "取消",
+  cancelLabel,
   onConfirm,
   onCancel
 }: DangerConfirmProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const { t } = useI18n();
 
   useEffect(() => {
     // 「回车即确认」的误操作路径在视觉层即被消除：焦点始终落取消，不给危险按钮。
@@ -68,7 +70,7 @@ export function DangerConfirm({
             type="button"
             onClick={onCancel}
           >
-            {cancelLabel}
+            {cancelLabel ?? t("common.cancel")}
           </button>
           <button
             className="button button-danger"
