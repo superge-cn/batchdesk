@@ -43,6 +43,7 @@ import {
 } from "./lib/ipc";
 import { FeaturePages } from "./FeaturePages";
 import { DangerConfirm } from "./DangerConfirm";
+import { ErrorBanner } from "./ErrorBanner";
 import { VirtualList } from "./VirtualList";
 import { phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
@@ -443,12 +444,13 @@ function AppShell() {
 
   async function onPlan() {
     if (!root.trim()) {
-      setError({ code: "E1001", message: t("c09.error.rootRequired"), retryable: false });
+      // 表单还差一步：用提示条而不是错误横幅——它没有码位，也不该占用错误码空间。
+      setNotice(t("c09.error.rootRequired"));
       return;
     }
     const quick = quickWindow.trim();
     if (quick && (!Number.isInteger(Number(quick)) || Number(quick) <= 0)) {
-      setError({ code: "E1002", message: t("c09.error.quickWindow"), retryable: false });
+      setNotice(t("c09.error.quickWindow"));
       return;
     }
     setBusy("plan");
@@ -807,17 +809,7 @@ function AppShell() {
           <div className="content">
             {activeView === "c09" ? (
             <div style={{ display: "contents" }}>
-            {error && (
-              <div className="banner banner-danger" role="alert">
-                <div>
-                  <strong>{error.code}</strong> · {error.message}
-                  {error.detail && <div className="muted">{error.detail}</div>}
-                </div>
-                <button className="button button-ghost" type="button" onClick={() => setError(null)}>
-                  {t("common.close")}
-                </button>
-              </div>
-            )}
+            {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
             {notice && (
               <div className="banner banner-info" role="status">
                 <div>{notice}</div>

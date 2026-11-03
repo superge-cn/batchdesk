@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Info, RotateCcw } from "lucide-react";
 import { getConfig, resetScope, setConfig, toIpcError } from "./lib/ipc";
 import { DEFAULT_LANG, useI18n, type MessageKey } from "./i18n";
+import { ErrorBanner } from "./ErrorBanner";
 import type { IpcError, ScopeView, SettingValue, ConfigScope } from "./lib/ipc/types";
 
 type FieldKind = "select" | "text" | "number" | "auto" | "boolean" | "lines";
@@ -377,17 +378,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="content">
-      {error && (
-        <div className="banner banner-danger" role="alert">
-          <div>
-            <strong>{error.code}</strong> · {error.message}
-            {error.detail && <div className="muted">{error.detail}</div>}
-          </div>
-          <button className="button button-ghost" type="button" onClick={() => setError(null)}>
-            {t("common.close")}
-          </button>
-        </div>
-      )}
+      {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
       {readOnly && (
         <div className="banner banner-warn" role="status">
           <div>{t("settings.readonly")}</div>

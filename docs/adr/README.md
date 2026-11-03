@@ -91,6 +91,7 @@
 | [0058](./0058-拉取式读取端口与C13外排流式归并.md) | 拉取式读取端口 `open_read_stream`＋`CsvRecordStream`；C13 外排两相有界归并＋块文件守卫清理 | 已采纳 |
 | [0059](./0059-文案资源层与设置区的实现边界.md) | 文案资源层与设置区：自写 `I18nProvider`（不引 i18next）＋`MessageKey` 编译期约束＋缺 key 回退；门禁七项与三类例外；`SCOPES` 数据驱动＋`FieldKind` 分派 | 已采纳 |
 | [0060](./0060-桌面壳CSP与capabilities的最小化取值.md) | 桌面壳加固：生产 CSP 与 `devCsp` 分离（`script-src 'self'`、`object-src 'none'`，唯一例外 `style-src 'unsafe-inline'`）；capabilities 仅 `core:default`；`withGlobalTauri=false`＋`freezePrototype`；6 项静态断言 | 已采纳 |
+| [0061](./0061-错误文案的界面分层与错误码映射表.md) | 错误文案分层：界面只显示码位＋本地化 summary/action（不渲染后端 message/detail）、21 码位映射表、未收录码位回退原文、表单校验改走提示条、门禁第 8 项 | 已采纳 |
 | [0015](./0015-F01分片计划与撤销语义.md) | F01 分片计划与撤销语义（split 动作＋range＋流式区间复制） | 已采纳 |
 | [0016](./0016-F04合并计划与编码统一语义.md) | F04 合并计划与编码统一语义（merge 动作＋单条 entry＋BOM 只写一次） | 已采纳 |
 | [0017](./0017-F05-CSV分片记录边界与多区间原子写.md) | F05 CSV 分片记录边界与多区间原子写（csv 载荷＋copy_ranges_atomic） | 已采纳 |

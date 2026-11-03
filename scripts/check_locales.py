@@ -32,8 +32,12 @@ REQUIRED_LANGS = ["zh-CN", "en-US"]
 
 # 资源 key 的域前缀：与 web/src 的 t("...")／注册表字面量共用同一套命名。
 KEY_DOMAIN_RE = re.compile(
-    r"^(?:app|nav|common|task|c09|feature|tasks|settings)\.[A-Za-z0-9_.]+$"
+    r"^(?:app|nav|common|task|c09|feature|tasks|settings|error)\.[A-Za-z0-9_.]+$"
 )
+# 错误码文案族：映射表在 web/src/errors.ts，key 形如 error.E2004.summary（设计 06 §3）。
+ERROR_MAP_FILE = SRC_DIR / "errors.ts"
+ERROR_KEY_RE = re.compile(r'"error\.(E\d{4})\.(summary|action)"')
+ERROR_BUNDLE_KEY_RE = re.compile(r"^error\.(E\d{4})\.(summary|action|detail)$")
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 CJK_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 
@@ -195,6 +199,34 @@ def main() -> int:
                 continue
             failures.append(f"{relative}:{number} 硬编码中文：{line.strip()[:60]}")
 
+    # 8. 错误码文案族（设计 06 §3／设计 09 §5）：映射表里的码位必须有 summary 与
+    # action 两段中文/英文文案；语言包里也不得出现映射表之外的 error.* 码位。
+    if not ERROR_MAP_FILE.exists():
+        failures.append("找不到 web/src/errors.ts：错误码文案族没有映射表")
+    else:
+        map_text = strip_comments(ERROR_MAP_FILE.read_text(encoding="utf-8"))
+        mapped: dict[str, set[str]] = {}
+        for code, part in ERROR_KEY_RE.findall(map_text):
+            mapped.setdefault(code, set()).add(part)
+        if not mapped:
+            failures.append("web/src/errors.ts 里没有任何 error.<code>.summary/action 映射")
+        for code, parts in sorted(mapped.items()):
+            for part in ("summary", "action"):
+                if part not in parts:
+                    failures.append(f"错误码 {code} 在 errors.ts 里缺 {part} 映射")
+                key = f"error.{code}.{part}"
+                for lang in REQUIRED_LANGS:
+                    if key not in bundles[lang]:
+                        failures.append(f"{lang} 缺错误码文案：{key}")
+        for lang, bundle in bundles.items():
+            for key in bundle:
+                match = ERROR_BUNDLE_KEY_RE.match(key)
+                if match and match.group(1) not in mapped:
+                    failures.append(
+                        f"{lang}.{key} 的码位没有进 errors.ts 映射表"
+                        "（要么补映射，要么删文案）"
+                    )
+
     if failures:
         print("国际化门禁未通过：", file=sys.stderr)
         for failure in failures:
@@ -204,7 +236,8 @@ def main() -> int:
     print(
         "国际化门禁通过："
         f"{len(bundles)} 个语言包 × {len(default_keys)} 个 key，key 集合/占位符/语言残留一致；"
-        f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文。"
+        f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文；"
+        f"错误码文案 {len(mapped)} 个码位两段齐全。"
     )
     return 0
 
