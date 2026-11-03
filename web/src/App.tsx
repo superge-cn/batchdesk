@@ -51,7 +51,13 @@ import { phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
 import { SettingsPage } from "./SettingsPage";
 import { I18nProvider, useI18n, type MessageKey } from "./i18n";
-import { preferredDirectory, rememberDirectory } from "./lib/uiState";
+import {
+  FEATURE_SECTION,
+  preferredDirectory,
+  rememberDirectory,
+  rememberView,
+  restoreView
+} from "./lib/uiState";
 import type {
   ApplyReport,
   CleanupOutcome,
@@ -144,6 +150,12 @@ const NAV_ITEMS: Array<{ id: View; label: MessageKey; tag: string; Icon: LucideI
   { id: "tasks", label: "nav.tasks", tag: "QUEUE", Icon: History },
   { id: "settings", label: "nav.settings", tag: "SET", Icon: Settings }
 ];
+
+/** 顶层视图（与功能页区分）：`lastSection` 直接记它们的 id。 */
+const TOP_LEVEL_VIEWS: View[] = ["c09", "tasks", "settings"];
+const FEATURE_VIEWS: View[] = NAV_ITEMS.map((item) => item.id).filter(
+  (id) => !TOP_LEVEL_VIEWS.includes(id)
+);
 
 /** 顶栏标题：C09 用页面自己的两行说明，其余视图用导航名（卡片内另有区块标题）。 */
 const VIEW_TITLES: Partial<Record<View, MessageKey>> = {
@@ -315,6 +327,9 @@ function AppShell() {
         const last = preferredDirectory(navigation);
         // 只填空输入框：用户已经在敲的话不覆盖。
         if (last) setRoot((current) => (current.trim() ? current : last));
+        // 回到上次的页面：功能 id 已不在导航表里就保持默认（不把用户带到空白页）。
+        const remembered = restoreView(navigation, FEATURE_VIEWS, TOP_LEVEL_VIEWS);
+        if (remembered) setActiveView(remembered as View);
       })
       .catch(() => undefined);
     return () => {
@@ -479,6 +494,19 @@ function AppShell() {
     } catch {
       // 刻意静默：UiState 可丢，且此刻用户关心的是预览结果而不是"记住目录"是否成功。
     }
+  }, []);
+
+  /** 切换视图并记住它（设计 03 §11.2 的 `lastSection`/`lastFeature`）。写失败静默，同 rememberRoot。 */
+  const selectView = useCallback((next: View) => {
+    setActiveView(next);
+    const isFeature = FEATURE_VIEWS.includes(next);
+    const navigation = rememberView(
+      navigationRef.current,
+      isFeature ? FEATURE_SECTION : next,
+      isFeature ? next : undefined
+    );
+    navigationRef.current = navigation;
+    setUiState({ navigation }).catch(() => undefined);
   }, []);
 
   async function onPlan() {
@@ -793,7 +821,7 @@ function AppShell() {
                   key={id}
                   className={`nav-item${activeView === id ? " active" : ""}`}
                   type="button"
-                  onClick={() => setActiveView(id)}
+                  onClick={() => selectView(id)}
                 >
                   <span>
                     <Icon size={16} /> {t(label)}
@@ -1336,11 +1364,11 @@ function AppShell() {
             </div>
             </div>
             ) : activeView === "tasks" ? (
-              <TaskHistory live={taskViews} onBack={() => setActiveView("c09")} />
+              <TaskHistory live={taskViews} onBack={() => selectView("c09")} />
             ) : activeView === "settings" ? (
-              <SettingsPage onBack={() => setActiveView("c09")} />
+              <SettingsPage onBack={() => selectView("c09")} />
             ) : (
-              <FeaturePages view={activeView} onBack={() => setActiveView("c09")} />
+              <FeaturePages view={activeView} onBack={() => selectView("c09")} />
             )}
           </div>
         </main>

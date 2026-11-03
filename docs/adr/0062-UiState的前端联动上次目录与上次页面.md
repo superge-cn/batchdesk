@@ -1,6 +1,6 @@
-# 0062. UiState 的前端联动：只做"上次目录"，用读改写而不是加命令
+# 0062. UiState 的前端联动：上次目录与上次页面，用读改写而不是加命令
 
-- **状态**：已采纳（2026-11-03，设计 03 §11 的第一处界面联动）
+- **状态**：已采纳（2026-11-03，设计 03 §11 的界面联动：`navigation` 段的 `lastDirectory`/`recentDirectories` 与 `lastSection`/`lastFeature`）
 - **日期**：2026-11-03
 - **决策者**：开发代理（工程实现决策；字段集合取自设计 03 §11.2，语义对齐内核 `UiState::remember_directory`）
 - **关联**：设计 03 §11（UiState 定位/存储/schema/恢复规则）、设计 12 §2（`lib/state/` 目标目录）、ADR-0004（命令只经生成绑定）；`web/src/lib/uiState.ts`、`web/src/lib/ipc/index.ts`、`web/src/App.tsx`
@@ -51,4 +51,16 @@
 - `src/lib/uiState.test.ts` 4 项：去重置顶、兄弟字段保留、空目录不写、`preferredDirectory` 的空/空白/正常三态。
 - `src/App.uiState.test.tsx` 3 项：启动预填并挂候选、生成预览后回写（去重置顶且 `lastSection` 未被擦）、无记录时不预填不渲染候选。
 - 既有 `App.preflight.test.tsx`／`App.cancel-review.test.tsx` 的 `vi.mock("./lib/ipc")` 补 `getUiState`／`setUiState` 两个 stub（App 现在会调它们）。
-- `tsc --noEmit` 0 错；`vitest run` 11 → 13 文件、50 → 57 项全绿。
+- `tsc --noEmit` 0 错；`vitest run` 50 → **63 项**全绿（`lib/uiState.test.ts` 8 项＋`App.uiState.test.tsx` 5 项）。
+
+## 6. 补记（同日）：上次页面
+
+`navigation` 段还有两个字段没用起来：`lastSection` 与 `lastFeature`。补的方式与"上次目录"同构，不再重复取舍，只记三条新增判断：
+
+1. **section 的编码**：功能页统一写 `lastSection = "feature"` ＋ `lastFeature = <功能 id>`，顶层视图（`c09`/`tasks`/`settings`）直接写 `lastSection = <id>`。这样"功能页"与"顶层视图"在同一个字段里不混淆，恢复时也不用猜。
+2. **离开功能页不清 `lastFeature`**：恢复规则只在 `lastSection === "feature"` 时才读 `lastFeature`，留着上一次的功能 id 反而让下次回到功能页更连贯；清它需要往 patch 里送 `null`，而 `Option<String>` 的 null 语义要在前端类型里放宽成 `string | null`，不值当。
+3. **恢复要认"当前导航表"**：`lastFeature` 必须仍存在于 `NAV_ITEMS` 派生的 `FEATURE_VIEWS` 里，否则回默认视图——功能改名/下线后不能把用户带到一个空白页。同理未知的 `lastSection` 一律忽略。
+
+App 级的两个断言刻意只覆盖"顶层视图切换"的写回与"功能页恢复"的读回：点进功能页会把整页功能 UI（含 C05 预览命令）拖进 mock，那是 `FeaturePages` 自己的测试范围，不该在这里复制一份。`lastFeature` 的写入语义由 `lib/uiState.test.ts` 的 `rememberView` 覆盖。
+
+**仍未做**：`window`（窗口矩形与离屏 clamp）、`layout`（侧栏/面板宽度）、`tables`（列宽/排序）、`templatePrefs`；也没有"清除最近位置/重置布局"的界面入口。

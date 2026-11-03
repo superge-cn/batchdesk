@@ -35,7 +35,7 @@ vi.mock("./lib/ipc", () => ({
   retryTask: vi.fn(async () => ({ taskId: "task-retry" })),
   pauseTask: vi.fn(async () => undefined),
   resumeTask: vi.fn(async () => undefined),
-  listTasks: vi.fn(async () => ({ tasks: [], total: 0, offset: 0, limit: 50 })),
+  listTasks: vi.fn(async () => ({ items: [], total: 0 })),
   getStorageInfo: vi.fn(async () => ({ quarantineDir: "/q", journalFile: "/j" })),
   getIpcMeta: vi.fn(async () => ({ contractVersion: 1, kernelVersion: "0.1.0" })),
   listenTaskProgress: vi.fn(async () => () => undefined),
@@ -102,5 +102,38 @@ describe("上次目录与最近目录（设计 03 §11）", () => {
     const input = screen.getByLabelText(/扫描目录|要扫描的目录/);
     expect(input).toHaveValue("");
     expect(document.querySelector("#c09-recent-dirs")).toBeNull();
+  });
+});
+
+describe("上次页面（设计 03 §11.2 的 lastSection/lastFeature）", () => {
+  it("启动时回到上次的功能页", async () => {
+    vi.mocked(getUiState).mockResolvedValue({
+      uiStateVersion: 1,
+      updatedAt: "2026-11-03T00:00:00Z",
+      navigation: { lastSection: "feature", lastFeature: "f12" }
+    });
+
+    render(<App />);
+
+    const nav = await screen.findByRole("button", { name: /批量改名/ });
+    await waitFor(() => expect(nav).toHaveClass("active"));
+  });
+
+  it("切换页面时写回 lastSection", async () => {
+    vi.mocked(getUiState).mockResolvedValue({ uiStateVersion: 1, updatedAt: "" });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /任务与撤销/ }));
+    let patch = vi.mocked(setUiState).mock.calls.at(-1)?.[0] as {
+      navigation: { lastSection?: string };
+    };
+    expect(patch.navigation.lastSection).toBe("tasks");
+
+    await user.click(screen.getByRole("button", { name: /重复文件查找/ }));
+    patch = vi.mocked(setUiState).mock.calls.at(-1)?.[0] as {
+      navigation: { lastSection?: string };
+    };
+    expect(patch.navigation.lastSection).toBe("c09");
   });
 });
