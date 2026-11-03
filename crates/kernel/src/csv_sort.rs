@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 use crate::csv::Delimiter;
 use crate::csv_extract::ColumnPick;
 use crate::csv_merge::{normalized_columns, source_block, target_block};
-use crate::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
+use crate::encoding::{InvalidSequencePolicy, SourceEncoding, TargetEncoding};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::journal::FsOp;
@@ -411,6 +411,53 @@ fn compare_by_keys(
 
 /// 外排（§4.12 分块排序＋多路归并）：排序键与行号绑定后分块排序写临时文件，
 /// 归并时多路取最小；临时文件归并后尽力删除（不记 Journal，实现细节）。
+/// C13 外排临时块的清理守卫（ADR-0058）：作用域退出即删，成功与失败路径都不留
+/// `.batchdesk-sort-*.tmp`。临时文件属实现细节，不记 Journal。
+struct ChunkCleanup<'a> {
+    fs: &'a dyn crate::fs::FsAdapter,
+    paths: Vec<String>,
+}
+
+impl Drop for ChunkCleanup<'_> {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = self.fs.remove_file(path);
+        }
+    }
+}
+
+/// 按排序键稳定排序「行＋原序号」：键相等时用原序号兜底（`usize::MAX` 表示
+/// 跨块归并相，此时不替换已选中的游标，稳定性由块序承担）。
+fn sort_indexed(
+    mut rows: Vec<(Vec<String>, usize)>,
+    keys: &[PlanCsvSortKey],
+) -> Vec<(Vec<String>, usize)> {
+    rows.sort_by(|(left_row, left_index), (right_row, right_index)| {
+        compare_by_keys(left_row, *left_index, right_row, *right_index, keys)
+    });
+    rows
+}
+
+/// 把一批已排序的行写成 UTF-8 块文件（外排的落盘相）。
+fn write_chunk(
+    view: &crate::generic_apply::WorkerView<'_>,
+    parent: &str,
+    plan_size: u64,
+    chunk_index: usize,
+    rows: &[(Vec<String>, usize)],
+    delimiter: u8,
+) -> Result<String, KernelError> {
+    use crate::csv_merge::write_record;
+
+    let mut text = String::new();
+    for (row, _) in rows {
+        write_record(row, delimiter, &mut text);
+    }
+    let path = format!("{parent}/.batchdesk-sort-{plan_size}-{chunk_index}.tmp");
+    view.fs.write_atomic(&path, text.as_bytes())?;
+    Ok(path)
+}
+
 pub(crate) fn perform_csv_sort(
     view: &crate::generic_apply::WorkerView<'_>,
     source: &str,
@@ -418,7 +465,9 @@ pub(crate) fn perform_csv_sort(
     overwrite: bool,
     payload: &PlanCsvSort,
 ) -> Result<crate::generic_apply::Performed, KernelError> {
-    use crate::csv_merge::{parse_records, write_record};
+    use crate::csv_merge::CsvRecordStream;
+    use crate::encoding::StreamTranscoder;
+    use crate::generic_apply::{stream_csv_records, write_stream, CsvStreamWriter, StreamCsvInput};
 
     let encoding = payload.encoding.ok_or_else(|| {
         KernelError::new(
@@ -441,146 +490,158 @@ pub(crate) fn perform_csv_sort(
     } else {
         None
     };
-    let data = view.fs.read_bytes(source)?;
-    let decoded = transcode(
-        &data,
-        encoding,
-        TargetEncoding::Utf8 { bom: false },
-        invalid,
-    )?;
-    let records = parse_records(&decoded.bytes, delimiter.as_byte());
-    let (header, rows): (Option<Vec<String>>, Vec<Vec<String>>) = if payload.has_header {
-        let Some((header, rows)) = records.split_first() else {
-            return Err(KernelError::new(
-                "E2010",
-                "source header changed since plan preview; re-plan before applying",
-                None,
-                true,
-            ));
-        };
-        if normalized_columns(header) != payload.columns {
-            return Err(KernelError::new(
-                "E2010",
-                "source header changed since plan preview; re-plan before applying",
-                None,
-                true,
-            ));
-        }
-        (Some(header.to_vec()), rows.to_vec())
-    } else {
-        (None, records)
-    };
 
-    let mut output = String::new();
-    if let Some(header) = &header {
-        write_record(header, delimiter.as_byte(), &mut output);
+    let parent = match target.rfind(['/', '\\']) {
+        Some(index) => target[..index].to_string(),
+        None => ".".to_string(),
+    };
+    let chunk_limit = payload.external_chunk_rows.map(|rows| rows.max(1) as usize);
+
+    // 分块排序相（ADR-0058）：流式读源，缓冲到阈值行即排序落块——
+    // 内存 O(块行数＋单条记录)，不再整文件读入。
+    let mut header: Option<Vec<String>> = None;
+    let mut header_checked = false;
+    let mut buffer: Vec<(Vec<String>, usize)> = Vec::new();
+    // 守卫在分块相之前建立：输入相中途失败也要清掉已落盘的块文件。
+    let mut chunks = ChunkCleanup {
+        fs: view.fs,
+        paths: Vec::new(),
+    };
+    let mut next_index = 0usize;
+
+    stream_csv_records(
+        view,
+        &StreamCsvInput {
+            source,
+            expected_size: None,
+            encoding,
+            invalid,
+            delimiter: delimiter.as_byte(),
+        },
+        &mut |row| {
+            if payload.has_header && !header_checked {
+                header_checked = true;
+                if normalized_columns(&row) != payload.columns {
+                    return Err(KernelError::new(
+                        "E2010",
+                        "source header changed since plan preview; re-plan before applying",
+                        None,
+                        true,
+                    ));
+                }
+                header = Some(row);
+                return Ok(());
+            }
+            buffer.push((row, next_index));
+            next_index += 1;
+            if let Some(limit) = chunk_limit {
+                if buffer.len() >= limit {
+                    let rows = sort_indexed(std::mem::take(&mut buffer), &payload.keys);
+                    let path = write_chunk(
+                        view,
+                        &parent,
+                        payload.size,
+                        chunks.paths.len(),
+                        &rows,
+                        delimiter.as_byte(),
+                    )?;
+                    chunks.paths.push(path);
+                }
+            }
+            Ok(())
+        },
+    )?;
+    if payload.has_header && !header_checked {
+        // 与整段路径同口径：有表头而源里没有表头 ⇒ E2010。
+        return Err(KernelError::new(
+            "E2010",
+            "source header changed since plan preview; re-plan before applying",
+            None,
+            true,
+        ));
     }
 
-    let sort_rows = |mut rows: Vec<Vec<String>>| -> Vec<Vec<String>> {
-        let mut indexed: Vec<(Vec<String>, usize)> = rows
-            .drain(..)
-            .enumerate()
-            .map(|(index, row)| (row, index))
-            .collect();
-        indexed.sort_by(|(left_row, left_index), (right_row, right_index)| {
-            compare_by_keys(
-                left_row,
-                *left_index,
-                right_row,
-                *right_index,
-                &payload.keys,
-            )
-        });
-        indexed.into_iter().map(|(row, _)| row).collect()
-    };
+    let in_memory = chunks.paths.is_empty();
+    if !in_memory && !buffer.is_empty() {
+        // 尾块：不足一块阈值也必须落盘，否则归并相会漏行。
+        let rows = sort_indexed(std::mem::take(&mut buffer), &payload.keys);
+        let path = write_chunk(
+            view,
+            &parent,
+            payload.size,
+            chunks.paths.len(),
+            &rows,
+            delimiter.as_byte(),
+        )?;
+        chunks.paths.push(path);
+    }
 
-    match payload.external_chunk_rows {
-        Some(chunk_rows) if (rows.len() as u64) > chunk_rows => {
-            // 外排：分块（内存排序后写临时文件）→ k 路归并。
-            let chunk_rows = chunk_rows as usize;
-            let parent = match target.rfind(['/', '\\']) {
-                Some(index) => &target[..index],
-                None => ".",
-            };
-            let mut chunk_paths: Vec<String> = Vec::new();
-            for (chunk_index, chunk) in rows.chunks(chunk_rows).enumerate() {
-                let sorted = sort_rows(chunk.to_vec());
-                let chunk_path = format!(
-                    "{parent}/.batchdesk-sort-{}-{chunk_index}.tmp",
-                    payload.size
-                );
-                let mut chunk_out = String::new();
-                for row in &sorted {
-                    write_record(row, delimiter.as_byte(), &mut chunk_out);
+    view.fs.write_atomic_with(target, &mut |writer| {
+        let mut sink = CsvStreamWriter {
+            transcoder: StreamTranscoder::new(
+                SourceEncoding::Utf8,
+                target_encoding.without_bom(),
+                invalid,
+            ),
+            writer,
+        };
+        if let Some(prefix) = target_encoding.bom_prefix() {
+            write_stream(sink.writer, prefix)?;
+        }
+        if let Some(header) = &header {
+            sink.emit_record(header, delimiter.as_byte())?;
+        }
+        if in_memory {
+            let sorted = sort_indexed(std::mem::take(&mut buffer), &payload.keys);
+            for (row, _) in &sorted {
+                sink.emit_record(row, delimiter.as_byte())?;
+            }
+            return Ok(());
+        }
+        // k 路归并相：每块一个拉取式记录流，逐条取最小——块文件不整块驻留。
+        let mut streams: Vec<CsvRecordStream<Box<dyn std::io::Read + Send>>> =
+            Vec::with_capacity(chunks.paths.len());
+        for path in &chunks.paths {
+            streams.push(CsvRecordStream::new(
+                view.fs.open_read_stream(path)?,
+                delimiter.as_byte(),
+            ));
+        }
+        let mut cursors: Vec<Option<Vec<String>>> = (0..streams.len()).map(|_| None).collect();
+        loop {
+            for index in 0..streams.len() {
+                if cursors[index].is_none() {
+                    cursors[index] = streams[index].next_record()?;
                 }
-                let transcoded = transcode(
-                    chunk_out.as_bytes(),
-                    SourceEncoding::Utf8,
-                    TargetEncoding::Utf8 { bom: false },
-                    invalid,
-                )?;
-                view.fs.write_atomic(&chunk_path, &transcoded.bytes)?;
-                chunk_paths.push(chunk_path);
             }
-            // k 路归并：每块当前游标（记录已整块读回内存）。
-            let mut cursors: Vec<(Vec<Vec<String>>, usize)> = Vec::with_capacity(chunk_paths.len());
-            for path in &chunk_paths {
-                let chunk_data = view.fs.read_bytes(path)?;
-                let decoded = transcode(
-                    &chunk_data,
-                    SourceEncoding::Utf8,
-                    TargetEncoding::Utf8 { bom: false },
-                    invalid,
-                )?;
-                cursors.push((parse_records(&decoded.bytes, delimiter.as_byte()), 0));
-            }
-            while cursors.iter().any(|(rows, cursor)| *cursor < rows.len()) {
-                let mut best: Option<usize> = None;
-                for (index, (rows, cursor)) in cursors.iter().enumerate() {
-                    if *cursor >= rows.len() {
-                        continue;
-                    }
-                    match best {
-                        None => best = Some(index),
-                        Some(current) => {
-                            let current_row = &cursors[current].0[cursors[current].1];
-                            let candidate_row = &rows[*cursor];
-                            if compare_by_keys(
-                                candidate_row,
-                                usize::MAX,
-                                current_row,
-                                usize::MAX,
-                                &payload.keys,
-                            ) == Ordering::Less
-                            {
-                                best = Some(index);
-                            }
+            let mut best: Option<usize> = None;
+            for index in 0..cursors.len() {
+                let Some(row) = cursors[index].as_ref() else {
+                    continue;
+                };
+                match best {
+                    None => best = Some(index),
+                    Some(current) => {
+                        let current_row = cursors[current]
+                            .as_ref()
+                            .expect("the selected cursor is filled above");
+                        if compare_by_keys(row, usize::MAX, current_row, usize::MAX, &payload.keys)
+                            == Ordering::Less
+                        {
+                            best = Some(index);
                         }
                     }
                 }
-                let Some(index) = best else { break };
-                let row = cursors[index].0[cursors[index].1].clone();
-                cursors[index].1 += 1;
-                write_record(&row, delimiter.as_byte(), &mut output);
             }
-            for path in &chunk_paths {
-                let _ = view.fs.remove_file(path);
-            }
+            let Some(index) = best else { break };
+            let row = cursors[index]
+                .take()
+                .expect("the selected cursor is filled above");
+            sink.emit_record(&row, delimiter.as_byte())?;
         }
-        _ => {
-            for row in sort_rows(rows) {
-                write_record(&row, delimiter.as_byte(), &mut output);
-            }
-        }
-    }
+        Ok(())
+    })?;
 
-    let transcoded = transcode(
-        output.as_bytes(),
-        SourceEncoding::Utf8,
-        target_encoding,
-        invalid,
-    )?;
-    view.fs.write_atomic(target, &transcoded.bytes)?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {

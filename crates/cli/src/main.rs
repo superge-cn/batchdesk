@@ -39,13 +39,12 @@ use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
 };
 use kernel::encoding::{
-    detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, StreamTranscoder,
-    TargetEncoding,
+    detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+    TranscodeRewriter,
 };
 use kernel::fs::FsAdapter;
 use kernel::generic_apply::{
-    apply_generic_plan, ContentEditor, ContentRewriter, EditOutcome, EditedContent,
-    GenericApplyContext,
+    apply_generic_plan, ContentEditor, ContentRewriter, EditedContent, GenericApplyContext,
 };
 use kernel::journal::JournalStore;
 use kernel::license::AlwaysAllowLicense;
@@ -794,15 +793,10 @@ fn run_apply(args: &[String]) -> i32 {
         let is_c01 = plan.kind == C01_KIND;
         let is_c02 = plan.kind == kernel::line_endings::C02_KIND;
         let is_c03 = plan.kind == kernel::replace_content::C03_KIND;
-        // c01 的转码编辑器已流式化（ADR-0055）：计划期已确认源编码 ⇒ 按块解码写出。
+        // c01 的转码重写器已流式化（ADR-0055/0056）：计划期已确认源编码 ⇒ 按块解码写出。
         let transcode_rewriter: Option<Box<dyn ContentRewriter>> = if is_c01 {
-            match generic_plan_encoding(&plan) {
-                Ok((target, invalid, prior, source)) => Some(Box::new(TranscodeRewriter {
-                    target,
-                    invalid,
-                    prior,
-                    source,
-                })),
+            match TranscodeRewriter::from_plan(&plan) {
+                Ok(rewriter) => Some(Box::new(rewriter)),
                 Err(error) => return print_kernel_error(&error),
             }
         } else {
@@ -840,12 +834,12 @@ fn run_apply(args: &[String]) -> i32 {
         let content_editor =
             (has_edit_content && !streaming).then_some(&editor as ContentEditor<'_>);
         let rewriter: Option<Box<dyn ContentRewriter>> = if is_c02 {
-            match c02_rewriter_from_plan(&plan) {
+            match LineEndingRewriter::from_plan(&plan) {
                 Ok(rewriter) => Some(Box::new(rewriter)),
                 Err(error) => return print_kernel_error(&error),
             }
         } else if is_c03 {
-            match c03_rewriter_from_plan(&plan) {
+            match ReplaceRewriter::from_plan(&plan) {
                 Ok(rewriter) => Some(Box::new(rewriter)),
                 Err(error) => return print_kernel_error(&error),
             }
@@ -902,75 +896,6 @@ fn run_generic_or_specific(
     }
 }
 
-/// c01 计划的 apply 侧参数（与 plan 期写入的 params 快照保持一致）。
-/// C01 转码的流式编辑器（ADR-0055）：源编码已在计划期确认时按块
-/// `read`→`StreamTranscoder`→`write`，内存 O(块)；目标 BOM 只写一次。
-/// 替换计数经 `EditOutcome.detail` 进条目报告（口径同 ADR-0050）。
-struct TranscodeRewriter {
-    target: TargetEncoding,
-    invalid: InvalidSequencePolicy,
-    prior: PlatformPrior,
-    source: Option<SourceEncoding>,
-}
-
-fn rewrite_io_error(error: std::io::Error) -> kernel::error::KernelError {
-    kernel::error::KernelError::new(
-        "E3005",
-        "content rewrite failed",
-        Some(error.to_string()),
-        false,
-    )
-}
-
-impl ContentRewriter for TranscodeRewriter {
-    fn rewrite(
-        &self,
-        _entry: &kernel::plan::PlanEntry,
-        input: &mut dyn std::io::Read,
-        output: &mut dyn std::io::Write,
-    ) -> Result<EditOutcome, kernel::error::KernelError> {
-        if let Some(source) = self.source {
-            if let Some(prefix) = self.target.bom_prefix() {
-                output.write_all(prefix).map_err(rewrite_io_error)?;
-            }
-            let mut transcoder =
-                StreamTranscoder::new(source, self.target.without_bom(), self.invalid);
-            let mut buffer = vec![0u8; 64 * 1024];
-            loop {
-                let read = input.read(&mut buffer).map_err(rewrite_io_error)?;
-                if read == 0 {
-                    break;
-                }
-                let mut encoded = Vec::new();
-                transcoder.push(&buffer[..read], &mut encoded)?;
-                output.write_all(&encoded).map_err(rewrite_io_error)?;
-            }
-            let mut tail = Vec::new();
-            let summary = transcoder.finish(&mut tail)?;
-            output.write_all(&tail).map_err(rewrite_io_error)?;
-            return Ok(EditOutcome {
-                detail: Some(format!(
-                    "invalid sequences replaced: {}",
-                    summary.replacement_count
-                )),
-            });
-        }
-        // 防御回退：计划未带源编码时对整段检测（plan_c01 对不确定编码本就 E3001
-        // 阻断，正常不会走到；保留与旧编辑器一致的语义）。
-        let mut data = Vec::new();
-        input.read_to_end(&mut data).map_err(rewrite_io_error)?;
-        let source = detect(&data, self.prior).require_encoding()?;
-        let result = transcode(&data, source, self.target, self.invalid)?;
-        output.write_all(&result.bytes).map_err(rewrite_io_error)?;
-        Ok(EditOutcome {
-            detail: Some(format!(
-                "invalid sequences replaced: {}",
-                result.replacement_count
-            )),
-        })
-    }
-}
-
 fn generic_plan_encoding(
     plan: &PlanDocument,
 ) -> Result<
@@ -1016,65 +941,6 @@ fn generic_plan_encoding(
         _ => None,
     };
     Ok((target, invalid, prior, source))
-}
-
-fn c02_rewriter_from_plan(
-    plan: &PlanDocument,
-) -> Result<LineEndingRewriter, kernel::error::KernelError> {
-    let string_param = |name: &str| -> Result<&str, kernel::error::KernelError> {
-        match plan.params.get(name) {
-            Some(kernel::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
-            _ => Err(kernel::error::KernelError::missing_param(format!(
-                "plan param {name} is required"
-            ))),
-        }
-    };
-    let target = LineEnding::parse(string_param("target")?).ok_or_else(|| {
-        kernel::error::KernelError::invalid_params(
-            "plan param target is not a supported line ending",
-        )
-    })?;
-    let structure =
-        LineEndingStructureMode::parse(string_param("structure")?).ok_or_else(|| {
-            kernel::error::KernelError::invalid_params(
-                "plan param structure is not a supported structure mode",
-            )
-        })?;
-    Ok(LineEndingRewriter::new(target, structure))
-}
-
-fn c03_rewriter_from_plan(
-    plan: &PlanDocument,
-) -> Result<ReplaceRewriter, kernel::error::KernelError> {
-    let string_param = |name: &str| -> Result<&str, kernel::error::KernelError> {
-        match plan.params.get(name) {
-            Some(kernel::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
-            _ => Err(kernel::error::KernelError::missing_param(format!(
-                "plan param {name} is required"
-            ))),
-        }
-    };
-    let mode = ReplaceMode::parse(string_param("mode")?).ok_or_else(|| {
-        kernel::error::KernelError::invalid_params("plan param mode is not a supported mode")
-    })?;
-    let csv_mode = CsvMode::parse(string_param("csvMode")?).ok_or_else(|| {
-        kernel::error::KernelError::invalid_params("plan param csvMode is not a supported mode")
-    })?;
-    let delimiter = match string_param("delimiter")? {
-        "auto" => None,
-        value => Some(Delimiter::parse(value).ok_or_else(|| {
-            kernel::error::KernelError::invalid_params(
-                "plan param delimiter is not a supported delimiter",
-            )
-        })?),
-    };
-    Ok(ReplaceRewriter::new(
-        mode,
-        string_param("find")?.to_string(),
-        string_param("replace")?.to_string(),
-        csv_mode,
-        delimiter,
-    ))
 }
 
 fn run_c01(args: &[String]) -> i32 {
@@ -7318,12 +7184,12 @@ mod tests {
         assert!(gb.len() > 64 * 1024);
 
         let rewrite = |target: TargetEncoding| -> (Vec<u8>, Option<String>) {
-            let rewriter = TranscodeRewriter {
+            let rewriter = TranscodeRewriter::new(
                 target,
-                invalid: InvalidSequencePolicy::ReplaceAndCount,
-                prior: kernel::encoding::PlatformPrior::Other,
-                source: Some(SourceEncoding::Gb18030),
-            };
+                InvalidSequencePolicy::ReplaceAndCount,
+                kernel::encoding::PlatformPrior::Other,
+                Some(SourceEncoding::Gb18030),
+            );
             let mut output = Vec::new();
             // rewriter 不读 entry；空 JSON 缺字段会失败，故构造最小合法条目。
             let entry: kernel::plan::PlanEntry =

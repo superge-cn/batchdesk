@@ -86,6 +86,9 @@
 | [0053](./0053-流式读取端口与F04合并的流式执行.md) | 流式读取端口 `read_stream`＋`StreamTranscoder`；F04 合并不再整文件读入（内存 O(块)） | 已采纳 |
 | [0054](./0054-流式CSV执行臂与增量记录供给器.md) | 流式 CSV 执行臂第 2 批：`RecordFeeder` 增量记录供给器，F06/F07/F08/C11/C12 五臂复用 ADR-0053 底座 | 已采纳 |
 | [0055](./0055-C01流式转码编辑器与ContentRewriter明细返回位.md) | C01 转码改流式编辑器＋`ContentRewriter` 返回 `EditOutcome` 明细位＋C14 流式；C03/C13 边界登记 | 已采纳 |
+| [0056](./0056-桌面壳edit-content重写器装配与TranscodeRewriter上提.md) | `TranscodeRewriter` 上提到 kernel＋三个重写器提供 `from_plan`；桌面壳按计划 kind 装配 `content_rewriter`，修掉 C01–C03「能预览不能执行」 | 已采纳 |
+| [0057](./0057-C03流式替换的重叠窗口与正则边界.md) | C03 流式替换：plain 精确重叠窗口、cell 记录级增量、regex 保留整段（可证正确性优先） | 已采纳 |
+| [0058](./0058-拉取式读取端口与C13外排流式归并.md) | 拉取式读取端口 `open_read_stream`＋`CsvRecordStream`；C13 外排两相有界归并＋块文件守卫清理 | 已采纳 |
 | [0015](./0015-F01分片计划与撤销语义.md) | F01 分片计划与撤销语义（split 动作＋range＋流式区间复制） | 已采纳 |
 | [0016](./0016-F04合并计划与编码统一语义.md) | F04 合并计划与编码统一语义（merge 动作＋单条 entry＋BOM 只写一次） | 已采纳 |
 | [0017](./0017-F05-CSV分片记录边界与多区间原子写.md) | F05 CSV 分片记录边界与多区间原子写（csv 载荷＋copy_ranges_atomic） | 已采纳 |

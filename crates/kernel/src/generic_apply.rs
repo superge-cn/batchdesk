@@ -1165,7 +1165,7 @@ fn perform_listing(
 /// copy 覆盖与 edit-content 先备份原内容（`dataRef`），copy 新建的逆是
 /// "产物进隔离目录"（reverse=`Quarantine`，路径由适配层预留）。
 /// 把一块字节写入流式 writer；io 错误统一映射为 E3005（与内容改写同码）。
-fn write_stream(out: &mut dyn std::io::Write, bytes: &[u8]) -> Result<(), KernelError> {
+pub(crate) fn write_stream(out: &mut dyn std::io::Write, bytes: &[u8]) -> Result<(), KernelError> {
     out.write_all(bytes).map_err(|error| {
         KernelError::new(
             "E3005",
@@ -1178,19 +1178,19 @@ fn write_stream(out: &mut dyn std::io::Write, bytes: &[u8]) -> Result<(), Kernel
 
 /// 流式 CSV 源的执行期参数（ADR-0054）：编码/非法序列策略来自计划快照，
 /// `expected_size` 仅 F06（csvMerge 载荷带逐源大小）给出。
-struct StreamCsvInput<'a> {
-    source: &'a str,
-    expected_size: Option<u64>,
-    encoding: SourceEncoding,
-    invalid: InvalidSequencePolicy,
-    delimiter: u8,
+pub(crate) struct StreamCsvInput<'a> {
+    pub(crate) source: &'a str,
+    pub(crate) expected_size: Option<u64>,
+    pub(crate) encoding: SourceEncoding,
+    pub(crate) invalid: InvalidSequencePolicy,
+    pub(crate) delimiter: u8,
 }
 
 /// A 类流式 CSV 管道（ADR-0054）：`read_stream` → 流式解码 UTF-8 → `RecordFeeder`
 /// 增量记录 → 逐条回调。记录语义与"整段 read_bytes＋transcode＋parse_records"
 /// 完全一致；内存 O(块＋单条未完记录)。`expected_size` 给出时按 F06 既有口径
 /// 复核源大小（增长即止、收尾核对短缺），E2010 与整段路径同码同消息。
-fn stream_csv_records(
+pub(crate) fn stream_csv_records(
     view: &WorkerView<'_>,
     input: &StreamCsvInput<'_>,
     on_record: &mut dyn FnMut(Vec<String>) -> Result<(), KernelError>,
@@ -1250,19 +1250,23 @@ fn stream_csv_records(
 /// 流式 CSV 产物写出器：逐条把渲染好的 UTF-8 行经流式转码写出（io 错误统一
 /// E3005）。目标 BOM 不在这里写——调用方在产物最前面写一次（与 F04 合并臂同
 /// 口径），这里恒用 `without_bom`。
-struct CsvStreamWriter<'a> {
-    transcoder: StreamTranscoder,
-    writer: &'a mut dyn std::io::Write,
+pub(crate) struct CsvStreamWriter<'a> {
+    pub(crate) transcoder: StreamTranscoder,
+    pub(crate) writer: &'a mut dyn std::io::Write,
 }
 
 impl CsvStreamWriter<'_> {
-    fn emit(&mut self, line: &str) -> Result<(), KernelError> {
+    pub(crate) fn emit(&mut self, line: &str) -> Result<(), KernelError> {
         let mut encoded = Vec::new();
         self.transcoder.push(line.as_bytes(), &mut encoded)?;
         write_stream(self.writer, &encoded)
     }
 
-    fn emit_record(&mut self, fields: &[String], delimiter: u8) -> Result<(), KernelError> {
+    pub(crate) fn emit_record(
+        &mut self,
+        fields: &[String],
+        delimiter: u8,
+    ) -> Result<(), KernelError> {
         let mut line = String::new();
         write_record(fields, delimiter, &mut line);
         self.emit(&line)
@@ -3367,6 +3371,8 @@ mod tests {
         dirs: Mutex<Vec<String>>,
         /// read_stream 每次回调的块大小：既证"走了流式口"，也刻意把多字节序列切开。
         stream_chunks: Mutex<Vec<usize>>,
+        /// open_read_stream 次数：C13 归并相必须走拉取式口（ADR-0058）。
+        open_stream_calls: AtomicU64,
     }
 
     impl TestFs {
@@ -3408,6 +3414,10 @@ mod tests {
             self.read_bytes_calls.load(Ordering::Relaxed)
         }
 
+        fn open_stream_calls(&self) -> u64 {
+            self.open_stream_calls.load(Ordering::Relaxed)
+        }
+
         fn set_fail_writes(&self, paths: &[&str]) {
             *self.fail_writes.lock().unwrap() =
                 paths.iter().map(|path| (*path).to_string()).collect();
@@ -3427,6 +3437,21 @@ mod tests {
                 .get(path)
                 .cloned()
                 .ok_or_else(|| KernelError::new("E2001", "not found", None, false))
+        }
+
+        fn open_read_stream(
+            &self,
+            path: &str,
+        ) -> Result<Box<dyn std::io::Read + Send>, KernelError> {
+            let data = self
+                .files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            self.open_stream_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(std::io::Cursor::new(data)))
         }
 
         fn read_stream(
@@ -3986,6 +4011,60 @@ mod tests {
             csv_filter: None,
             csv_columns: None,
             csv_sort: None,
+        }
+    }
+
+    fn csv_sort_entry(
+        entry_id: &str,
+        source: &str,
+        target: &str,
+        size: u64,
+        columns: &[&str],
+        key: (u64, &str),
+        chunk_rows: Option<u64>,
+    ) -> PlanEntry {
+        PlanEntry {
+            entry_id: entry_id.to_string(),
+            source: source.to_string(),
+            target: Some(target.to_string()),
+            action: PlanAction::CsvSort,
+            relation: None,
+            reason: "csv sort".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: Some(PlanExpected {
+                size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: None,
+            csv_extract: None,
+            csv_rows: None,
+            csv_dedup: None,
+            csv_filter: None,
+            csv_columns: None,
+            csv_sort: Some(PlanCsvSort {
+                encoding: Some(SourceEncoding::Utf8),
+                size,
+                delimiter: ",".to_string(),
+                has_header: true,
+                columns: columns.iter().map(|value| value.to_string()).collect(),
+                column_count: columns.len() as u64,
+                keys: vec![crate::plan::PlanCsvSortKey {
+                    index: key.0,
+                    name: Some(columns[(key.0 - 1) as usize].to_string()),
+                    order: "asc".to_string(),
+                    kind: key.1.to_string(),
+                }],
+                external_chunk_rows: chunk_rows,
+                target_encoding: "utf-8".to_string(),
+                invalid: "replace-and-count".to_string(),
+                dirty_rows: 0,
+            }),
         }
     }
 
@@ -4943,6 +5022,96 @@ mod tests {
         assert_eq!(
             outcome.report.entries[0].detail.as_deref(),
             Some("upper rewriter ran")
+        );
+    }
+
+    #[test]
+    fn csv_sort_external_merge_streams_the_source_and_pulls_each_chunk() {
+        // C13 外排（ADR-0058）：分块排序相走 read_stream（TestFs 按 3 字节切片，
+        // 连引号内换行的记录也被切开），归并相每块开一个拉取式流逐条取最小——
+        // 两相都不再整块读回。旧实现两相都用 read_bytes，本断言在其上必红。
+        let fs = TestFs::default();
+        let source = b"id,note,value\n1,a,30\n2,\"multi\nline\",10\n3,c,40\n4,d,20\n5,e,50\n";
+        fs.write_file("/data/big.csv", source);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let sort = plan(vec![csv_sort_entry(
+            "e1",
+            "/data/big.csv",
+            "/out/sorted.csv",
+            source.len() as u64,
+            &["id", "note", "value"],
+            (3, "numeric"),
+            Some(2),
+        )]);
+        let outcome = apply_generic_plan(
+            &sort,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(
+            fs.read_file("/out/sorted.csv"),
+            b"id,note,value\n2,\"multi\nline\",10\n4,d,20\n1,a,30\n3,c,40\n5,e,50\n"
+        );
+        assert_eq!(
+            fs.read_bytes_calls(),
+            0,
+            "csv-sort must stream the source instead of read_bytes"
+        );
+        assert_eq!(
+            fs.open_stream_calls(),
+            3,
+            "every spilled chunk must be pulled through open_read_stream"
+        );
+        assert!(
+            fs.files
+                .lock()
+                .unwrap()
+                .keys()
+                .all(|path| !path.contains(".batchdesk-sort-")),
+            "chunk temp files must be removed once the merge is done"
+        );
+        assert!(matches!(
+            journal.entries[0].reverse,
+            FsOp::Quarantine { .. }
+        ));
+    }
+
+    #[test]
+    fn csv_sort_external_chunks_are_removed_even_when_the_output_write_fails() {
+        // 守卫必须在分块相之前建立（ADR-0058）：输入相/产物相中途失败都不得残留
+        // `.batchdesk-sort-*.tmp`。这里让产物写入失败，断言块文件仍被清掉。
+        let fs = TestFs::default();
+        let source = b"id,value\n1,30\n2,10\n3,40\n";
+        fs.write_file("/data/big.csv", source);
+        fs.set_fail_writes(&["/out/sorted.csv"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let sort = plan(vec![csv_sort_entry(
+            "e1",
+            "/data/big.csv",
+            "/out/sorted.csv",
+            source.len() as u64,
+            &["id", "value"],
+            (2, "numeric"),
+            Some(2),
+        )]);
+        let outcome = apply_generic_plan(
+            &sort,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+        assert!(
+            fs.files
+                .lock()
+                .unwrap()
+                .keys()
+                .all(|path| !path.contains(".batchdesk-sort-")),
+            "chunk temp files must be removed on the failure path too"
         );
     }
 

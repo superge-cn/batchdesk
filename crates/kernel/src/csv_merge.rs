@@ -311,12 +311,78 @@ impl RecordFeeder {
 
     /// 输入结束：冲刷尾部记录（与 `parse_records` 的 EOF 语义一致）。
     pub fn finish(mut self) -> Vec<Vec<String>> {
+        self.drain_finish()
+    }
+
+    /// 输入结束的借用版（拉取式流保留状态机时用），语义与 [`RecordFeeder::finish`] 相同。
+    pub fn drain_finish(&mut self) -> Vec<Vec<String>> {
         let mut records = Vec::new();
         if !self.field.is_empty() || self.saw_field || !self.record.is_empty() {
             finish_field(&mut self.record, &mut self.field, &mut self.saw_field);
             records.push(std::mem::take(&mut self.record));
         }
+        self.saw_field = false;
+        self.field_start = true;
         records
+    }
+
+    /// 是否仍处于引号内（＝源有未闭合引号）。C03 单元格模式据此按 E3004 拒绝。
+    pub fn unclosed_quote(&self) -> bool {
+        self.in_quotes
+    }
+}
+
+/// 拉取式记录流（C13 外排归并，ADR-0058）：把 `Read` 逐条翻成记录。
+///
+/// 与 [`RecordFeeder`] 共用同一状态机（记录语义与 [`parse_records`] 逐条一致），
+/// 区别只在驱动方向：调用方要一条才读一块。内存 O(块＋单条未完记录)。
+pub struct CsvRecordStream<R: std::io::Read> {
+    reader: R,
+    feeder: RecordFeeder,
+    pending: std::collections::VecDeque<Vec<String>>,
+    buffer: Vec<u8>,
+    done: bool,
+}
+
+impl<R: std::io::Read> CsvRecordStream<R> {
+    pub fn new(reader: R, delimiter: u8) -> Self {
+        Self {
+            reader,
+            feeder: RecordFeeder::new(delimiter),
+            pending: std::collections::VecDeque::new(),
+            buffer: vec![0u8; 64 * 1024],
+            done: false,
+        }
+    }
+
+    /// 取下一条记录；`None` 表示流已结束。
+    pub fn next_record(&mut self) -> Result<Option<Vec<String>>, KernelError> {
+        loop {
+            if let Some(record) = self.pending.pop_front() {
+                return Ok(Some(record));
+            }
+            if self.done {
+                return Ok(None);
+            }
+            let read = self.reader.read(&mut self.buffer).map_err(|error| {
+                KernelError::new(
+                    "E3005",
+                    "stream read failed",
+                    Some(error.to_string()),
+                    false,
+                )
+            })?;
+            if read == 0 {
+                self.done = true;
+                for record in self.feeder.drain_finish() {
+                    self.pending.push_back(record);
+                }
+                continue;
+            }
+            for record in self.feeder.push(&self.buffer[..read]) {
+                self.pending.push_back(record);
+            }
+        }
     }
 }
 

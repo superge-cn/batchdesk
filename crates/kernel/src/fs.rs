@@ -104,6 +104,20 @@ pub trait FsAdapter: Send + Sync {
             false,
         ))
     }
+    /// 以**拉取式**句柄打开文件：调用方决定何时读下一条（C13 外排归并，ADR-0058）。
+    ///
+    /// 与 [`FsAdapter::read_stream`] 的分工：`read_stream` 是 push 型（顺序扫描够用），
+    /// 拉取式用于「比较 k 个游标、取最小、再要下一条」的多路归并——要求适配层把整块
+    /// 推过来就退化成了整块驻留。适配层不支持时返回 E5001，调用方按契约拒绝该动作，
+    /// **不得静默降级为 `read_bytes`＋内存游标**（否则"流式"只是名义上的）。
+    fn open_read_stream(&self, _path: &str) -> Result<Box<dyn std::io::Read + Send>, KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "pull-based read is not supported by this adapter",
+            None,
+            false,
+        ))
+    }
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError>;
     /// 创建单级目录（父目录由计划保证已存在）。
     fn create_dir(&self, _path: &str) -> Result<(), KernelError> {

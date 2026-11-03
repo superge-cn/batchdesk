@@ -619,6 +619,129 @@ impl StreamTranscoder {
     }
 }
 
+/// C01 的流式转码重写器（ADR-0056）：源编码已知时按块
+/// `read`→`StreamTranscoder`→`write`，内存 O(块)；目标 BOM 只写一次。
+/// 替换计数经 `EditOutcome.detail` 进条目报告（口径同 ADR-0050）。
+///
+/// 计划期已确认源编码（`plan_c01` 对不确定编码本就 E3001 阻断），
+/// 因此 `source` 通常为 Some；None 只服务"防御性违规计划"的整段检测回退。
+pub struct TranscodeRewriter {
+    target: TargetEncoding,
+    invalid: InvalidSequencePolicy,
+    prior: PlatformPrior,
+    source: Option<SourceEncoding>,
+}
+
+impl TranscodeRewriter {
+    pub const fn new(
+        target: TargetEncoding,
+        invalid: InvalidSequencePolicy,
+        prior: PlatformPrior,
+        source: Option<SourceEncoding>,
+    ) -> Self {
+        Self {
+            target,
+            invalid,
+            prior,
+            source,
+        }
+    }
+
+    /// 从计划参数快照构造（与 `plan_c01` 写入的 params 同源）。
+    pub fn from_plan(plan: &crate::plan::PlanDocument) -> Result<Self, KernelError> {
+        let string_param = |name: &str| -> Result<&str, KernelError> {
+            match plan.params.get(name) {
+                Some(crate::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
+                _ => Err(KernelError::missing_param(format!(
+                    "plan param {name} is required"
+                ))),
+            }
+        };
+        let target = TargetEncoding::parse(string_param("target")?).ok_or_else(|| {
+            KernelError::invalid_params("plan param target is not a supported target encoding")
+        })?;
+        let invalid = InvalidSequencePolicy::parse(string_param("invalid")?).ok_or_else(|| {
+            KernelError::invalid_params(
+                "plan param invalid is not a supported invalid-sequence policy",
+            )
+        })?;
+        let prior = PlatformPrior::parse(string_param("platformPrior")?).ok_or_else(|| {
+            KernelError::invalid_params(
+                "plan param platformPrior is not a supported platform prior",
+            )
+        })?;
+        let source = match plan.params.get("source") {
+            Some(crate::plan::PlanParamValue::String(value)) => {
+                Some(SourceEncoding::parse(value).ok_or_else(|| {
+                    KernelError::invalid_params(
+                        "plan param source is not a supported source encoding",
+                    )
+                })?)
+            }
+            _ => None,
+        };
+        Ok(Self::new(target, invalid, prior, source))
+    }
+}
+
+fn rewrite_io_error(error: std::io::Error) -> KernelError {
+    KernelError::new(
+        "E3005",
+        "content rewrite failed",
+        Some(error.to_string()),
+        false,
+    )
+}
+
+impl crate::generic_apply::ContentRewriter for TranscodeRewriter {
+    fn rewrite(
+        &self,
+        _entry: &crate::plan::PlanEntry,
+        input: &mut dyn std::io::Read,
+        output: &mut dyn std::io::Write,
+    ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
+        if let Some(source) = self.source {
+            if let Some(prefix) = self.target.bom_prefix() {
+                output.write_all(prefix).map_err(rewrite_io_error)?;
+            }
+            let mut transcoder =
+                StreamTranscoder::new(source, self.target.without_bom(), self.invalid);
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let read = input.read(&mut buffer).map_err(rewrite_io_error)?;
+                if read == 0 {
+                    break;
+                }
+                let mut encoded = Vec::new();
+                transcoder.push(&buffer[..read], &mut encoded)?;
+                output.write_all(&encoded).map_err(rewrite_io_error)?;
+            }
+            let mut tail = Vec::new();
+            let summary = transcoder.finish(&mut tail)?;
+            output.write_all(&tail).map_err(rewrite_io_error)?;
+            return Ok(crate::generic_apply::EditOutcome {
+                detail: Some(format!(
+                    "invalid sequences replaced: {}",
+                    summary.replacement_count
+                )),
+            });
+        }
+        // 防御回退：计划未带源编码时对整段检测（plan_c01 对不确定编码本就 E3001
+        // 阻断，正常不会走到；保留与整段编辑器一致的语义）。
+        let mut data = Vec::new();
+        input.read_to_end(&mut data).map_err(rewrite_io_error)?;
+        let source = detect(&data, self.prior).require_encoding()?;
+        let result = transcode(&data, source, self.target, self.invalid)?;
+        output.write_all(&result.bytes).map_err(rewrite_io_error)?;
+        Ok(crate::generic_apply::EditOutcome {
+            detail: Some(format!(
+                "invalid sequences replaced: {}",
+                result.replacement_count
+            )),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,6 +973,45 @@ mod tests {
         )
         .unwrap();
         assert!(!result.bytes.is_empty());
+    }
+
+    #[test]
+    fn transcode_rewriter_from_plan_reads_the_c01_param_snapshot() {
+        // ADR-0056：桌面壳不再自己解析 params，改由 kernel 的 from_plan 装配；
+        // 参数缺失必须按 E1001 上报，而不是退化成"没有重写器"。
+        use crate::plan::{PlanDocument, PlanParamValue, PlanStats};
+        use std::collections::BTreeMap;
+
+        let mut params = BTreeMap::new();
+        params.insert(
+            "target".to_string(),
+            PlanParamValue::String("utf-8-bom".to_string()),
+        );
+        params.insert(
+            "invalid".to_string(),
+            PlanParamValue::String("replace-and-count".to_string()),
+        );
+        params.insert(
+            "platformPrior".to_string(),
+            PlanParamValue::String("other".to_string()),
+        );
+        let plan = PlanDocument {
+            plan_id: "01HZZZZZZZZZZZZZZZZZZZZZZZ".to_string(),
+            kind: crate::plan::C01_KIND.to_string(),
+            params: params.clone(),
+            entries: Vec::new(),
+            stats: PlanStats::default(),
+            warnings: Vec::new(),
+        };
+        let rewriter = TranscodeRewriter::from_plan(&plan).expect("c01 params");
+        assert_eq!(rewriter.source, None, "未记录 source 时走检测回退");
+
+        params.remove("invalid");
+        let broken = PlanDocument { params, ..plan };
+        let error = TranscodeRewriter::from_plan(&broken)
+            .map(|_| ())
+            .unwrap_err();
+        assert_eq!(error.code, "E1001", "缺参数按 E1001 上报：{error:?}");
     }
 
     #[test]

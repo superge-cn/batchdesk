@@ -546,7 +546,12 @@ fn preflight_stored_plan(
     stored: &StoredPlan,
 ) -> Result<PreflightReport, KernelError> {
     let (_, margin_floor, margin_ratio) = security_settings(state);
-    preflight_gate(stored, &state.paths.quarantine_dir, margin_floor, margin_ratio)
+    preflight_gate(
+        stored,
+        &state.paths.quarantine_dir,
+        margin_floor,
+        margin_ratio,
+    )
 }
 
 /// 预检闸：每次调用都重新采集磁盘余量与路径事实，**不缓存预览期的结论**
@@ -1300,7 +1305,11 @@ mod tests {
         let (existing, existing_files) = f11_existing_facts(&root_text, &rows);
 
         let holder = root.join("holder").to_string_lossy().into_owned();
-        let holder_sub = root.join("holder").join("sub").to_string_lossy().into_owned();
+        let holder_sub = root
+            .join("holder")
+            .join("sub")
+            .to_string_lossy()
+            .into_owned();
         let dir = root.join("dir").to_string_lossy().into_owned();
         assert!(existing.contains(&holder), "父级位置也要探测：{existing:?}");
         assert!(

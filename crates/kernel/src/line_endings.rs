@@ -302,6 +302,28 @@ impl LineEndingRewriter {
     pub const fn new(target: LineEnding, structure: LineEndingStructureMode) -> Self {
         Self { target, structure }
     }
+
+    /// 从计划参数快照构造（与 `plan_c02` 写入的 params 同源）。
+    pub fn from_plan(plan: &crate::plan::PlanDocument) -> Result<Self, KernelError> {
+        let string_param = |name: &str| -> Result<&str, KernelError> {
+            match plan.params.get(name) {
+                Some(crate::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
+                _ => Err(KernelError::missing_param(format!(
+                    "plan param {name} is required"
+                ))),
+            }
+        };
+        let target = LineEnding::parse(string_param("target")?).ok_or_else(|| {
+            KernelError::invalid_params("plan param target is not a supported line ending")
+        })?;
+        let structure =
+            LineEndingStructureMode::parse(string_param("structure")?).ok_or_else(|| {
+                KernelError::invalid_params(
+                    "plan param structure is not a supported structure mode",
+                )
+            })?;
+        Ok(Self::new(target, structure))
+    }
 }
 
 impl crate::generic_apply::ContentRewriter for LineEndingRewriter {

@@ -16,6 +16,7 @@ use kernel::apply::{
     apply_plan, undo_plan_with_ports, ApplyContext, ApplyEntryReport, ApplyOptions, ApplyReport,
     ApplyState, ApplyStatus, UndoPorts,
 };
+use kernel::encoding::TranscodeRewriter;
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
 use kernel::journal::{FsOp, JournalStore};
@@ -74,6 +75,10 @@ pub struct TaskSummary {
     pub phase: ProgressPhase,
     pub done: u64,
     pub total: u64,
+    /// 任务对应的 planId：任务列表要能直接走到「撤销」（撤销按 plan 走共享 Journal），
+    /// 没有它就只能展示与取消。旧快照没有该字段，反序列化按 None 处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -303,6 +308,8 @@ impl TaskQueue {
         for persisted in loaded.tasks.drain(..) {
             let plan_id = persisted.job.plan_id();
             let mut summary = persisted.summary;
+            // 旧快照没有 planId：从 job 补回，任务列表才能走到撤销。
+            summary.plan_id = Some(plan_id.clone());
             let interrupted_from = summary.state;
             summary.state = TaskState::Interrupted;
             summary.finished_at = None;
@@ -488,6 +495,7 @@ impl TaskQueue {
             phase: ProgressPhase::Queued,
             done: 0,
             total,
+            plan_id: Some(plan_id.clone()),
             started_at: None,
             finished_at: None,
             message,
@@ -1061,6 +1069,30 @@ fn task_identity(inner: &Arc<Inner>, task_id: &str) -> (String, Vec<ApplyEntryRe
         .unwrap_or_default()
 }
 
+/// `edit-content` 计划的流式重写端口：c01 转码 / c02 换行 / c03 替换。
+///
+/// 内核执行器要求含 `edit-content` 条目的计划必须带编辑器或重写器
+/// （`generic_apply.rs` 的装配校验），否则整单 E1002 失败。三个重写器都由
+/// kernel 依计划参数快照构造（ADR-0056），壳层只做装配、不重算参数语义。
+fn edit_content_rewriter(
+    plan: &PlanDocument,
+) -> Result<Option<Box<dyn kernel::generic_apply::ContentRewriter>>, KernelError> {
+    if plan.kind == kernel::plan::C01_KIND {
+        return Ok(Some(Box::new(TranscodeRewriter::from_plan(plan)?)));
+    }
+    if plan.kind == kernel::line_endings::C02_KIND {
+        return Ok(Some(Box::new(
+            kernel::line_endings::LineEndingRewriter::from_plan(plan)?,
+        )));
+    }
+    if plan.kind == kernel::replace_content::C03_KIND {
+        return Ok(Some(Box::new(
+            kernel::replace_content::ReplaceRewriter::from_plan(plan)?,
+        )));
+    }
+    Ok(None)
+}
+
 fn run_apply(
     inner: &Arc<Inner>,
     task_id: &str,
@@ -1112,6 +1144,22 @@ fn run_apply(
     }
     if plan.plan.kind != kernel::plan::C09_KIND {
         let lister = platform::listing::FsDirectoryLister;
+        // edit-content 计划的流式重写端口（c01 转码 / c02 换行 / c03 替换）：
+        // 内核拒绝"含 edit-content 条目却无编辑器/重写器"的上下文（E1002），
+        // 装配失败也按计划错误上报，不静默降级成"绿色完成但文件没变"。
+        let rewriter = if plan
+            .plan
+            .entries
+            .iter()
+            .any(|entry| entry.action == kernel::plan::PlanAction::EditContent)
+        {
+            match edit_content_rewriter(&plan.plan) {
+                Ok(rewriter) => rewriter,
+                Err(error) => return failed_result(plan_id, task_id, error),
+            }
+        } else {
+            None
+        };
         let mut context = kernel::generic_apply::GenericApplyContext {
             fs: &adapter,
             license: inner.license.as_ref(),
@@ -1123,7 +1171,7 @@ fn run_apply(
             progress: Some(&sink),
             cancel: Some(control.as_ref()),
             content_editor: None,
-            content_rewriter: None,
+            content_rewriter: rewriter.as_deref(),
             directory_lister: Some(&lister),
         };
         return match kernel::generic_apply::apply_generic_plan(&plan.plan, &options, &mut context) {
@@ -1781,7 +1829,10 @@ mod tests {
     /// 带 expected 大小的 c09 计划：预检的磁盘判定要用它算需用空间。
     fn plan_with_sizes(plan_id: &str, files: &[(PathBuf, u64)]) -> PlanDocument {
         let mut params = BTreeMap::new();
-        params.insert("mode".to_string(), PlanParamValue::String("full".to_string()));
+        params.insert(
+            "mode".to_string(),
+            PlanParamValue::String("full".to_string()),
+        );
         let entries = files
             .iter()
             .enumerate()
@@ -1926,7 +1977,10 @@ mod tests {
         fs::create_dir_all(&quarantine).unwrap();
         let first = root.join("a.txt");
         fs::write(&first, b"same").unwrap();
-        let stored = stored(plan_with_sizes(&new_ulid("recheck-plan"), &[(first.clone(), 4)]));
+        let stored = stored(plan_with_sizes(
+            &new_ulid("recheck-plan"),
+            &[(first.clone(), 4)],
+        ));
         let gate = |floor: u64| {
             crate::preflight_gate(
                 &stored,
@@ -1940,7 +1994,10 @@ mod tests {
         let before = gate(platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES);
         assert!(!before.is_task_blocked());
         let tight = gate(UNREACHABLE_MARGIN_FLOOR);
-        assert!(tight.is_task_blocked(), "第二次调用要用上新的余量下限（不得缓存）");
+        assert!(
+            tight.is_task_blocked(),
+            "第二次调用要用上新的余量下限（不得缓存）"
+        );
         let after = gate(platform::preflight::DEFAULT_DISK_MARGIN_FLOOR_BYTES);
         assert!(
             !after.is_task_blocked(),
@@ -1958,7 +2015,10 @@ mod tests {
             .find(|item| item.kind == "readonly")
             .expect("只读目标要作为环境事实出现在下一次预检报告里");
         assert_eq!(hit.code.as_deref(), Some("E2002"));
-        assert!(!readonly.is_task_blocked(), "只读是条目级提示，不整任务阻断");
+        assert!(
+            !readonly.is_task_blocked(),
+            "只读是条目级提示，不整任务阻断"
+        );
 
         // 还原写位（临时目录随后整体删除，但保持夹具可复用）。Unix 上 set_readonly(false)
         // 会变成全局可写，因此按平台各走各的：POSIX 用精确 mode，Windows 才用该 setter。
@@ -2001,7 +2061,8 @@ mod tests {
             report
                 .items
                 .iter()
-                .any(|item| item.kind == "unc" && item.level != kernel::preflight::PreflightLevel::Pass),
+                .any(|item| item.kind == "unc"
+                    && item.level != kernel::preflight::PreflightLevel::Pass),
             "网络路径要给出**实际探测过**的 UNC 预检项，而不是\\\"无网络路径\\\"的通过项：{:?}",
             report
                 .items
@@ -2014,7 +2075,10 @@ mod tests {
             "不可达／超时按暂不可达降级，不得整任务阻断"
         );
         assert!(
-            report.items.iter().any(|item| item.code.as_deref() == Some("E2005")),
+            report
+                .items
+                .iter()
+                .any(|item| item.code.as_deref() == Some("E2005")),
             "该提示要带 E2005 码位（06 码表）"
         );
     }
@@ -2060,7 +2124,10 @@ mod tests {
         let apply_id = queue.enqueue_apply(stored, ApplyOptions::default());
         let applied = wait_terminal(&queue, &apply_id);
         assert_eq!(applied.summary.state, TaskState::Completed);
-        assert!(!first.exists() && !second.exists(), "预检放行的计划要真的执行完");
+        assert!(
+            !first.exists() && !second.exists(),
+            "预检放行的计划要真的执行完"
+        );
         assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 2);
     }
 
@@ -2072,6 +2139,7 @@ mod tests {
             phase: ProgressPhase::Queued,
             done: 0,
             total: plan.entries.len() as u64,
+            plan_id: Some(plan.plan_id.clone()),
             started_at: Some(now_rfc3339()),
             finished_at: None,
             message: None,
@@ -2967,6 +3035,215 @@ mod tests {
         );
     }
 
+    /// edit-content 计划（c01 转码 / c02 换行 / c03 替换）经桌面队列执行：
+    /// 入队 → 等终态。返回队列本身（撤销还要继续用）。
+    fn apply_edit_content_plan(dir: &TempDir, plan: &PlanDocument) -> (TaskQueue, TaskDetail) {
+        let queue = test_queue(paths_for(dir), Arc::new(|_, _| {}));
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan: plan.clone(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let done = wait_terminal(&queue, &task_id);
+        (queue, done)
+    }
+
+    #[test]
+    fn c01_transcode_plan_executes_through_the_desktop_queue_and_undoes() {
+        // P0：c01 在桌面壳注入 TranscodeRewriter 之前一律失败——内核拒绝
+        // 含 edit-content 条目却没有编辑器/重写器的执行上下文（E1002）。
+        use kernel::encoding::{
+            InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+        };
+        use kernel::plan::{plan_c01, PlanC01File, PlanC01Input};
+
+        let dir = TempDir::new();
+        let input = dir.0.join("plain.txt");
+        let body = "中文abc\n".as_bytes().to_vec();
+        fs::write(&input, &body).unwrap();
+        let plan = plan_c01(PlanC01Input {
+            plan_id: new_ulid("c01-ui"),
+            target: TargetEncoding::Utf8 { bom: true },
+            invalid: InvalidSequencePolicy::ReplaceAndCount,
+            prior: PlatformPrior::Other,
+            confirmed_source: Some(SourceEncoding::Utf8),
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            files: vec![PlanC01File {
+                path: input.to_string_lossy().into_owned(),
+                canonical_path: None,
+                file_size: body.len() as u64,
+                sample: body.clone(),
+            }],
+        })
+        .expect("c01 plan");
+        assert_eq!(
+            plan.entries[0].action,
+            kernel::plan::PlanAction::EditContent
+        );
+
+        let (queue, done) = apply_edit_content_plan(&dir, &plan);
+        assert_eq!(
+            done.summary.state,
+            TaskState::Completed,
+            "c01 执行失败：{:?}",
+            done.summary.message
+        );
+        let written = fs::read(&input).unwrap();
+        assert!(
+            written.starts_with(&[0xEF, 0xBB, 0xBF]),
+            "目标 BOM 只写一次（ADR-0055 §3）"
+        );
+        assert_eq!(&written[3..], body.as_slice(), "BOM 之后正文逐字节不变");
+        assert!(
+            done.entries[0]
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("invalid sequences replaced: "),
+            "替换计数经条目级 detail 上报（ADR-0050）"
+        );
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert_eq!(fs::read(&input).unwrap(), body, "撤销还原为无 BOM 原样");
+    }
+
+    #[test]
+    fn c02_line_ending_plan_executes_through_the_desktop_queue_and_undoes() {
+        // P0：c02 恒产 edit-content 条目，桌面壳未注入 LineEndingRewriter 时
+        // 参数/预览都正常，一点“执行”就整单失败。
+        use kernel::encoding::{PlatformPrior, SourceEncoding};
+        use kernel::line_endings::{
+            plan_c02, LineEnding, LineEndingStructureMode, PlanC02File, PlanC02Input,
+        };
+
+        let dir = TempDir::new();
+        let input = dir.0.join("notes.txt");
+        fs::write(&input, b"a\nb\nc\n").unwrap();
+        let path = input.to_string_lossy().into_owned();
+        let structure = LineEndingStructureMode::Auto.resolve(&path);
+        let inspect = platform::line_endings::inspect_line_endings(&input, structure, 4096)
+            .expect("c02 inspect");
+        let plan = plan_c02(PlanC02Input {
+            plan_id: new_ulid("c02-ui"),
+            target: LineEnding::Crlf,
+            structure: LineEndingStructureMode::Auto,
+            files: vec![PlanC02File {
+                path,
+                canonical_path: None,
+                file_size: inspect.file_size,
+                sample: inspect.sample,
+                counts: inspect.counts,
+                structure,
+            }],
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            confirmed_source: Some(SourceEncoding::Utf8),
+            prior: PlatformPrior::Other,
+        })
+        .expect("c02 plan");
+
+        let (queue, done) = apply_edit_content_plan(&dir, &plan);
+        assert_eq!(
+            done.summary.state,
+            TaskState::Completed,
+            "c02 执行失败：{:?}",
+            done.summary.message
+        );
+        assert_eq!(fs::read(&input).unwrap(), b"a\r\nb\r\nc\r\n");
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert_eq!(fs::read(&input).unwrap(), b"a\nb\nc\n");
+    }
+
+    #[test]
+    fn c03_replace_plan_executes_through_the_desktop_queue_and_undoes() {
+        // P0：c03 同 c02——恒产 edit-content 条目，缺 ReplaceRewriter 即失败。
+        use kernel::replace_content::{plan_c03, CsvMode, PlanC03File, PlanC03Input, ReplaceMode};
+
+        let dir = TempDir::new();
+        let input = dir.0.join("fruit.txt");
+        fs::write(&input, b"apple,apple\npear,apple\n").unwrap();
+        let inspect = platform::replace_content::inspect_file(
+            &input,
+            ReplaceMode::Plain,
+            "apple",
+            "orange",
+            CsvMode::Text,
+            None,
+            4096,
+        )
+        .expect("c03 inspect");
+        let plan = plan_c03(PlanC03Input {
+            plan_id: new_ulid("c03-ui"),
+            mode: ReplaceMode::Plain,
+            find: "apple".to_string(),
+            replacement: "orange".to_string(),
+            csv_mode: CsvMode::Text,
+            files: vec![PlanC03File {
+                path: input.to_string_lossy().into_owned(),
+                canonical_path: None,
+                file_size: inspect.file_size,
+                sample: inspect.sample,
+                structure: inspect.structure,
+                inspect: inspect.inspect,
+            }],
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            confirmed_source: Some(kernel::encoding::SourceEncoding::Utf8),
+            prior: kernel::encoding::PlatformPrior::Other,
+            delimiter: None,
+        })
+        .expect("c03 plan");
+
+        let (queue, done) = apply_edit_content_plan(&dir, &plan);
+        assert_eq!(
+            done.summary.state,
+            TaskState::Completed,
+            "c03 执行失败：{:?}",
+            done.summary.message
+        );
+        assert_eq!(
+            fs::read(&input).unwrap(),
+            b"orange,orange\npear,orange\n".to_vec()
+        );
+
+        let undo_id = queue.enqueue_undo(plan.plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.state, TaskState::Completed);
+        assert_eq!(
+            fs::read(&input).unwrap(),
+            b"apple,apple\npear,apple\n".to_vec()
+        );
+
+        // 任务列表要能直接兑现「撤销」：摘要必须带 planId，否则界面只剩取消/重试。
+        let page = queue.list(0, 10);
+        assert_eq!(page.items.len(), 2);
+        assert!(
+            page.items
+                .iter()
+                .all(|item| item.plan_id.as_deref() == Some(plan.plan_id.as_str())),
+            "apply 与 undo 两类任务都应带同一个 planId"
+        );
+    }
+
+    #[test]
+    fn legacy_task_snapshots_without_plan_id_still_deserialize() {
+        // S03 旧快照没有 planId 字段：反序列化按 None 处理，不能因此拒绝加载队列。
+        let json =
+            r#"{"taskId":"t1","kind":"c09","state":"running","phase":"queued","done":0,"total":0}"#;
+        let summary: TaskSummary = serde_json::from_str(json).unwrap();
+        assert!(summary.plan_id.is_none());
+    }
+
     fn insert_control_task(queue: &TaskQueue, task_id: &str) {
         let summary = TaskSummary {
             task_id: task_id.to_string(),
@@ -2975,6 +3252,7 @@ mod tests {
             phase: ProgressPhase::Queued,
             done: 0,
             total: 0,
+            plan_id: None,
             started_at: None,
             finished_at: None,
             message: None,

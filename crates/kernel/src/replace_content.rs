@@ -2,7 +2,8 @@
 //! C03 批量查找替换计划与内容变换（方案 §5.14）。
 //!
 //! 本切片支持 TXT/CSV 的纯文本与正则替换、CSV 单元格级默认保护、匹配计数与
-//! 预览上下文。执行走 `ContentRewriter`（整段读写；大文件流式窗口后续补齐）。
+//! 预览上下文。执行走 `ContentRewriter`：plain 与 CSV 单元格模式流式（尾部重叠窗口／
+//! 记录级增量，ADR-0057），regex 模式仍整段（最大匹配长度不可知）。
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -559,6 +560,179 @@ impl ReplaceRewriter {
             delimiter,
         }
     }
+
+    /// 从计划参数快照构造（与 `plan_c03` 写入的 params 同源）。
+    pub fn from_plan(plan: &crate::plan::PlanDocument) -> Result<Self, KernelError> {
+        let string_param = |name: &str| -> Result<&str, KernelError> {
+            match plan.params.get(name) {
+                Some(crate::plan::PlanParamValue::String(value)) => Ok(value.as_str()),
+                _ => Err(KernelError::missing_param(format!(
+                    "plan param {name} is required"
+                ))),
+            }
+        };
+        let mode = ReplaceMode::parse(string_param("mode")?).ok_or_else(|| {
+            KernelError::invalid_params("plan param mode is not a supported mode")
+        })?;
+        let csv_mode = CsvMode::parse(string_param("csvMode")?).ok_or_else(|| {
+            KernelError::invalid_params("plan param csvMode is not a supported mode")
+        })?;
+        let delimiter = match string_param("delimiter")? {
+            "auto" => None,
+            value => Some(Delimiter::parse(value).ok_or_else(|| {
+                KernelError::invalid_params("plan param delimiter is not a supported delimiter")
+            })?),
+        };
+        Ok(Self::new(
+            mode,
+            string_param("find")?.to_string(),
+            string_param("replace")?.to_string(),
+            csv_mode,
+            delimiter,
+        ))
+    }
+}
+
+/// C03 流式替换的块大小（ADR-0057）：只决定内核侧内存上界与系统调用次数，
+/// 与适配层的固定块读取（方案 §4.8 的 4 MB 建议值）无关。
+const REPLACE_STREAM_CHUNK: usize = 64 * 1024;
+
+fn rewrite_io_error(error: std::io::Error) -> KernelError {
+    KernelError::new(
+        "E3005",
+        "content rewrite failed",
+        Some(error.to_string()),
+        false,
+    )
+}
+
+fn rewrite_utf8_error(error: std::str::Utf8Error) -> KernelError {
+    KernelError::new(
+        "E3001",
+        "source is not valid UTF-8; convert it via C01 first",
+        Some(error.to_string()),
+        false,
+    )
+}
+
+impl ReplaceRewriter {
+    /// plain 文本模式的流式替换（ADR-0057）：尾部重叠 `find.len()-1` 字节，
+    /// 只判定「起点 < 安全边界」的匹配，命中即写出前缀与替换文本并跳过匹配。
+    /// 语义与 `str::replace` 的非重叠、从左到右一致；内存 O(find + 块)。
+    fn rewrite_plain(
+        &self,
+        input: &mut dyn Read,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError> {
+        let find = self.find.as_bytes();
+        let replacement = self.replacement.as_bytes();
+        let overlap = find.len().saturating_sub(1);
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; REPLACE_STREAM_CHUNK];
+        loop {
+            let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
+            let eof = read == 0;
+            buffer.extend_from_slice(&chunk[..read]);
+            // 跨块被切开的多字节字符不算错：尾部不完整留到下一块再判，EOF 才算错。
+            let valid = match std::str::from_utf8(&buffer) {
+                Ok(_) => buffer.len(),
+                Err(error) if error.error_len().is_none() && !eof => error.valid_up_to(),
+                Err(error) => return Err(rewrite_utf8_error(error)),
+            };
+            let mut safe = if eof {
+                buffer.len()
+            } else {
+                buffer.len().saturating_sub(overlap)
+            };
+            safe = safe.min(valid);
+            let text = std::str::from_utf8(&buffer[..valid]).expect("just validated");
+            let mut matches: Vec<(usize, usize)> = Vec::new();
+            let mut search = 0;
+            while let Some(offset) = text[search..].find(self.find.as_str()) {
+                let start = search + offset;
+                if start >= safe {
+                    // 匹配起点落在重叠窗口里：等下一块补齐后再判，否则会漏跨块匹配。
+                    break;
+                }
+                matches.push((start, start + find.len()));
+                search = start + find.len();
+            }
+            let mut cursor = 0;
+            for (start, end) in matches {
+                if start > cursor {
+                    output
+                        .write_all(&buffer[cursor..start])
+                        .map_err(rewrite_io_error)?;
+                }
+                output.write_all(replacement).map_err(rewrite_io_error)?;
+                cursor = end;
+            }
+            let consumed = if cursor >= safe {
+                cursor
+            } else {
+                output
+                    .write_all(&buffer[cursor..safe])
+                    .map_err(rewrite_io_error)?;
+                safe
+            };
+            buffer.drain(..consumed);
+            if eof {
+                return Ok(());
+            }
+        }
+    }
+
+    /// CSV 单元格模式的流式替换（ADR-0057）：`RecordFeeder` 增量产记录 → 逐字段
+    /// 替换 → `write_record` 逐条写出。单元格替换是记录内局部操作，逐条序列化与
+    /// 整段序列化逐字节一致；内存 O(单条记录 + 块)。
+    fn rewrite_cells(
+        &self,
+        input: &mut dyn Read,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError> {
+        let matcher = Matcher::compile(self.mode, &self.find, &self.replacement)?;
+        let mut chunk = vec![0u8; REPLACE_STREAM_CHUNK];
+        let first = input.read(&mut chunk).map_err(rewrite_io_error)?;
+        let delimiter = match self.delimiter {
+            Some(delimiter) => delimiter,
+            None => sniff_delimiter(&chunk[..first]).ok_or_else(|| {
+                KernelError::invalid_params("CSV delimiter could not be detected; pass --delimiter")
+            })?,
+        };
+        let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter.as_byte());
+        let mut write_records = |records: Vec<Vec<String>>| -> Result<(), KernelError> {
+            for record in records {
+                let replaced: Vec<String> = record
+                    .iter()
+                    .map(|field| matcher.replace(field, &self.replacement))
+                    .collect();
+                let mut line = String::new();
+                write_record(&replaced, delimiter.as_byte(), &mut line);
+                output
+                    .write_all(line.as_bytes())
+                    .map_err(rewrite_io_error)?;
+            }
+            Ok(())
+        };
+        write_records(feeder.push(&chunk[..first]))?;
+        loop {
+            let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
+            if read == 0 {
+                break;
+            }
+            write_records(feeder.push(&chunk[..read]))?;
+        }
+        if feeder.unclosed_quote() {
+            return Err(KernelError::new(
+                "E3004",
+                "CSV contains an unclosed quote; cell-level replacement is refused",
+                None,
+                false,
+            ));
+        }
+        write_records(feeder.drain_finish())?;
+        Ok(())
+    }
 }
 
 impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
@@ -568,16 +742,19 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
         input: &mut dyn Read,
         output: &mut dyn Write,
     ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
-        let mut data = Vec::new();
-        input.read_to_end(&mut data).map_err(|error| {
-            KernelError::new(
-                "E3005",
-                "content rewrite failed",
-                Some(error.to_string()),
-                false,
-            )
-        })?;
         let structure = ContentStructure::resolve(&entry.source);
+        if structure == ContentStructure::Csv && self.csv_mode == CsvMode::Cell {
+            self.rewrite_cells(input, output)?;
+            return Ok(crate::generic_apply::EditOutcome::default());
+        }
+        if self.mode == ReplaceMode::Plain {
+            self.rewrite_plain(input, output)?;
+            return Ok(crate::generic_apply::EditOutcome::default());
+        }
+        // regex：整段（ADR-0057 §2）。正则的最大匹配长度不可知，窗口化只能取启发式
+        // 上界，一旦小于实际匹配长度就会静默漏替换——留作独立议题，不在此夹带。
+        let mut data = Vec::new();
+        input.read_to_end(&mut data).map_err(rewrite_io_error)?;
         let replaced = replace_bytes(
             &data,
             self.mode,
@@ -587,15 +764,8 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
             structure,
             self.delimiter,
         )?;
-        output.write_all(&replaced).map_err(|error| {
-            KernelError::new(
-                "E3005",
-                "content rewrite failed",
-                Some(error.to_string()),
-                false,
-            )
-        })?;
-        // C03 暂无条目级明细可报（匹配计数在计划期已上报；流式重叠窗口待 ADR）。
+        output.write_all(&replaced).map_err(rewrite_io_error)?;
+        // C03 暂无条目级明细可报（匹配计数在计划期已上报，ADR-0050）。
         Ok(crate::generic_apply::EditOutcome::default())
     }
 }
@@ -879,5 +1049,155 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.kind == "empty-replacement"));
+    }
+    /// 按固定步长吐字节的 `Read`：强制把匹配、替换文本与多字节字符切开，
+    /// 用来验证流式路径与整段路径逐字节一致（ADR-0057 的护栏）。
+    struct Dripping {
+        data: Vec<u8>,
+        step: usize,
+        pos: usize,
+    }
+
+    impl Read for Dripping {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let take = self.step.min(out.len()).min(self.data.len() - self.pos);
+            out[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+            self.pos += take;
+            Ok(take)
+        }
+    }
+
+    fn rewrite_entry(source: &str) -> PlanEntry {
+        PlanEntry {
+            entry_id: "e1".to_string(),
+            source: source.to_string(),
+            target: None,
+            action: PlanAction::EditContent,
+            relation: None,
+            reason: "replace".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: None,
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: None,
+            csv_extract: None,
+            csv_rows: None,
+            csv_dedup: None,
+            csv_filter: None,
+            csv_columns: None,
+            csv_sort: None,
+        }
+    }
+
+    fn rewrite_with(
+        rewriter: &ReplaceRewriter,
+        entry: &PlanEntry,
+        data: &[u8],
+        step: usize,
+    ) -> Result<Vec<u8>, KernelError> {
+        let mut input = Dripping {
+            data: data.to_vec(),
+            step,
+            pos: 0,
+        };
+        let mut output = Vec::new();
+        crate::generic_apply::ContentRewriter::rewrite(rewriter, entry, &mut input, &mut output)?;
+        Ok(output)
+    }
+
+    #[test]
+    fn plain_streaming_matches_whole_file_replace_across_every_chunk_boundary() {
+        // "中ab" 反复：find 跨块、且多字节字符会被 1 字节步长切开。
+        let data: Vec<u8> = "中ab".repeat(400).into_bytes();
+        let entry = rewrite_entry("/data/a.txt");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Plain,
+            "中ab".to_string(),
+            "X".to_string(),
+            CsvMode::Cell,
+            None,
+        );
+        let whole = replace_bytes(
+            &data,
+            ReplaceMode::Plain,
+            "中ab",
+            "X",
+            CsvMode::Cell,
+            ContentStructure::Text,
+            None,
+        )
+        .unwrap();
+        for step in [1usize, 2, 3, 7, 64 * 1024] {
+            let streamed = rewrite_with(&rewriter, &entry, &data, step).unwrap();
+            assert_eq!(
+                streamed, whole,
+                "step {step} diverged from the whole-file path"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_streaming_keeps_e3001_on_invalid_utf8_and_handles_empty_input() {
+        let entry = rewrite_entry("/data/a.txt");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Plain,
+            "ab".to_string(),
+            "X".to_string(),
+            CsvMode::Cell,
+            None,
+        );
+        let error = rewrite_with(&rewriter, &entry, b"ab\xffab", 2).unwrap_err();
+        assert_eq!(error.code, "E3001");
+        assert_eq!(rewrite_with(&rewriter, &entry, b"", 3).unwrap(), b"");
+    }
+
+    #[test]
+    fn cell_streaming_matches_whole_file_cell_replace_across_every_chunk_boundary() {
+        // 引号内换行 + 逗号 + 中文：记录边界与多字节字符都被 1/2/3 字节步长切开。
+        let data = "id,note\n1,\"多行\n中文,值\"\n2,plain\n"
+            .as_bytes()
+            .to_vec();
+        let entry = rewrite_entry("/data/a.csv");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Plain,
+            "中".to_string(),
+            "C".to_string(),
+            CsvMode::Cell,
+            Some(Delimiter::Comma),
+        );
+        let whole = replace_bytes(
+            &data,
+            ReplaceMode::Plain,
+            "中",
+            "C",
+            CsvMode::Cell,
+            ContentStructure::Csv,
+            Some(Delimiter::Comma),
+        )
+        .unwrap();
+        for step in [1usize, 2, 3, 5, 64 * 1024] {
+            let streamed = rewrite_with(&rewriter, &entry, &data, step).unwrap();
+            assert_eq!(
+                streamed, whole,
+                "step {step} diverged from the whole-file path"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_streaming_still_refuses_unclosed_quotes_with_e3004() {
+        let entry = rewrite_entry("/data/a.csv");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Plain,
+            "a".to_string(),
+            "b".to_string(),
+            CsvMode::Cell,
+            Some(Delimiter::Comma),
+        );
+        let error = rewrite_with(&rewriter, &entry, b"id,note\n1,\"open\n", 2).unwrap_err();
+        assert_eq!(error.code, "E3004");
     }
 }

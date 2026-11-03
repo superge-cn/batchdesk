@@ -971,6 +971,20 @@ mod tests {
                 .ok_or_else(|| KernelError::new("E2001", "not found", None, false))
         }
 
+        fn open_read_stream(
+            &self,
+            path: &str,
+        ) -> Result<Box<dyn std::io::Read + Send>, KernelError> {
+            let data = self
+                .files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            Ok(Box::new(std::io::Cursor::new(data)))
+        }
+
         fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
             self.files
                 .lock()

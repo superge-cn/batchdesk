@@ -1,7 +1,7 @@
 //! std::fs implementation of the kernel `FsAdapter` port for the CLI slice.
 
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -144,6 +144,12 @@ impl FsAdapter for CliFsAdapter {
             }
             read(&buffer[..read_bytes])?;
         }
+    }
+
+    fn open_read_stream(&self, path: &str) -> Result<Box<dyn std::io::Read + Send>, KernelError> {
+        let file = fs::File::open(fs_path(Path::new(path)))
+            .map_err(|error| io_error(&error, Path::new(path)))?;
+        Ok(Box::new(BufReader::new(file)))
     }
 
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
@@ -1090,6 +1096,29 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error.code, "E3005");
+    }
+
+    #[test]
+    fn open_read_stream_pulls_bytes_on_demand_and_reports_missing_files() {
+        let dir = TempDir::new();
+        let path = dir.0.join("chunk.csv");
+        let data = b"id,value\n1,10\n2,20\n";
+        fs::write(&path, data).unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        let mut reader = adapter.open_read_stream(path.to_str().unwrap()).unwrap();
+        let mut first = [0u8; 4];
+        reader.read_exact(&mut first).unwrap();
+        assert_eq!(&first, b"id,v");
+        let mut rest = Vec::new();
+        reader.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, &data[4..], "拉取式读取不得丢字节");
+
+        let error = match adapter.open_read_stream("/nope/missing.csv") {
+            Ok(_) => panic!("missing files must fail instead of returning a reader"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "E2001");
     }
 
     #[test]
