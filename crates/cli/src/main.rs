@@ -39,11 +39,13 @@ use kernel::duplicate::{
     group_duplicates, DuplicateCandidate, DuplicateReport, GroupingMode, GroupingOptions,
 };
 use kernel::encoding::{
-    detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
+    detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, StreamTranscoder,
+    TargetEncoding,
 };
 use kernel::fs::FsAdapter;
 use kernel::generic_apply::{
-    apply_generic_plan, ContentEditor, ContentRewriter, EditedContent, GenericApplyContext,
+    apply_generic_plan, ContentEditor, ContentRewriter, EditOutcome, EditedContent,
+    GenericApplyContext,
 };
 use kernel::journal::JournalStore;
 use kernel::license::AlwaysAllowLicense;
@@ -53,6 +55,7 @@ use kernel::line_endings::{
 use kernel::listing::{plan_f10, ListingOptions, PlanF10File, PlanF10Input};
 use kernel::merge::{plan_f04, PlanF04File, PlanF04Input};
 use kernel::name_replace::{plan_c04, C04Mode, PlanC04Input, PlanC04Rule};
+use kernel::plan::C01_KIND;
 use kernel::plan::{
     plan_c01, plan_c09, KeepPolicy, PlanC01File, PlanC09Input, PlanDocument, PlanFile,
 };
@@ -788,9 +791,24 @@ fn run_apply(args: &[String]) -> i32 {
         )
     } else {
         // 通用执行器：c01/c02/c03/f 系列 rename/move/copy/delete/edit-content 计划。
+        let is_c01 = plan.kind == C01_KIND;
         let is_c02 = plan.kind == kernel::line_endings::C02_KIND;
         let is_c03 = plan.kind == kernel::replace_content::C03_KIND;
-        let streaming = is_c02 || is_c03;
+        // c01 的转码编辑器已流式化（ADR-0055）：计划期已确认源编码 ⇒ 按块解码写出。
+        let transcode_rewriter: Option<Box<dyn ContentRewriter>> = if is_c01 {
+            match generic_plan_encoding(&plan) {
+                Ok((target, invalid, prior, source)) => Some(Box::new(TranscodeRewriter {
+                    target,
+                    invalid,
+                    prior,
+                    source,
+                })),
+                Err(error) => return print_kernel_error(&error),
+            }
+        } else {
+            None
+        };
+        let streaming = is_c02 || is_c03 || transcode_rewriter.is_some();
         let has_edit_content = plan
             .entries
             .iter()
@@ -834,7 +852,7 @@ fn run_apply(args: &[String]) -> i32 {
         } else {
             None
         };
-        let content_rewriter = rewriter.as_deref();
+        let content_rewriter = transcode_rewriter.as_deref().or(rewriter.as_deref());
         let lister = FsDirectoryLister;
         let mut generic = GenericApplyContext {
             fs: &adapter,
@@ -885,6 +903,74 @@ fn run_generic_or_specific(
 }
 
 /// c01 计划的 apply 侧参数（与 plan 期写入的 params 快照保持一致）。
+/// C01 转码的流式编辑器（ADR-0055）：源编码已在计划期确认时按块
+/// `read`→`StreamTranscoder`→`write`，内存 O(块)；目标 BOM 只写一次。
+/// 替换计数经 `EditOutcome.detail` 进条目报告（口径同 ADR-0050）。
+struct TranscodeRewriter {
+    target: TargetEncoding,
+    invalid: InvalidSequencePolicy,
+    prior: PlatformPrior,
+    source: Option<SourceEncoding>,
+}
+
+fn rewrite_io_error(error: std::io::Error) -> kernel::error::KernelError {
+    kernel::error::KernelError::new(
+        "E3005",
+        "content rewrite failed",
+        Some(error.to_string()),
+        false,
+    )
+}
+
+impl ContentRewriter for TranscodeRewriter {
+    fn rewrite(
+        &self,
+        _entry: &kernel::plan::PlanEntry,
+        input: &mut dyn std::io::Read,
+        output: &mut dyn std::io::Write,
+    ) -> Result<EditOutcome, kernel::error::KernelError> {
+        if let Some(source) = self.source {
+            if let Some(prefix) = self.target.bom_prefix() {
+                output.write_all(prefix).map_err(rewrite_io_error)?;
+            }
+            let mut transcoder =
+                StreamTranscoder::new(source, self.target.without_bom(), self.invalid);
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let read = input.read(&mut buffer).map_err(rewrite_io_error)?;
+                if read == 0 {
+                    break;
+                }
+                let mut encoded = Vec::new();
+                transcoder.push(&buffer[..read], &mut encoded)?;
+                output.write_all(&encoded).map_err(rewrite_io_error)?;
+            }
+            let mut tail = Vec::new();
+            let summary = transcoder.finish(&mut tail)?;
+            output.write_all(&tail).map_err(rewrite_io_error)?;
+            return Ok(EditOutcome {
+                detail: Some(format!(
+                    "invalid sequences replaced: {}",
+                    summary.replacement_count
+                )),
+            });
+        }
+        // 防御回退：计划未带源编码时对整段检测（plan_c01 对不确定编码本就 E3001
+        // 阻断，正常不会走到；保留与旧编辑器一致的语义）。
+        let mut data = Vec::new();
+        input.read_to_end(&mut data).map_err(rewrite_io_error)?;
+        let source = detect(&data, self.prior).require_encoding()?;
+        let result = transcode(&data, source, self.target, self.invalid)?;
+        output.write_all(&result.bytes).map_err(rewrite_io_error)?;
+        Ok(EditOutcome {
+            detail: Some(format!(
+                "invalid sequences replaced: {}",
+                result.replacement_count
+            )),
+        })
+    }
+}
+
 fn generic_plan_encoding(
     plan: &PlanDocument,
 ) -> Result<
@@ -7212,6 +7298,61 @@ mod tests {
         ];
         args.extend(extra.iter().map(|value| value.to_string()));
         args
+    }
+
+    #[test]
+    fn transcode_rewriter_streams_identically_to_whole_file_transcode() {
+        // ADR-0055：流式转码编辑器与整段 transcode 逐字节一致（含 BOM 一次），
+        // 且替换计数走 detail（口径同 ADR-0050）。输入超过读缓冲（64 KiB），
+        // 强制跨块解码（GB18030 双字节字符会被切块）。
+        let text = "中文abc\n".repeat(20_000);
+        // 借 kernel 的转码纯函数生成 GB18030 字节（CLI 不直接依赖 encoding_rs）。
+        let gb = transcode(
+            text.as_bytes(),
+            SourceEncoding::Utf8,
+            TargetEncoding::Gb18030,
+            InvalidSequencePolicy::ReplaceAndCount,
+        )
+        .unwrap()
+        .bytes;
+        assert!(gb.len() > 64 * 1024);
+
+        let rewrite = |target: TargetEncoding| -> (Vec<u8>, Option<String>) {
+            let rewriter = TranscodeRewriter {
+                target,
+                invalid: InvalidSequencePolicy::ReplaceAndCount,
+                prior: kernel::encoding::PlatformPrior::Other,
+                source: Some(SourceEncoding::Gb18030),
+            };
+            let mut output = Vec::new();
+            // rewriter 不读 entry；空 JSON 缺字段会失败，故构造最小合法条目。
+            let entry: kernel::plan::PlanEntry =
+                serde_json::from_str("{\"entryId\":\"e1\",\"source\":\"/x\",\"action\":\"edit-content\",\"reason\":\"t\"}").unwrap();
+            let outcome = rewriter.rewrite(&entry, &mut &gb[..], &mut output).unwrap();
+            (output, outcome.detail)
+        };
+
+        let (streamed, detail) = rewrite(TargetEncoding::Utf8 { bom: false });
+        let whole = transcode(
+            &gb,
+            SourceEncoding::Gb18030,
+            TargetEncoding::Utf8 { bom: false },
+            InvalidSequencePolicy::ReplaceAndCount,
+        )
+        .unwrap();
+        assert_eq!(streamed, whole.bytes);
+        assert!(detail.unwrap().starts_with("invalid sequences replaced: "));
+
+        // BOM 目标：流式版在最前面写一次，与整段 transcode 一致。
+        let (streamed_bom, _) = rewrite(TargetEncoding::Utf8 { bom: true });
+        let whole_bom = transcode(
+            &gb,
+            SourceEncoding::Gb18030,
+            TargetEncoding::Utf8 { bom: true },
+            InvalidSequencePolicy::ReplaceAndCount,
+        )
+        .unwrap();
+        assert_eq!(streamed_bom, whole_bom.bytes);
     }
 
     #[test]

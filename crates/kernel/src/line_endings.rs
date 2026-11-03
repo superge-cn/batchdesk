@@ -310,7 +310,7 @@ impl crate::generic_apply::ContentRewriter for LineEndingRewriter {
         entry: &PlanEntry,
         input: &mut dyn Read,
         output: &mut dyn Write,
-    ) -> Result<(), KernelError> {
+    ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
         let structure = self.structure.resolve(&entry.source);
         let mut processor = LineEndingProcessor::new(structure, Some(self.target));
         let mut buffer = [0u8; 64 * 1024];
@@ -328,7 +328,9 @@ impl crate::generic_apply::ContentRewriter for LineEndingRewriter {
             }
             processor.feed(&buffer[..read], output)?;
         }
-        processor.finish(output)
+        processor.finish(output)?;
+        // C02 暂无条目级明细可报（换行计数在计划期已上报）。
+        Ok(crate::generic_apply::EditOutcome::default())
     }
 }
 

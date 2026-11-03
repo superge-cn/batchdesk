@@ -70,14 +70,21 @@ impl EditedContent {
 pub type ContentEditor<'a> =
     &'a (dyn Fn(&[u8]) -> Result<EditedContent, KernelError> + Send + Sync);
 
-/// 流式内容重写端口：读取源流、写入目标流；C02 等大文件改写使用。
+/// 流式内容重写的条目级结果：`detail` 与 `EditedContent.detail` 同载体
+/// （方案 §5.2"默认替换并计数上报"的落点，随条目级报告进执行明细）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EditOutcome {
+    pub detail: Option<String>,
+}
+
+/// 流式内容重写端口：读取源流、写入目标流；C02/C03/C01 等大文件改写使用。
 pub trait ContentRewriter: Send + Sync {
     fn rewrite(
         &self,
         entry: &crate::plan::PlanEntry,
         input: &mut dyn Read,
         output: &mut dyn Write,
-    ) -> Result<(), KernelError>;
+    ) -> Result<EditOutcome, KernelError>;
 }
 
 pub struct GenericApplyContext<'a> {
@@ -1582,21 +1589,26 @@ fn perform(
             PlanAction::EditContent => {
                 // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
                 let backup = view.fs.backup_to_quarantine(&entry.source)?;
-                let mut detail = None;
-                if let Some(rewriter) = view.content_rewriter {
+                let detail = if let Some(rewriter) = view.content_rewriter {
+                    // 明细经闭包局部变量带出（rewrite_atomic_with 的回调签名固定为 ()）。
+                    let mut rewrite_detail = None;
                     view.fs
                         .rewrite_atomic_with(&entry.source, &mut |reader, writer| {
-                            rewriter.rewrite(entry, reader, writer)
+                            let outcome = rewriter.rewrite(entry, reader, writer)?;
+                            rewrite_detail = outcome.detail;
+                            Ok(())
                         })?;
+                    rewrite_detail
                 } else {
                     let data = view.fs.read_bytes(&entry.source)?;
                     let editor = view
                         .content_editor
                         .expect("validated: edit-content requires an editor");
                     let edited = editor(&data)?;
-                    detail = edited.detail;
+                    let detail = edited.detail;
                     view.fs.write_atomic(&entry.source, &edited.bytes)?;
-                }
+                    detail
+                };
                 let forward = FsOp::WriteAtomic {
                     path: entry.source.clone(),
                     data_ref: Some(backup),
@@ -1651,7 +1663,6 @@ fn perform_csv_columns(
     payload: &PlanCsvColumns,
 ) -> Result<crate::generic_apply::Performed, KernelError> {
     use crate::csv_columns::{split_value, SplitBy};
-    use crate::csv_merge::{parse_records, write_record};
     use crate::journal::FsOp;
 
     let encoding = payload.encoding.ok_or_else(|| {
@@ -1675,38 +1686,22 @@ fn perform_csv_columns(
     } else {
         None
     };
-    let data = view.fs.read_bytes(source)?;
-    let decoded = transcode(
-        &data,
-        encoding,
-        TargetEncoding::Utf8 { bom: false },
-        invalid,
-    )?;
-    let records = parse_records(&decoded.bytes, delimiter.as_byte());
-    let (header, rows): (Option<&Vec<String>>, &[Vec<String>]) = if payload.has_header {
-        let Some((header, rows)) = records.split_first() else {
-            return Err(KernelError::new(
-                "E2010",
-                "source header changed since plan preview; re-plan before applying",
-                None,
-                true,
-            ));
-        };
-        if normalized_columns(header) != payload.columns {
-            return Err(KernelError::new(
-                "E2010",
-                "source header changed since plan preview; re-plan before applying",
-                None,
-                true,
-            ));
-        }
-        (Some(header), rows)
-    } else {
-        (None, &records)
-    };
-
-    let mut output = String::new();
-    match (payload.mode.as_str(), &payload.split, &payload.merge) {
+    // 流式执行（ADR-0055）：逐行拆分/合并即读即写，内存 O(块＋单条记录)。
+    // 模式与拆分方式先于读源判定（与整段路径同码，顺序无观察面）。
+    enum ColumnsMode {
+        Split {
+            index: u64,
+            parts: u64,
+            new_names: Vec<String>,
+            by: SplitBy,
+        },
+        Merge {
+            picks: Vec<crate::plan::PlanCsvExtractColumn>,
+            joiner: String,
+            target_name: String,
+        },
+    }
+    let mode = match (payload.mode.as_str(), &payload.split, &payload.merge) {
         ("split", Some(split), _) => {
             let by = match (&split.separator, &split.regex) {
                 (Some(separator), _) => SplitBy::Separator(separator.clone()),
@@ -1717,71 +1712,126 @@ fn perform_csv_columns(
                     ))
                 }
             };
-            if let Some(header) = header {
-                let mut names = header.to_vec();
-                for (offset, name) in split.new_names.iter().enumerate() {
-                    let position = split.index as usize + offset;
-                    names.insert(position.min(names.len()), name.clone());
-                }
-                write_record(&names, delimiter.as_byte(), &mut output);
-            }
-            for row in rows {
-                let mut fields = row.clone();
-                // 源列取值用 1-based 序号换算的 0-based 下标（差一曾致取错列）。
-                let source_value = fields
-                    .get(split.index as usize - 1)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut parts = split_value(&source_value, &by);
-                // 不足评估段数的行补空串（§5.15 空值处理）；超出部分原样保留不截断。
-                while parts.len() < split.parts as usize {
-                    parts.push(String::new());
-                }
-                // 0-based 插入点＝源列之后（源列 1-based index 的 0-based 位置）。
-                for (offset, part) in parts.iter().enumerate() {
-                    let position = split.index as usize + offset;
-                    fields.insert(position.min(fields.len()), part.clone());
-                }
-                write_record(&fields, delimiter.as_byte(), &mut output);
+            ColumnsMode::Split {
+                index: split.index,
+                parts: split.parts,
+                new_names: split.new_names.clone(),
+                by,
             }
         }
-        ("merge", _, Some(merge)) => {
-            if let Some(header) = header {
-                let mut names = header.to_vec();
-                names.push(merge.target_name.clone());
-                write_record(&names, delimiter.as_byte(), &mut output);
-            }
-            for row in rows {
-                let joined = merge
-                    .picks
-                    .iter()
-                    .map(|pick| {
-                        // 1-based 序号换算 0-based 下标（差一曾致取错列）。
-                        row.get(pick.index as usize - 1)
-                            .cloned()
-                            .unwrap_or_default()
-                    })
-                    .collect::<Vec<_>>()
-                    .join(&merge.joiner);
-                let mut fields = row.clone();
-                fields.push(joined);
-                write_record(&fields, delimiter.as_byte(), &mut output);
-            }
-        }
+        ("merge", _, Some(merge)) => ColumnsMode::Merge {
+            picks: merge.picks.clone(),
+            joiner: merge.joiner.clone(),
+            target_name: merge.target_name.clone(),
+        },
         _ => {
             return Err(KernelError::invalid_params(
                 "csvColumns payload does not match its mode",
             ))
         }
-    }
-
-    let transcoded = transcode(
-        output.as_bytes(),
-        SourceEncoding::Utf8,
-        target_encoding,
-        invalid,
-    )?;
-    view.fs.write_atomic(target, &transcoded.bytes)?;
+    };
+    view.fs.write_atomic_with(target, &mut |writer| {
+        let mut sink = CsvStreamWriter {
+            transcoder: StreamTranscoder::new(
+                SourceEncoding::Utf8,
+                target_encoding.without_bom(),
+                invalid,
+            ),
+            writer,
+        };
+        if let Some(prefix) = target_encoding.bom_prefix() {
+            write_stream(sink.writer, prefix)?;
+        }
+        let mut header_checked = false;
+        stream_csv_records(
+            view,
+            &StreamCsvInput {
+                source,
+                expected_size: None,
+                encoding,
+                invalid,
+                delimiter: delimiter.as_byte(),
+            },
+            &mut |row| {
+                if payload.has_header && !header_checked {
+                    header_checked = true;
+                    if normalized_columns(&row) != payload.columns {
+                        return Err(KernelError::new(
+                            "E2010",
+                            "source header changed since plan preview; re-plan before applying",
+                            None,
+                            true,
+                        ));
+                    }
+                    // 表头行按模式派生新列名（与整段路径一致：原始表头＋追加/插入）。
+                    let mut names = row;
+                    match &mode {
+                        ColumnsMode::Split {
+                            index, new_names, ..
+                        } => {
+                            for (offset, name) in new_names.iter().enumerate() {
+                                let position = *index as usize + offset;
+                                names.insert(position.min(names.len()), name.clone());
+                            }
+                        }
+                        ColumnsMode::Merge { target_name, .. } => {
+                            names.push(target_name.clone());
+                        }
+                    }
+                    return sink.emit_record(&names, delimiter.as_byte());
+                }
+                match &mode {
+                    ColumnsMode::Split {
+                        index,
+                        parts: expected_parts,
+                        by,
+                        ..
+                    } => {
+                        let mut fields = row;
+                        // 源列取值用 1-based 序号换算的 0-based 下标（差一曾致取错列）。
+                        let source_value =
+                            fields.get(*index as usize - 1).cloned().unwrap_or_default();
+                        let mut parts = split_value(&source_value, by);
+                        // 不足评估段数的行补空串（§5.15 空值处理）；超出部分原样保留不截断。
+                        while parts.len() < *expected_parts as usize {
+                            parts.push(String::new());
+                        }
+                        // 0-based 插入点＝源列之后（源列 1-based index 的 0-based 位置）。
+                        for (offset, part) in parts.iter().enumerate() {
+                            let position = *index as usize + offset;
+                            fields.insert(position.min(fields.len()), part.clone());
+                        }
+                        sink.emit_record(&fields, delimiter.as_byte())
+                    }
+                    ColumnsMode::Merge { picks, joiner, .. } => {
+                        let joined = picks
+                            .iter()
+                            .map(|pick| {
+                                // 1-based 序号换算 0-based 下标（差一曾致取错列）。
+                                row.get(pick.index as usize - 1)
+                                    .cloned()
+                                    .unwrap_or_default()
+                            })
+                            .collect::<Vec<_>>()
+                            .join(joiner);
+                        let mut fields = row;
+                        fields.push(joined);
+                        sink.emit_record(&fields, delimiter.as_byte())
+                    }
+                }
+            },
+        )?;
+        if payload.has_header && !header_checked {
+            // 与整段路径同口径：有表头而源里没有表头 ⇒ E2010。
+            return Err(KernelError::new(
+                "E2010",
+                "source header changed since plan preview; re-plan before applying",
+                None,
+                true,
+            ));
+        }
+        Ok(())
+    })?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -3290,9 +3340,9 @@ mod tests {
     use crate::fs::{DirEntryInfo, EntryAttrs, PathOutcome, ScanFilter, StatInfo};
     use crate::journal::{JournalEntry, JournalSink, JournalStatus};
     use crate::plan::{
-        PlanCsvDedupColumn, PlanCsvExtract, PlanCsvExtractColumn, PlanCsvFilterColumn,
-        PlanCsvFilterCondition, PlanCsvMerge, PlanCsvMergeFile, PlanCsvRows, PlanEntry,
-        PlanExpected, PlanMerge, PlanMergeSource, PlanRange, PlanStats,
+        PlanCsvColumnsSplit, PlanCsvDedupColumn, PlanCsvExtract, PlanCsvExtractColumn,
+        PlanCsvFilterColumn, PlanCsvFilterCondition, PlanCsvMerge, PlanCsvMergeFile, PlanCsvRows,
+        PlanEntry, PlanExpected, PlanMerge, PlanMergeSource, PlanRange, PlanStats,
     };
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
     use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
@@ -3472,6 +3522,50 @@ mod tests {
             }
             let mut sink = Sink(Vec::new());
             write(&mut sink)?;
+            self.files.lock().unwrap().insert(path.to_string(), sink.0);
+            Ok(())
+        }
+
+        fn rewrite_atomic_with(
+            &self,
+            path: &str,
+            rewrite: &mut crate::fs::RewriteCallback<'_>,
+        ) -> Result<(), KernelError> {
+            if self
+                .fail_writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|blocked| blocked == path)
+            {
+                return Err(KernelError::new(
+                    "E5001",
+                    "injected write failure",
+                    None,
+                    true,
+                ));
+            }
+            let original = self
+                .files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            struct Sink(Vec<u8>);
+            impl std::io::Write for Sink {
+                fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                    self.0.extend_from_slice(buffer);
+                    Ok(buffer.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            // reader 覆盖原字节；回调失败不提交（原子语义与平台实现一致）。
+            let mut sink = Sink(Vec::new());
+            let mut reader: &[u8] = &original;
+            rewrite(&mut reader, &mut sink)?;
             self.files.lock().unwrap().insert(path.to_string(), sink.0);
             Ok(())
         }
@@ -4670,6 +4764,55 @@ mod tests {
         }
     }
 
+    fn csv_columns_split_entry(
+        entry_id: &str,
+        source: &str,
+        target: &str,
+        size: u64,
+        columns: &[&str],
+        split: PlanCsvColumnsSplit,
+    ) -> PlanEntry {
+        PlanEntry {
+            entry_id: entry_id.to_string(),
+            source: source.to_string(),
+            target: Some(target.to_string()),
+            action: PlanAction::CsvColumns,
+            relation: None,
+            reason: "csv columns split".to_string(),
+            conflict: None,
+            resolution: None,
+            blocked: None,
+            expected: Some(PlanExpected {
+                size,
+                algorithm: "size".to_string(),
+                hash: None,
+            }),
+            range: None,
+            merge: None,
+            csv: None,
+            csv_merge: None,
+            csv_extract: None,
+            csv_rows: None,
+            csv_dedup: None,
+            csv_filter: None,
+            csv_columns: Some(PlanCsvColumns {
+                mode: "split".to_string(),
+                encoding: Some(SourceEncoding::Utf8),
+                size,
+                delimiter: ",".to_string(),
+                has_header: true,
+                columns: columns.iter().map(|value| value.to_string()).collect(),
+                column_count: columns.len() as u64,
+                split: Some(split),
+                merge: None,
+                target_encoding: "utf-8".to_string(),
+                invalid: "replace-and-count".to_string(),
+                dirty_rows: 0,
+            }),
+            csv_sort: None,
+        }
+    }
+
     fn csv_filter_entry(
         entry_id: &str,
         source: &str,
@@ -4729,6 +4872,78 @@ mod tests {
             csv_columns: None,
             csv_sort: None,
         }
+    }
+
+    #[test]
+    fn csv_columns_arm_streams_instead_of_whole_file_reads() {
+        // C14 与 CSV 家族其余各臂复用同一流式底座（ADR-0055）：
+        // 断言 read_bytes 0 次（TestFs 的 read_stream 按 3 字节分块切开记录边界）。
+        let fs = TestFs::default();
+        fs.write_file("/data/a.csv", b"a,b\nx-1,y\np-2,q\n");
+        let split = PlanCsvColumnsSplit {
+            index: 1,
+            name: Some("a".to_string()),
+            separator: Some("-".to_string()),
+            regex: None,
+            parts: 2,
+            new_names: vec!["a.1".to_string(), "a.2".to_string()],
+        };
+        let plan = plan(vec![csv_columns_split_entry(
+            "e1",
+            "/data/a.csv",
+            "/out/split.csv",
+            16,
+            &["a", "b"],
+            split,
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(
+            fs.read_file("/out/split.csv"),
+            b"a,a.1,a.2,b\nx-1,x,1,y\np-2,p,2,q\n"
+        );
+        assert_eq!(
+            fs.read_bytes_calls(),
+            0,
+            "csv-columns must stream the source instead of read_bytes"
+        );
+        assert!(matches!(
+            journal.entries[0].reverse,
+            FsOp::Quarantine { .. }
+        ));
+    }
+
+    #[test]
+    fn edit_content_via_rewriter_carries_detail_per_entry() {
+        // ContentRewriter 的明细通道（ADR-0055）：与 ContentEditor 的
+        // EditedContent.detail 同载体，随条目报告进执行明细。
+        let fs = TestFs::default();
+        fs.write_file("/d/one.txt", b"abc\n");
+        let plan = plan(vec![action_entry(
+            "e1",
+            "/d/one.txt",
+            None,
+            PlanAction::EditContent,
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        let rewriter = UpperRewriter;
+        ctx.content_rewriter = Some(&rewriter);
+        let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(fs.read_file("/d/one.txt"), b"ABC\n");
+        assert_eq!(
+            outcome.report.entries[0].detail.as_deref(),
+            Some("upper rewriter ran")
+        );
     }
 
     #[test]
@@ -6013,7 +6228,7 @@ mod tests {
             _entry: &crate::plan::PlanEntry,
             input: &mut dyn std::io::Read,
             output: &mut dyn std::io::Write,
-        ) -> Result<(), KernelError> {
+        ) -> Result<EditOutcome, KernelError> {
             let mut buffer = Vec::new();
             input
                 .read_to_end(&mut buffer)
@@ -6025,7 +6240,9 @@ mod tests {
             output
                 .write_all(&upper)
                 .map_err(|error| KernelError::new("E5001", error.to_string(), None, false))?;
-            Ok(())
+            Ok(EditOutcome {
+                detail: Some("upper rewriter ran".to_string()),
+            })
         }
     }
 

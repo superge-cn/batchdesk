@@ -567,7 +567,7 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
         entry: &PlanEntry,
         input: &mut dyn Read,
         output: &mut dyn Write,
-    ) -> Result<(), KernelError> {
+    ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
         let mut data = Vec::new();
         input.read_to_end(&mut data).map_err(|error| {
             KernelError::new(
@@ -594,7 +594,9 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
                 Some(error.to_string()),
                 false,
             )
-        })
+        })?;
+        // C03 暂无条目级明细可报（匹配计数在计划期已上报；流式重叠窗口待 ADR）。
+        Ok(crate::generic_apply::EditOutcome::default())
     }
 }
 

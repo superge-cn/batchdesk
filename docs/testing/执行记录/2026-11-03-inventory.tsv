@@ -73,6 +73,7 @@ cli::tests::keep_is_only_valid_with_plan	ok
 cli::tests::plan_defaults_to_earliest	ok
 cli::tests::plan_document_round_trips_through_json	ok
 cli::tests::plan_rejects_fast_mode	ok
+cli::tests::transcode_rewriter_streams_identically_to_whole_file_transcode	ok
 cli::tests::valid_plan_arguments_are_accepted	ok
 corpus::assertions_table_covers_every_automated_corpus	ok
 corpus::k01_gbk_sample_detects_as_gb18030_and_transcodes_clean	ok
@@ -284,6 +285,7 @@ kernel::generic_apply::tests::copy_applies_with_a_quarantine_reverse_and_undo_re
 kernel::generic_apply::tests::copy_overwrite_backs_up_the_target_and_undo_restores_its_content	ok
 kernel::generic_apply::tests::cross_volume_move_copies_verifies_removes_source_and_undoes	ok
 kernel::generic_apply::tests::cross_volume_move_verification_failure_keeps_the_source	ok
+kernel::generic_apply::tests::csv_columns_arm_streams_instead_of_whole_file_reads	ok
 kernel::generic_apply::tests::csv_dedup_and_filter_arms_stream_instead_of_whole_file_reads	ok
 kernel::generic_apply::tests::csv_extract_rejects_a_header_changed_since_plan	ok
 kernel::generic_apply::tests::csv_extract_selects_columns_in_order_and_undo_removes_the_output	ok
@@ -300,6 +302,7 @@ kernel::generic_apply::tests::csv_rows_rejects_a_header_changed_since_plan	ok
 kernel::generic_apply::tests::edit_content_carries_detail_per_entry_and_keeps_it_absent_when_not_produced	ok
 kernel::generic_apply::tests::edit_content_requires_an_editor_on_the_context	ok
 kernel::generic_apply::tests::edit_content_rewrites_in_place_and_undo_restores_the_bytes	ok
+kernel::generic_apply::tests::edit_content_via_rewriter_carries_detail_per_entry	ok
 kernel::generic_apply::tests::entry_concurrency_out_of_range_is_rejected	ok
 kernel::generic_apply::tests::existing_target_is_skipped_by_default	ok
 kernel::generic_apply::tests::merge_does_not_overwrite_an_existing_target_by_default	ok
