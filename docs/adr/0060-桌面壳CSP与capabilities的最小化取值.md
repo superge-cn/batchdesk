@@ -65,10 +65,10 @@ object-src 'none'; base-uri 'self'; form-action 'none'
 - **断言是配置层的**：它保证"配置写对"，不保证"运行时无违规"。真机仍需看 WebView 控制台的 CSP violation（放桌面日）。
 - **devtools 未单独配置**：Tauri v2 的生产构建是否含 devtools 由 Cargo feature 决定，本仓库 `tauri` 依赖未启 `devtools` feature，故不写配置项——这一点记在本节，避免下次有人以为"漏了"。
 - **`connect-src` 里的 `'self'`** 是为将来 Web 形态（同源 HTTP）留的；桌面形态下它等价于自定义协议的同源，不构成额外放开。
-- **未做**：发布流水线里的 CSP 断言（构建产物层面，例如检查 dist 里是否有内联脚本）——那属于发布契约（设计 11），本批只在配置层收口。
+- **产物层断言已补（同日追加）**：`scripts/check_dist_csp.py` 在 `pnpm build` 之后检查 `dist/index.html`——无内联 `<script>`、无内联 `<style>`/`style=` 属性、无 `http(s)://` 远端引用，并要求存在入口 `<script src>`（否则"没有内联脚本"只是因为它什么都没引）。CI 的 web job 已接入。先红实证：拷一份 dist 注入 `<script>window.__x=1</script>`，脚本报"发现 1 处内联 `<script>`"并非零退出。这一步把"`script-src 'self'` 的前提"从推定变成实测（本机真实构建：1597 modules、360 KB JS、index.html 0 内联脚本 0 内联样式 0 远端引用）。
 
 ## 5. 验证
 
 - `cargo test --manifest-path src-tauri/Cargo.toml`：壳层 **27 → 33 项**（新增 `security_config` 6 项），全绿；
 - `cargo check --manifest-path src-tauri/Cargo.toml`：`tauri-build` 在 build.rs 里解析 `tauri.conf.json`，新键（`devCsp`/`freezePrototype`/`withGlobalTauri`）经 `tauri-utils 2.10.2` 的 `SecurityConfig`/`Config` 字段核对存在（源码 grep 实证），编译通过；
-- CI 的 desktop job 已跑该套测试，配置被改松时该 job 先红。
+- CI 的 desktop job 已跑该套测试，配置被改松时该 job 先红；web job 在构建后跑产物层断言（`check_dist_csp.py`）。

@@ -205,6 +205,11 @@ jobs:
       - name: 类型检查与构建
         run: pnpm build
         working-directory: web
+      # 产物层 CSP 前置断言（ADR-0060 §4）：桌面 csp 的前提是"产物没有内联脚本、
+      # 不引远端资源"。这条假设被打破时只有桌面端白屏，浏览器预览一切正常，必须门禁化。
+      - name: 产物 CSP 断言（内联脚本/样式/远端引用）
+        run: python ../scripts/check_dist_csp.py
+        working-directory: web
       - name: 前端组件测试（Vitest：导航可达 ＋ 任务控制/撤销链）
         run: pnpm test
         working-directory: web
