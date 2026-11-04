@@ -661,7 +661,8 @@ vitest::App.navigation.test.tsx::功能视图导航可达 「任务与撤销」�
 vitest::App.navigation.test.tsx::功能视图导航可达 「设置」是能点开的真实视图：五组配置与语言选择都在	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检落地前不派发；期间界面仍可操作；落地瞬间参数已变则拒绝派发	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检阻断时不派发执行（E2004 前移为执行前阻断，零副作用）	ok
-vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §3） 失败条目显示码位＋本地化摘要，不显示后端 message／detail 原文	ok
+vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §2／§3） 失败条目显示码位＋本地化摘要，不显示后端 message／detail 原文	ok
+vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §2／§3） 条目状态用本地化文案，不露出内核枚举原词（09 §2）	ok
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 启动时把上次目录填进输入框，并把最近目录挂成候选	ok
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 生成预览后把这次目录写回 UiState，且保持去重置顶	ok
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 没有记录时不预填、也不写候选（空状态由用户自己选）	ok
@@ -669,6 +670,7 @@ vitest::App.uiState.test.tsx::上次页面（设计 03 §11.2 的 lastSection/la
 vitest::App.uiState.test.tsx::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 切换页面时写回 lastSection	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 生成计划→执行→执行中可取消（调用 cancelTask）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 partial-failed 后出现「重试失败项」并调用 retryTask	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 回滚预演的条目状态用本地化文案，不露出枚举原词（09 §2）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 撤销调用 undoPlan（走共享 Journal 通道，不自建撤销）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 改参数后旧计划立即失效：提示出现且执行/撤销被禁用（T 配方 P4）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 保护目录命中：执行前必须二次确认，且初始焦点不在危险按钮（方案 §3.3/§7.11、U §3.5）	ok
