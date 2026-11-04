@@ -2455,6 +2455,75 @@ fn f12_reports_existing_conflicts_and_invalid_targets() {
 }
 
 #[test]
+fn f12_and_c03_name_read_only_files_in_plan_warnings() {
+    let dir = TempDir::new();
+    let root = dir.0.join("readonly");
+    fs::create_dir_all(&root).unwrap();
+    let read_only = root.join("locked-notes.txt");
+    fs::write(&read_only, b"alpha beta\n").unwrap();
+    fs::write(root.join("plain.txt"), b"alpha\n").unwrap();
+    let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&read_only, permissions).unwrap();
+
+    let named_readonly = |output: &std::process::Output| {
+        assert!(
+            output.status.success(),
+            "命令应成功出计划：{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let warnings = document["warnings"].as_array().cloned().unwrap_or_default();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning["kind"] == "readonly"
+                    && warning["suggestion"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("locked-notes.txt")
+            }),
+            "预览必须点名只读文件，不得让它到执行期才撞墙：{warnings:?}"
+        );
+    };
+
+    named_readonly(&batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--suffix",
+        "-v2",
+        "--json",
+    ]));
+    named_readonly(&batchdesk(&[
+        "c03",
+        "--file",
+        path_text(&read_only),
+        "--find",
+        "alpha",
+        "--replace",
+        "omega",
+        "--sample-bytes",
+        "4096",
+        "--json",
+    ]));
+
+    // 还原写位，否则 Windows 上临时目录清理会失败。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&read_only, permissions).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&read_only, permissions).unwrap();
+    }
+}
+
+#[test]
 fn f13_regex_capture_plan_apply_and_undo() {
     let dir = TempDir::new();
     let root = dir.0.join("regex");

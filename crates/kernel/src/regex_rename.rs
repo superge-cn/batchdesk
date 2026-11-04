@@ -36,6 +36,8 @@ pub struct PlanF13Input {
     pub case_sense: CaseSense,
     /// 壳层探测到的系统长路径支持开关（方案 §5.13）；计划层不读注册表。
     pub long_path_supported: bool,
+    /// 壳层采集的写入权限事实（S01 的 `PathCheck` 同型）；只用于预览期点名。
+    pub access_facts: Vec<crate::preflight::PathCheck>,
     pub rule: PlanF13Rule,
 }
 
@@ -50,6 +52,7 @@ pub fn plan_f13(input: PlanF13Input) -> Result<PlanDocument, KernelError> {
         protected_dirs,
         case_sense,
         long_path_supported,
+        access_facts,
         rule,
     } = input;
     let mut params = BTreeMap::new();
@@ -73,6 +76,7 @@ pub fn plan_f13(input: PlanF13Input) -> Result<PlanDocument, KernelError> {
             protected_dirs,
             case_sense,
             long_path_supported,
+            access_facts,
         },
         F13_KIND,
         params,
@@ -197,6 +201,7 @@ mod tests {
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
             long_path_supported: true,
+            access_facts: Vec::new(),
             rule: PlanF13Rule {
                 pattern: pattern.to_string(),
                 replacement: replacement.to_string(),

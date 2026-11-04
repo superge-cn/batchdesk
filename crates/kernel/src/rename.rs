@@ -85,6 +85,9 @@ pub struct PlanF12Input {
     pub case_sense: CaseSense,
     /// 壳层探测到的系统长路径支持开关（方案 §5.13）；计划层不读注册表。
     pub long_path_supported: bool,
+    /// 壳层采集的写入权限事实（与 S01 的 `PathCheck` 同型，按路径命中条目）。
+    /// 只用于预览期点名，计划层不摸磁盘；执行期处置见设计 01 §5.1 与 OQ-37。
+    pub access_facts: Vec<crate::preflight::PathCheck>,
     pub rule: PlanF12Rule,
 }
 
@@ -106,6 +109,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
         protected_dirs,
         case_sense,
         long_path_supported,
+        access_facts,
         rule,
     } = input;
     let mut params = BTreeMap::new();
@@ -137,6 +141,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             protected_dirs,
             case_sense,
             long_path_supported,
+            access_facts,
         },
         F12_KIND,
         params,
@@ -151,6 +156,8 @@ pub(crate) struct RenamePlanContext {
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
     pub long_path_supported: bool,
+    /// 壳层采集的写入权限事实；仅用于预览期点名（方案 §5.13 的"预检标记"）。
+    pub access_facts: Vec<crate::preflight::PathCheck>,
 }
 
 /// F12/F13 共用的重命名计划核心：冲突扫描、长路径分级与两阶段编排。
@@ -167,6 +174,7 @@ pub(crate) fn plan_rename(
         protected_dirs,
         case_sense,
         long_path_supported,
+        access_facts,
     } = context;
     if plan_id.trim().is_empty() {
         return Err(KernelError::missing_param("planId is required"));
@@ -397,6 +405,47 @@ pub(crate) fn plan_rename(
         });
     }
 
+    // 方案 §5.13 的"预检标记"半程：只读/被占用在预览期点名，不静默、也不在此处决定处置。
+    let mut readonly_paths: BTreeSet<String> = BTreeSet::new();
+    let mut locked_paths: BTreeSet<String> = BTreeSet::new();
+    for entry in &entries {
+        let mut paths: Vec<&str> = vec![entry.source.as_str()];
+        if let Some(target) = entry.target.as_deref() {
+            paths.push(target);
+        }
+        for path in paths {
+            if let Some(fact) = access_hit(&access_facts, path) {
+                if fact.readonly {
+                    readonly_paths.insert(path.to_string());
+                }
+                if fact.locked {
+                    locked_paths.insert(path.to_string());
+                }
+            }
+        }
+    }
+    if !readonly_paths.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "readonly".to_string(),
+            suggestion: Some(format!(
+                "these paths are read-only and a rename needs to rewrite them; \
+                 clear the read-only attribute and preview again: {}",
+                readonly_paths.into_iter().collect::<Vec<_>>().join(", ")
+            )),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    if !locked_paths.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "locked".to_string(),
+            suggestion: Some(format!(
+                "these paths are held open by another program; close it and preview again: {}",
+                locked_paths.into_iter().collect::<Vec<_>>().join(", ")
+            )),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+
     params.insert(
         "itemCount".to_string(),
         PlanParamValue::Number(items.len() as u64),
@@ -498,6 +547,16 @@ fn target_path(source: &str, name: &str) -> String {
         Some(index) => format!("{}{name}", &source[..=index]),
         None => name.to_string(),
     }
+}
+
+/// 命中壳层采集的权限事实：字面路径与规范路径都算同一条目。
+fn access_hit<'a>(
+    facts: &'a [crate::preflight::PathCheck],
+    path: &str,
+) -> Option<&'a crate::preflight::PathCheck> {
+    facts
+        .iter()
+        .find(|fact| fact.path == path || fact.canonical_path.as_deref() == Some(path))
 }
 
 fn plain_entry(
@@ -681,6 +740,7 @@ mod tests {
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
             long_path_supported: true,
+            access_facts: Vec::new(),
             rule,
         }
     }
@@ -706,6 +766,65 @@ mod tests {
         assert_eq!(plan.entries.len(), 2);
         assert_eq!(plan.entries[0].target.as_deref(), Some("/data/new_a.txt"));
         assert_eq!(plan.params["twoPhase"], PlanParamValue::Bool(false));
+    }
+
+    #[test]
+    fn readonly_and_locked_facts_are_named_in_preview_warnings() {
+        let fact = |path: &str, readonly: bool, locked: bool| crate::preflight::PathCheck {
+            path: path.to_string(),
+            canonical_path: None,
+            readonly,
+            locked,
+            placeholder: false,
+            long_path_supported: true,
+        };
+        let plan = plan_f12(PlanF12Input {
+            access_facts: vec![
+                // 源文件只读，与目标位置上的被占用项，都必须在预览期点名。
+                fact("/data/a.txt", true, false),
+                fact("/data/new_b.txt", false, true),
+            ],
+            ..input(vec![item("a.txt"), item("b.txt")], prefix_rule("new_"))
+        })
+        .unwrap();
+        let named = |kind: &str| {
+            plan.warnings
+                .iter()
+                .find(|warning| warning.kind == kind)
+                .and_then(|warning| warning.suggestion.clone())
+        };
+        assert!(
+            named("readonly")
+                .as_deref()
+                .is_some_and(|text| text.contains("/data/a.txt")),
+            "只读事实必须在预览期点名：{:?}",
+            plan.warnings
+        );
+        assert!(
+            named("locked")
+                .as_deref()
+                .is_some_and(|text| text.contains("/data/new_b.txt")),
+            "被占用事实必须在预览期点名：{:?}",
+            plan.warnings
+        );
+        // 点名只是标记：条目形状与处置不变（执行期语义属 OQ-37）。
+        assert_eq!(plan.entries.len(), 2);
+        assert!(plan.entries.iter().all(|entry| entry.blocked.is_none()));
+    }
+
+    #[test]
+    fn absent_access_facts_produce_no_readonly_or_locked_warning() {
+        let plan = plan_f12(input(
+            vec![item("a.txt"), item("b.txt")],
+            prefix_rule("new_"),
+        ))
+        .unwrap();
+        for kind in ["readonly", "locked"] {
+            assert!(
+                !plan.warnings.iter().any(|warning| warning.kind == kind),
+                "没有事实来源时不得凭空点名 {kind}"
+            );
+        }
     }
 
     #[test]

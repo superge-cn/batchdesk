@@ -32,7 +32,11 @@ use kernel::path::{normalize, try_normalize};
 use kernel::plan::{
     plan_c01, PlanC01File, PlanC01Input, PlanDocument, PlanParamValue, PlanResolution,
 };
+use kernel::preflight::{run_preflight, PathCheck, PreflightInput, PreflightLevel};
 use kernel::rename::{plan_f12, PlanF12Input, PlanF12Item, PlanF12Rule, RenameScope};
+use kernel::replace_content::{
+    plan_c03, ContentStructure, CsvMode, PlanC03File, PlanC03Input, ReplaceInspect, ReplaceMode,
+};
 use kernel::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator, SplitLayout};
 
 /// 台账：`assertions.tsv` 是"哪条语料断言到什么程度"的唯一登记处。
@@ -113,6 +117,7 @@ fn rename_plan_for_row(
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
         long_path_supported,
+        access_facts: Vec::new(),
         rule: PlanF12Rule {
             prefix: None,
             suffix: None,
@@ -801,6 +806,7 @@ fn r06_extended_and_plain_paths_normalize_to_the_same_value() {
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
         long_path_supported: true,
+        access_facts: Vec::new(),
         rule: PlanF12Rule {
             prefix: Some("new_".to_string()),
             suffix: None,
@@ -839,6 +845,132 @@ fn k06_binary_magic_is_rejected_by_c02_plan() {
     let blocked = plan.entries[0].blocked.as_ref().expect("二进制应被阻断");
     assert_eq!(blocked.code, "E3001");
     assert!(blocked.reason.contains("binary file signature"));
+}
+
+/// E03（环境·目标只读）：T v1.12 §3.2 的判定点是「预检标记并跳过（方案 §5.13）」，
+/// 涉及功能 F12、C03。本断言覆盖**标记与点名**两半；执行期"重试一次后按策略跳过"
+/// 的处置语义尚未落地，登记在 OQ-37（裁决前不改执行器）。
+#[test]
+fn e03_readonly_target_is_marked_by_preflight_and_named_in_preview() {
+    let path = corpus_root().join("E03").join("out").join("readonly.txt");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("读取 E03 样本失败（{path:?}）：{error}\n先运行 gen_e03.py 生成样本")
+    });
+    assert!(
+        path.metadata()
+            .expect("E03 样本应有元数据")
+            .permissions()
+            .readonly(),
+        "E03 语料特征失效：样本不再是只读，断言会退化成空转"
+    );
+    let source = path.to_string_lossy().to_string();
+    let file_name = path
+        .file_name()
+        .expect("样本应有文件名")
+        .to_string_lossy()
+        .to_string();
+
+    // ① 预检面：只读只标记，不得把整个任务判死（"任务不整体失败"）。
+    let check = PathCheck {
+        path: source.clone(),
+        canonical_path: None,
+        readonly: true,
+        locked: false,
+        placeholder: false,
+        long_path_supported: true,
+    };
+    let report = run_preflight(&PreflightInput {
+        paths: vec![check],
+        ..PreflightInput::default()
+    });
+    let hit = report
+        .items
+        .iter()
+        .find(|item| item.kind == "readonly")
+        .expect("只读事实必须在预检里点名");
+    assert_eq!(hit.level, PreflightLevel::Warn);
+    assert_eq!(hit.code.as_deref(), Some("E2002"));
+    assert!(
+        !report.task_blocked,
+        "只读是条目级问题，不得阻断整个任务（设计 01 §5.1）"
+    );
+
+    // ② 预览面 F12：只读的源文件必须在计划告警里点名，而不是等执行期撞墙。
+    let f12 = plan_f12(PlanF12Input {
+        plan_id: PLAN_ID.to_string(),
+        items: vec![PlanF12Item {
+            path: source.clone(),
+            name: file_name.clone(),
+        }],
+        existing_targets: Vec::new(),
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        long_path_supported: true,
+        access_facts: vec![PathCheck {
+            path: source.clone(),
+            canonical_path: None,
+            readonly: true,
+            locked: false,
+            placeholder: false,
+            long_path_supported: true,
+        }],
+        rule: PlanF12Rule {
+            prefix: None,
+            suffix: Some("-v2".to_string()),
+            find: None,
+            replace: String::new(),
+            scope: RenameScope::Stem,
+        },
+    })
+    .expect("plan_f12 生成计划");
+    assert!(
+        f12.warnings.iter().any(|warning| warning.kind == "readonly"
+            && warning
+                .suggestion
+                .as_deref()
+                .is_some_and(|text| text.contains(&source))),
+        "F12 预览必须点名只读源文件：{:?}",
+        f12.warnings
+    );
+
+    // ③ 预览面 C03：原地改写以源文件为写入目标，同样必须点名。
+    let c03 = plan_c03(PlanC03Input {
+        plan_id: PLAN_ID.to_string(),
+        mode: ReplaceMode::Plain,
+        find: "只读样本".to_string(),
+        replacement: "可写样本".to_string(),
+        csv_mode: CsvMode::Cell,
+        files: vec![PlanC03File {
+            path: source.clone(),
+            canonical_path: None,
+            file_size: text.len() as u64,
+            sample: text.as_bytes().to_vec(),
+            structure: ContentStructure::Text,
+            inspect: ReplaceInspect {
+                structure: ContentStructure::Text,
+                match_count: 1,
+                context: Some("只读样本".to_string()),
+                ..ReplaceInspect::default()
+            },
+            readonly: true,
+            locked: false,
+        }],
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        confirmed_source: None,
+        prior: PlatformPrior::Other,
+        delimiter: None,
+    })
+    .expect("plan_c03 生成计划");
+    assert!(
+        c03.warnings.iter().any(|warning| warning.kind == "readonly"
+            && warning
+                .suggestion
+                .as_deref()
+                .is_some_and(|text| text.contains(&source))),
+        "C03 预览必须点名只读文件：{:?}",
+        c03.warnings
+    );
 }
 
 fn is_corpus_id(name: &str) -> bool {

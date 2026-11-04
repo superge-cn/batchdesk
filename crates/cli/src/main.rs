@@ -1500,6 +1500,10 @@ fn run_c03(args: &[String]) -> i32 {
             sample: inspect.sample,
             structure: inspect.structure,
             inspect: inspect.inspect,
+            // C03 原地改写：只读属性位在预览期点名（方案 §5.14）；
+            // 占用需要开写句柄试探，属预检面，不在计划期声称判过。
+            readonly: platform::preflight::is_read_only(&absolute),
+            locked: false,
         });
     }
 
@@ -2486,6 +2490,8 @@ fn run_c04(args: &[String]) -> i32 {
     };
     let mut items = Vec::new();
     let mut existing_targets = Vec::new();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let mut access_facts = Vec::new();
     for entry in entries {
         let Ok(entry) = entry else {
             continue;
@@ -2500,6 +2506,10 @@ fn run_c04(args: &[String]) -> i32 {
             continue;
         }
         existing_targets.push(path.to_string_lossy().into_owned());
+        access_facts.push(platform::preflight::path_check_light(
+            &path,
+            long_path_supported,
+        ));
         items.push(kernel::rename::PlanF12Item {
             path: path.to_string_lossy().into_owned(),
             name,
@@ -2520,7 +2530,8 @@ fn run_c04(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
-        long_path_supported: platform::preflight::long_path_supported(),
+        long_path_supported,
+        access_facts,
         rule: PlanC04Rule {
             mode,
             find,
@@ -4893,6 +4904,8 @@ fn run_f12(args: &[String]) -> i32 {
     };
     let mut items = Vec::new();
     let mut existing_targets = Vec::new();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let mut access_facts = Vec::new();
     for entry in entries {
         let Ok(entry) = entry else {
             continue;
@@ -4907,6 +4920,11 @@ fn run_f12(args: &[String]) -> i32 {
             continue;
         }
         existing_targets.push(path.to_string_lossy().into_owned());
+        // 只读/占用在预览期点名（方案 §5.13 的"预检标记"）；轻量档只做属性位。
+        access_facts.push(platform::preflight::path_check_light(
+            &path,
+            long_path_supported,
+        ));
         items.push(PlanF12Item {
             path: path.to_string_lossy().into_owned(),
             name,
@@ -4927,7 +4945,8 @@ fn run_f12(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
-        long_path_supported: platform::preflight::long_path_supported(),
+        long_path_supported,
+        access_facts,
         rule: PlanF12Rule {
             prefix,
             suffix,
@@ -5046,6 +5065,8 @@ fn run_f13(args: &[String]) -> i32 {
     };
     let mut items = Vec::new();
     let mut existing_targets = Vec::new();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let mut access_facts = Vec::new();
     for entry in entries {
         let Ok(entry) = entry else {
             continue;
@@ -5060,6 +5081,10 @@ fn run_f13(args: &[String]) -> i32 {
             continue;
         }
         existing_targets.push(path.to_string_lossy().into_owned());
+        access_facts.push(platform::preflight::path_check_light(
+            &path,
+            long_path_supported,
+        ));
         items.push(PlanF13Item {
             path: path.to_string_lossy().into_owned(),
             name,
@@ -5080,7 +5105,8 @@ fn run_f13(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
-        long_path_supported: platform::preflight::long_path_supported(),
+        long_path_supported,
+        access_facts,
         rule: PlanF13Rule {
             pattern,
             replacement,

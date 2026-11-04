@@ -3195,6 +3195,8 @@ mod tests {
                 sample: inspect.sample,
                 structure: inspect.structure,
                 inspect: inspect.inspect,
+                readonly: platform::preflight::is_read_only(&input),
+                locked: false,
             }],
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,

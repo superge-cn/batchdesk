@@ -301,6 +301,10 @@ pub struct PlanC03File {
     pub sample: Vec<u8>,
     pub structure: ContentStructure,
     pub inspect: ReplaceInspect,
+    /// 壳层采集的写入权限事实（`platform::preflight::path_check`）；C03 原地改写，
+    /// 源文件即写入目标。只用于预览期点名（方案 §5.14 的"跳过并报告"之标记半程）。
+    pub readonly: bool,
+    pub locked: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -514,6 +518,46 @@ pub fn plan_c03(input: PlanC03Input) -> Result<PlanDocument, KernelError> {
                 "binary files are blocked and never enter the text pipeline".to_string(),
             ),
             risk_level: RiskLevel::Danger,
+        });
+    }
+
+    // 方案 §5.14 的标记半程：只写会真正被改写的文件，被阻断的条目不再重复点名。
+    let writable_sources: std::collections::BTreeSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.blocked.is_none())
+        .map(|entry| entry.source.as_str())
+        .collect();
+    let readonly_paths: Vec<String> = input
+        .files
+        .iter()
+        .filter(|file| file.readonly && writable_sources.contains(file.path.as_str()))
+        .map(|file| file.path.clone())
+        .collect();
+    let locked_paths: Vec<String> = input
+        .files
+        .iter()
+        .filter(|file| file.locked && writable_sources.contains(file.path.as_str()))
+        .map(|file| file.path.clone())
+        .collect();
+    if !readonly_paths.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "readonly".to_string(),
+            suggestion: Some(format!(
+                "these files are read-only and rewriting them needs write access; \
+                 clear the read-only attribute and preview again: {}",
+                readonly_paths.join(", ")
+            )),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    if !locked_paths.is_empty() {
+        warnings.push(PlanWarning {
+            kind: "locked".to_string(),
+            suggestion: Some(format!(
+                "these files are held open by another program; close it and preview again: {}",
+                locked_paths.join(", ")
+            )),
+            risk_level: RiskLevel::Caution,
         });
     }
 
@@ -941,6 +985,8 @@ mod tests {
             sample: sample.to_vec(),
             structure: inspect.structure,
             inspect,
+            readonly: false,
+            locked: false,
         }
     }
 
@@ -988,6 +1034,74 @@ mod tests {
         assert_eq!(plan.entries.len(), 2);
         assert!(plan.entries[0].resolution.is_none());
         assert_eq!(plan.entries[1].resolution, Some(PlanResolution::Skip));
+    }
+
+    #[test]
+    fn readonly_and_locked_files_are_named_in_preview_warnings() {
+        let matched = || ReplaceInspect {
+            structure: ContentStructure::Text,
+            match_count: 1,
+            context: Some("a".to_string()),
+            ..ReplaceInspect::default()
+        };
+        let read_only = PlanC03File {
+            readonly: true,
+            ..file("/data/a.txt", b"a", matched())
+        };
+        let held_open = PlanC03File {
+            locked: true,
+            ..file("/data/b.txt", b"a", matched())
+        };
+        let plan = plan_c03(input(vec![read_only, held_open])).unwrap();
+        let named = |kind: &str| {
+            plan.warnings
+                .iter()
+                .find(|warning| warning.kind == kind)
+                .and_then(|warning| warning.suggestion.clone())
+        };
+        assert!(
+            named("readonly")
+                .as_deref()
+                .is_some_and(|text| text.contains("/data/a.txt")),
+            "只读文件必须在预览期点名：{:?}",
+            plan.warnings
+        );
+        assert!(
+            named("locked")
+                .as_deref()
+                .is_some_and(|text| text.contains("/data/b.txt")),
+            "被占用文件必须在预览期点名：{:?}",
+            plan.warnings
+        );
+        assert_eq!(plan.entries.len(), 2);
+        assert!(plan.entries.iter().all(|entry| entry.blocked.is_none()));
+    }
+
+    #[test]
+    fn blocked_files_are_not_named_as_readonly() {
+        // 只读点名只覆盖"真的会被改写"的文件：二进制文件在 E3001 处已阻断，
+        // 再点一次只读等于把两个不相干的结论混进同一条告警。
+        let blocked_read_only = PlanC03File {
+            readonly: true,
+            ..file(
+                "/data/image.txt",
+                b"\x89PNG\r\n\x1a\nrest",
+                ReplaceInspect {
+                    structure: ContentStructure::Text,
+                    ..ReplaceInspect::default()
+                },
+            )
+        };
+        let plan = plan_c03(input(vec![blocked_read_only])).unwrap();
+        assert_eq!(plan.entries[0].blocked.as_ref().unwrap().code, "E3001");
+        assert!(
+            !plan
+                .warnings
+                .iter()
+                .any(|warning| warning.kind == "readonly"),
+            "被阻断的文件不得点名只读：{:?}",
+            plan.warnings
+        );
     }
 
     #[test]

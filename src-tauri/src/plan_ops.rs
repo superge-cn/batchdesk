@@ -586,6 +586,8 @@ fn plan_rename_match_shell(
         .ok_or_else(|| missing("c04: requires find"))?;
     let mut items = Vec::new();
     let mut existing_targets = Vec::new();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let mut access_facts = Vec::new();
     for entry in std::fs::read_dir(&dir)
         .map_err(|error| adapter_error(format!("{}: {error}", dir.display())))?
     {
@@ -597,6 +599,11 @@ fn plan_rename_match_shell(
             _ => {}
         }
         existing_targets.push(path.to_string_lossy().into_owned());
+        // 与 F12 同族：只读在预览期点名（方案 §5.13）。
+        access_facts.push(platform::preflight::path_check_light(
+            &path,
+            long_path_supported,
+        ));
         items.push(PlanF12Item {
             path: path.to_string_lossy().into_owned(),
             name: entry.file_name().to_string_lossy().into_owned(),
@@ -609,7 +616,8 @@ fn plan_rename_match_shell(
         existing_targets,
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
-        long_path_supported: platform::preflight::long_path_supported(),
+        long_path_supported,
+        access_facts,
         rule: PlanC04Rule {
             mode,
             find,

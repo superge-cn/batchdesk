@@ -223,6 +223,36 @@ pub fn path_check(path: &Path, long_path_supported: bool) -> PathCheck {
     }
 }
 
+/// 计划期的轻量写入权限事实：只读走元数据属性位（POSIX 写位／Windows
+/// FILE_ATTRIBUTE_READONLY），**不做写句柄探测**——占用是瞬时状态且要为每个文件
+/// 开一次写句柄，十万级条目下这个代价不该由"生成预览"来付；占用判定留在预检面
+/// （`path_check`）。`locked` 因此恒为 false，`canonical_path` 不采集（计划按字面
+/// 路径命中事实，规范形式由预检与执行层各自复核）。
+pub fn path_check_light(path: &Path, long_path_supported: bool) -> PathCheck {
+    let metadata = fs::metadata(fs_path(path)).ok();
+    let readonly = metadata
+        .as_ref()
+        .map(|metadata| metadata.permissions().readonly())
+        .unwrap_or(false);
+    PathCheck {
+        path: path.to_string_lossy().into_owned(),
+        canonical_path: None,
+        readonly,
+        locked: false,
+        placeholder: is_placeholder_file(path),
+        long_path_supported,
+    }
+}
+
+/// 单个路径的只读属性位（POSIX 写位／Windows FILE_ATTRIBUTE_READONLY）。
+/// 给"条目本身已带只读事实"的计划入口用（C03 原地改写，源即写入目标），
+/// 避免为这类入口构造整份 `PathCheck`。
+pub fn is_read_only(path: &Path) -> bool {
+    fs::metadata(fs_path(path))
+        .map(|metadata| metadata.permissions().readonly())
+        .unwrap_or(false)
+}
+
 /// 判断路径是否为 UNC/网络形式（`\\server\share` 或 `//server/share`）。
 pub fn is_network_path(path: &Path) -> bool {
     let value = path.to_string_lossy();
@@ -403,6 +433,50 @@ mod tests {
             let mut permissions = fs::metadata(&path).unwrap().permissions();
             permissions.set_readonly(false);
             fs::set_permissions(&path, permissions).unwrap();
+        }
+    }
+
+    #[test]
+    fn path_check_light_reads_the_attribute_bit_without_probing_writes() {
+        let temp = TempDir::new();
+        let read_only = temp.0.join("readonly.txt");
+        fs::write(&read_only, b"x").unwrap();
+        let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&read_only, permissions).unwrap();
+
+        let check = path_check_light(&read_only, true);
+        assert!(check.readonly, "只读属性位必须被计划期事实看见");
+        assert!(
+            !check.locked,
+            "占用要开写句柄才判得出，属预检面；计划期不得声称判过占用"
+        );
+        assert_eq!(check.canonical_path, None, "轻量档不做 canonicalize");
+        assert!(is_read_only(&read_only), "条目级只读端口与轻量档同口径");
+
+        let writable = temp.0.join("writable.txt");
+        fs::write(&writable, b"x").unwrap();
+        assert!(!path_check_light(&writable, true).readonly);
+        assert!(!is_read_only(&writable));
+
+        // 路径不存在不是错误：计划/执行层再判定（E2001），事实层只报"看不见"。
+        let missing = temp.0.join("missing.txt");
+        let check = path_check_light(&missing, true);
+        assert!(!check.readonly && !check.locked && !check.placeholder);
+        assert!(!is_read_only(&missing), "路径不存在时不得凭空报只读");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+            permissions.set_mode(0o644);
+            fs::set_permissions(&read_only, permissions).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(&read_only, permissions).unwrap();
         }
     }
 

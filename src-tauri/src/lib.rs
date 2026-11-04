@@ -1082,6 +1082,8 @@ fn plan_f12_shell(
     }
     let mut items = Vec::new();
     let mut existing = Vec::new();
+    let long_path_supported = platform::preflight::long_path_supported();
+    let mut access_facts = Vec::new();
     for entry in std::fs::read_dir(&dir)
         .map_err(|error| IpcError::new("E1004", format!("{}: {error}", dir.display())))?
     {
@@ -1089,6 +1091,11 @@ fn plan_f12_shell(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         existing.push(path.to_string_lossy().into_owned());
+        // 只读在预览期点名（方案 §5.13）；占用属预检面，计划期不探测。
+        access_facts.push(platform::preflight::path_check_light(
+            &path,
+            long_path_supported,
+        ));
         items.push(kernel::rename::PlanF12Item {
             path: path.to_string_lossy().into_owned(),
             name,
@@ -1101,7 +1108,8 @@ fn plan_f12_shell(
         existing_targets: existing,
         protected_dirs: Vec::new(),
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
-        long_path_supported: platform::preflight::long_path_supported(),
+        long_path_supported,
+        access_facts,
         rule: kernel::rename::PlanF12Rule {
             prefix: params.prefix,
             suffix: params.suffix,

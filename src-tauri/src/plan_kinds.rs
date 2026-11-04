@@ -496,6 +496,9 @@ pub fn plan_replace_shell(
             sample: inspect.sample,
             structure: inspect.structure,
             inspect: inspect.inspect,
+            // 原地改写以源文件为写入目标：只读属性位在预览期点名（方案 §5.14）。
+            readonly: platform::preflight::is_read_only(&absolute),
+            locked: false,
         });
     }
     let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("c03"));
