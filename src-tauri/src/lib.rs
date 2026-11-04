@@ -44,6 +44,7 @@ mod plan_kinds;
 mod plan_manifest;
 mod plan_ops;
 mod tasks;
+mod window_state;
 
 use tasks::{
     ProtectedSource, RecoveryAction, StoredPlan, TaskDetail, TaskPage, TaskPaths, TaskQueue,
@@ -1218,7 +1219,83 @@ pub fn run() {
                 }),
             );
             app.manage(AppState::new(paths, tasks));
+            // 设计 03 §11.2／§11.3：把上次关闭窗口时的矩形摆回来；离屏或显示器已被拔掉
+            // 就居中主屏并把尺寸压进该屏可用区域。规则本体是 window_state::decide_placement
+            // 这个纯函数，真实窗口摆放属桌面实机项。
+            if let Some(main) = app.get_webview_window("main") {
+                let state = app.state::<AppState>();
+                let saved = config_store(&state).load_ui_state().window.clone();
+                let monitors: Vec<window_state::MonitorRect> = main
+                    .available_monitors()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|monitor| window_state::MonitorRect {
+                        x: i64::from(monitor.position().x),
+                        y: i64::from(monitor.position().y),
+                        width: i64::from(monitor.size().width),
+                        height: i64::from(monitor.size().height),
+                    })
+                    .collect();
+                match window_state::decide_placement(saved.as_ref(), &monitors) {
+                    window_state::Placement::Nothing => {}
+                    window_state::Placement::SizeOnly { width, height } => {
+                        let _ =
+                            main.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
+                    }
+                    window_state::Placement::Restore {
+                        x,
+                        y,
+                        width,
+                        height,
+                    }
+                    | window_state::Placement::Centered {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => {
+                        let _ =
+                            main.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
+                        let _ = main.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
+                    }
+                }
+                if saved.and_then(|saved| saved.maximized) == Some(true) {
+                    let _ = main.maximize();
+                }
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 只在关闭请求时落盘：UiState 本就是"可丢失的本机状态"（03 §11.1），
+            // 拖动/缩放过程中逐事件写盘会把配置目录当高频写文件用。
+            if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                return;
+            }
+            let state = window.state::<AppState>();
+            let Ok(size) = window.inner_size() else {
+                return;
+            };
+            let position = window.outer_position().ok();
+            let monitor_id = window
+                .current_monitor()
+                .ok()
+                .flatten()
+                .and_then(|monitor| monitor.name().map(|name| name.to_string()));
+            let snapshot = window_state::snapshot(
+                i64::from(size.width),
+                i64::from(size.height),
+                position.map_or(0, |position| i64::from(position.x)),
+                position.map_or(0, |position| i64::from(position.y)),
+                window.is_maximized().unwrap_or(false),
+                monitor_id,
+            );
+            let store = config_store(&state);
+            let mut ui_state = store.load_ui_state();
+            ui_state.window = Some(snapshot);
+            if let Err(error) = store.save_ui_state(&mut ui_state) {
+                // UiState 写失败不影响关闭（下次回默认布局），但要在 stderr 留痕。
+                eprintln!("{}: failed to persist window geometry", error.code);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             getIpcMeta,
