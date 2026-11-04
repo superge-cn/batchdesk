@@ -415,6 +415,7 @@ kernel::preflight::tests::readonly_locked_and_placeholder_are_warnings_not_task_
 kernel::preflight::tests::temp_peak_is_part_of_the_requirement	ok
 kernel::preflight::tests::unc_timeout_and_unreachable_warn_but_do_not_block	ok
 kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled	ok
+kernel::preview::tests::each_conflict_kind_is_labelled_with_its_own_kind	ok
 kernel::preview::tests::non_rename_kinds_are_rejected_with_e1002	ok
 kernel::preview::tests::normal_rows_count_as_to_process	ok
 kernel::preview::tests::two_phase_entries_collapse_into_one_mapping_row	ok

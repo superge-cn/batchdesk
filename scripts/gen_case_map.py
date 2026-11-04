@@ -803,7 +803,7 @@ add("C15",
 
 add("C18",
     name="执行前预览/干跑", stage="阶段 0", prio="P0★", src="方案 §7.1、§7.4",
-    plan_tests="kernel `preview` 4 项＋apply_flow::c18 harness（25 个 plan 命令×2 遍）",
+    plan_tests="kernel `preview` 5 项＋apply_flow::c18 harness（25 个 plan 命令×2 遍）",
     exe1="apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
     rbk1="apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects（零副作用断言）",
     pre=["干跑零落盘（源树快照前后一致）", "影响范围统计（四类计数）", "差异逐项", "重复预览幂等",
@@ -814,7 +814,7 @@ add("C18",
     pre_slots={
         1: ("✅", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features",
             ""),
-        2: ("✅", CI, "kernel `preview` 4 项（§7.4 四类固定计数＋高危汇总）", ""),
+        2: ("✅", CI, "kernel `preview` 5 项（§7.4 四类固定计数＋高危汇总）", ""),
         3: ("✅", CI, "kernel::preview::tests::two_phase_entries_collapse_into_one_mapping_row"
             "＋apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects（新旧名对照行逐项）", ""),
         4: ("✅", CI, "apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features（derived_ulid 确定性派生）", ""),
@@ -853,7 +853,7 @@ add("C05",
         6: ("✅", PW, "e2e/rename-preview.spec.ts「改参数后重新预览」＋「回滚预演面板呈现零冲突判定」", ""),
     },
     exe_slots={
-        1: ("◐", CI, "kernel `preview` 4 项＋CLI c05", "「确认→执行」衔接待 UI/e2e"),
+        1: ("◐", CI, "kernel `preview` 5 项＋CLI c05", "「确认→执行」衔接待 UI/e2e"),
         2: ("✅", CI, "apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects", ""),
     },
     rbk_slots={
