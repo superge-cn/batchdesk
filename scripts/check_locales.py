@@ -10,6 +10,11 @@
 6. 源码引用的 key 都存在于语言包（拼错 key 不会静默显示 raw key）；
 7. 界面源码（web/src 下的 .ts/.tsx，除语言包与测试）不在注释外硬编码中文
    （设计 09 §2.1：禁止硬编码用户可见字符串）。
+8. 错误码文案族（设计 06 §2／§3）：`web/src/errors.ts` 的每个码位必须有
+   `summary`/`action` 两段两语言文案，且与设计 06 §2 的码表**逐码对齐**；
+9. 界面源码不得渲染 `IpcError.message`／`detail` 原文（设计 06 §3：技术细节只进
+   诊断日志，文案不得含路径/文件名/堆栈）——取原文的位置只允许 errors.ts 的兜底
+   与 IPC 归一化层。
 
 只使用标准库；CI 的 web job 与本地门禁必跑。
 
@@ -60,6 +65,16 @@ HARDCODED_SKIP_FILES = {Path("web/src/lib/ipc/mock.ts")}
 HARDCODED_SKIP_SUFFIX = (".test.tsx", ".test.ts")
 # 行内豁免：解析用户输入（如"表头 有|无"里的 `"无"`）不是界面文案。
 EXEMPT_MARKER = "i18n-exempt"
+
+# 设计 06 §3 的强制力落点：`IpcError.message`／`detail` 是后端技术串（本仓库里常含
+# 绝对路径与源码位置），只能进诊断日志，界面渲染必须走 `describeError`／`ErrorBanner`。
+# 这一条此前只写在 ADR 里、靠人记得，本批同一族的第二处泄漏（执行结果表）就是这么漏的。
+RAW_ERROR_TEXT_RE = re.compile(r"\berror\??\.(message|detail)\b")
+# 允许读原文的两处：`errors.ts` 的"码表外兜底"与 IPC 归一化层（它们就是唯一的出口）。
+RAW_ERROR_TEXT_ALLOWED = {
+    Path("web/src/errors.ts"),
+    Path("web/src/lib/ipc/index.ts"),
+}
 
 
 def load_bundle(lang: str) -> dict[str, str]:
@@ -246,6 +261,26 @@ def main() -> int:
                     f"errors.ts 有 {len(strays)} 个码位不在设计 06 §2 码表里：{', '.join(strays)}"
                 )
 
+    # 9. 界面源码不得渲染后端错误原文（设计 06 §3：detail 仅进诊断日志，
+    #    文案不得暴露路径/文件名/堆栈）。出口只有 describeError／ErrorBanner。
+    leaks: list[str] = []
+    scanned_ui: list[Path] = []
+    for path in source_files():
+        relative = path.relative_to(ROOT)
+        if relative in RAW_ERROR_TEXT_ALLOWED:
+            continue
+        if any(str(relative).startswith(str(skip)) for skip in HARDCODED_SKIP):
+            continue
+        scanned_ui.append(relative)
+        lines = strip_comments(path.read_text(encoding="utf-8")).splitlines()
+        for number, line in enumerate(lines, start=1):
+            if RAW_ERROR_TEXT_RE.search(line):
+                leaks.append(f"{relative}:{number} 直接取用后端错误原文：{line.strip()[:70]}")
+    if leaks:
+        failures.extend(leaks)
+    if len(leaks) == 0 and not (SRC_DIR / "ErrorBanner.tsx").exists():
+        failures.append("找不到 web/src/ErrorBanner.tsx：界面错误文案没有唯一出口（探测器自校失败）")
+
     if failures:
         print("国际化门禁未通过：", file=sys.stderr)
         for failure in failures:
@@ -256,7 +291,8 @@ def main() -> int:
         "国际化门禁通过："
         f"{len(bundles)} 个语言包 × {len(default_keys)} 个 key，key 集合/占位符/语言残留一致；"
         f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文；"
-        f"错误码文案 {len(mapped)} 个码位两段齐全，且与设计 06 §2 码表逐码对齐。"
+        f"错误码文案 {len(mapped)} 个码位两段齐全，且与设计 06 §2 码表逐码对齐；"
+        f"界面 {len(scanned_ui)} 个源码文件零后端错误原文。"
     )
     return 0
 

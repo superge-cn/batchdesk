@@ -134,4 +134,22 @@ describe("任务与撤销视图", () => {
     expect(within(row).getByText(/已完成/)).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /取消任务/ })).toBeNull();
   });
+
+  it("加载失败时只显示本地化文案，不渲染后端 message／detail 原文", async () => {
+    // 06 §3：文案不得暴露路径、文件名或堆栈；detail 仅进诊断日志。
+    vi.mocked(listTasks).mockRejectedValueOnce({
+      code: "E2002",
+      message: "permission denied while reading /home/operator/private/notes.txt",
+      detail: "os error 13 at src/tasks.rs:412",
+      retryable: false
+    });
+    renderView();
+    const banner = await screen.findByRole("alert");
+    expect(within(banner).getByText(/没有访问权限/)).toBeInTheDocument();
+    // 码位本身保留为支持句柄
+    expect(within(banner).getByText("E2002")).toBeInTheDocument();
+    expect(banner.textContent).not.toContain("/home/operator");
+    expect(banner.textContent).not.toContain("permission denied");
+    expect(banner.textContent).not.toContain("os error 13");
+  });
 });

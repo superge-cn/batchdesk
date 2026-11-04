@@ -47,6 +47,7 @@ import {
 import { FeaturePages } from "./FeaturePages";
 import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
+import { describeError } from "./errors";
 import { VirtualList } from "./VirtualList";
 import { phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
@@ -1297,27 +1298,34 @@ function AppShell() {
                         label={t("c09.result.entry")}
                         items={applyTask.report.entries}
                         getKey={(entry) => entry.entryId}
-                        renderRow={(entry) => (
-                          <div className="row">
-                            <span className="path" title={entry.entryId}>{entry.entryId}</span>
-                            <span className="reason" title={entry.error?.message}>
-                              {entry.error ? `${entry.error.code} · ${entry.error.message}` : "—"}
-                            </span>
-                            <span>
-                              <span
-                                className={`badge ${
-                                  entry.status === "ok"
-                                    ? "badge-safe"
-                                    : entry.status === "failed"
-                                      ? "badge-danger"
-                                      : "badge-warn"
-                                }`}
-                              >
-                                {entry.status}
+                        renderRow={(entry) => {
+                          // 失败条目同样只显示码位＋本地化摘要：后端 message/detail 是技术串，
+                          // 常含绝对路径（06 §3）。
+                          const failure = entry.error ? describeError(t, entry.error) : null;
+                          return (
+                            <div className="row">
+                              <span className="path" title={entry.entryId}>{entry.entryId}</span>
+                              <span className="reason" title={failure?.title}>
+                                {entry.error && failure
+                                  ? `${entry.error.code} · ${failure.title}`
+                                  : "—"}
                               </span>
-                            </span>
-                          </div>
-                        )}
+                              <span>
+                                <span
+                                  className={`badge ${
+                                    entry.status === "ok"
+                                      ? "badge-safe"
+                                      : entry.status === "failed"
+                                        ? "badge-danger"
+                                        : "badge-warn"
+                                  }`}
+                                >
+                                  {entry.status}
+                                </span>
+                              </span>
+                            </div>
+                          );
+                        }}
                       />
                     </div>
                   )}

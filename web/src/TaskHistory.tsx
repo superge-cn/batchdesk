@@ -9,6 +9,7 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { VirtualList } from "./VirtualList";
+import { ErrorBanner } from "./ErrorBanner";
 import { isActiveState, phaseLabel, stateBadge, type Translate } from "./labels";
 import { useI18n } from "./i18n";
 import type { IpcError, TaskState, TaskSummary } from "./lib/ipc/types";
@@ -209,17 +210,7 @@ export function TaskHistory({
 
   return (
     <div className="content">
-      {error && (
-        <div className="banner banner-danger" role="alert">
-          <div>
-            <strong>{error.code}</strong> · {error.message}
-            {error.detail && <div className="muted">{error.detail}</div>}
-          </div>
-          <button className="button button-ghost" type="button" onClick={() => setError(null)}>
-            {t("common.close")}
-          </button>
-        </div>
-      )}
+      {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
       {notice && (
         <div className="banner banner-info" role="status">
           <div>{notice}</div>
