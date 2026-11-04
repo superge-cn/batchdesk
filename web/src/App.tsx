@@ -38,6 +38,7 @@ import {
   preflightPlan,
   recoverTask,
   resumeTask,
+  resetUiState,
   retryTask,
   setUiState,
   toIpcError,
@@ -507,6 +508,13 @@ function AppShell() {
     );
     navigationRef.current = navigation;
     setUiState({ navigation }).catch(() => undefined);
+  }, []);
+
+  /** 重置本机界面状态（设计 03 §11.3）：清掉内存里的导航与最近目录，界面立刻回到空状态。 */
+  const resetUiStateMemory = useCallback(async () => {
+    await resetUiState();
+    navigationRef.current = {};
+    setRecentDirs([]);
   }, []);
 
   async function onPlan() {
@@ -1366,7 +1374,7 @@ function AppShell() {
             ) : activeView === "tasks" ? (
               <TaskHistory live={taskViews} onBack={() => selectView("c09")} />
             ) : activeView === "settings" ? (
-              <SettingsPage onBack={() => selectView("c09")} />
+              <SettingsPage onBack={() => selectView("c09")} onResetUiState={resetUiStateMemory} />
             ) : (
               <FeaturePages view={activeView} onBack={() => selectView("c09")} />
             )}

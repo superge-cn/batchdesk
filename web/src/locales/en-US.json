@@ -435,5 +435,9 @@
   "error.E5009.action": "Set your options again; attach the kept copy if you need it investigated.",
   "error.E5009.summary": "The configuration file was corrupted; a copy was kept and the file rebuilt.",
   "error.E9001.action": "Open the details, keep the log, and include the error code when reporting.",
-  "error.E9001.summary": "An unclassified error occurred."
+  "error.E9001.summary": "An unclassified error occurred.",
+  "settings.uiState.title": "On this device",
+  "settings.uiState.hint": "Remembers the last folder and page on this device only. Resetting clears just those records, not the settings above.",
+  "settings.uiState.action": "Reset interface state",
+  "settings.uiState.done": "Interface state reset: recent locations cleared, next start opens the workspace."
 }

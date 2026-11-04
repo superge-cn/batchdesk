@@ -75,10 +75,10 @@ function views(): Record<string, ScopeView> {
 
 let store: Record<string, ScopeView> = views();
 
-function renderPage() {
+function renderPage(options: { onResetUiState?: () => Promise<void> } = {}) {
   return render(
     <I18nProvider initialLang="zh-CN" initialTheme="light">
-      <SettingsPage onBack={() => undefined} />
+      <SettingsPage onBack={() => undefined} onResetUiState={options.onResetUiState} />
     </I18nProvider>
   );
 }
@@ -156,5 +156,27 @@ describe("设置页", () => {
     expect(
       await screen.findByText(/配置文件由更高版本写入，当前为只读/)
     ).toBeVisible();
+  });
+});
+
+describe("本机界面状态（设计 03 §11.3）", () => {
+  it("重置界面状态调用回调并给出提示，且不碰任何 ConfigDocument 命令", async () => {
+    const onResetUiState = vi.fn(async () => undefined);
+    const user = userEvent.setup();
+    renderPage({ onResetUiState });
+
+    await user.click(await screen.findByRole("button", { name: /重置界面状态/ }));
+
+    expect(onResetUiState).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/最近位置已清空/)).toBeInTheDocument();
+    // 边界：界面状态与用户设置是两个存储，重置界面状态不得触发 setConfig/resetScope。
+    expect(setConfig).not.toHaveBeenCalled();
+    expect(resetScope).not.toHaveBeenCalled();
+  });
+
+  it("不传回调时按钮保持禁用（独立渲染不假装能重置）", async () => {
+    renderPage();
+    const button = await screen.findByRole("button", { name: /重置界面状态/ });
+    expect(button).toBeDisabled();
   });
 });

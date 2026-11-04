@@ -435,5 +435,9 @@
   "error.E5009.action": "重新设置一次；如需排查，请附上保留的副本。",
   "error.E5009.summary": "配置文件损坏，已保留副本并重建。",
   "error.E9001.action": "展开详情并保留日志，反馈时附上错误码。",
-  "error.E9001.summary": "发生了未分类的错误。"
+  "error.E9001.summary": "发生了未分类的错误。",
+  "settings.uiState.title": "本机界面状态",
+  "settings.uiState.hint": "记录上次用的目录与页面，只存在本机、不跨设备。重置只清掉这些记录，不动上面的设置。",
+  "settings.uiState.action": "重置界面状态",
+  "settings.uiState.done": "界面状态已重置：最近位置已清空，下次启动回到工作台。"
 }

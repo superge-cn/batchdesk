@@ -1,6 +1,6 @@
 # 0062. UiState 的前端联动：上次目录与上次页面，用读改写而不是加命令
 
-- **状态**：已采纳（2026-11-03，设计 03 §11 的界面联动：`navigation` 段的 `lastDirectory`/`recentDirectories` 与 `lastSection`/`lastFeature`）
+- **状态**：已采纳（2026-11-03，设计 03 §11 的界面联动：`navigation` 段的 `lastDirectory`/`recentDirectories`、`lastSection`/`lastFeature`，以及 §11.3 的"重置界面状态"入口）
 - **日期**：2026-11-03
 - **决策者**：开发代理（工程实现决策；字段集合取自设计 03 §11.2，语义对齐内核 `UiState::remember_directory`）
 - **关联**：设计 03 §11（UiState 定位/存储/schema/恢复规则）、设计 12 §2（`lib/state/` 目标目录）、ADR-0004（命令只经生成绑定）；`web/src/lib/uiState.ts`、`web/src/lib/ipc/index.ts`、`web/src/App.tsx`
@@ -64,3 +64,17 @@
 App 级的两个断言刻意只覆盖"顶层视图切换"的写回与"功能页恢复"的读回：点进功能页会把整页功能 UI（含 C05 预览命令）拖进 mock，那是 `FeaturePages` 自己的测试范围，不该在这里复制一份。`lastFeature` 的写入语义由 `lib/uiState.test.ts` 的 `rememberView` 覆盖。
 
 **仍未做**：`window`（窗口矩形与离屏 clamp）、`layout`（侧栏/面板宽度）、`tables`（列宽/排序）、`templatePrefs`；也没有"清除最近位置/重置布局"的界面入口。
+
+## 7. 补记二（同日）：重置界面状态的入口
+
+设计 03 §11.3 写着「"重置界面布局/清除最近位置"只影响 UiState」，而 `resetUiState` 的封装自上一批就位，界面上却**没有入口**——契约里的"可重置"只是能力，不是可用性。
+
+三条判断：
+
+1. **放在设置区，但单独一块**：新建「本机界面状态」卡片，与五个 `SCOPES` 分组并列。设置页原有注释写着"只写 ConfigDocument，不碰 UiState"——这条边界没变，新卡片走的是 `resetUiState`，并在测试里断言 `setConfig`／`resetScope` **零调用**（两个存储不许串）。
+2. **走 `resetUiState` 而不是 `setUiState({navigation: {}})`**：前者是壳层的"整份重置"语义（`window`/`layout`/`tables` 也一并清），后者只能清导航段、还会把兄弟字段的形状责任推给前端。§11.3 说的"重置界面布局"本来就是整份。将来若要做"只清最近位置"，那是另一个按钮、另一个语义，不该复用这个。
+3. **回调由 App 注入**：`SettingsPage` 加可选 prop `onResetUiState`，App 传一个"调 `resetUiState` ＋ 清内存 `navigationRef` / `recentDirs`"的回调。这样重置后**内存态立刻同步**（否则要等下次启动才生效）；不传回调时按钮保持 disabled——独立渲染设置页的测试不会假装能重置。
+
+**边界**：只重界面状态，不动用户设置、任务、日志（§11.3 的边界）；重置后编辑框里正在输入的内容不会被清（那是用户输入，不是"最近位置"）；没有二次确认——它不是破坏性操作，代价只是"下次要重选目录"。
+
+**验证**：`SettingsPage.test.tsx` 2 项（调用回调并提示、`setConfig`/`resetScope` 零调用；不传回调时按钮 disabled）＋既有 App 测试的 mock 补 `resetUiState`。

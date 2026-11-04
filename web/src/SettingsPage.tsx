@@ -207,13 +207,21 @@ function asText(value: unknown): string {
  * 2. 逐项显示来源——用户看到的是"生效值"而不是"文件里写了什么"；
  * 3. 语言与主题经 i18n 层即时生效，其余字段保存后由使用方下次读取时生效。
  */
-export function SettingsPage({ onBack }: { onBack: () => void }) {
+export function SettingsPage({
+  onBack,
+  onResetUiState
+}: {
+  onBack: () => void;
+  /** 重置本机界面状态（设计 03 §11.3）。不传时该区块的按钮保持 disabled。 */
+  onResetUiState?: () => Promise<void>;
+}) {
   const { t, lang, theme, setLang, setTheme } = useI18n();
   const [views, setViews] = useState<Partial<Record<ConfigScope, ScopeView>>>({});
   const [error, setError] = useState<IpcError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<ConfigScope | null>(null);
   const [readOnly, setReadOnly] = useState(false);
+  const [resettingUiState, setResettingUiState] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -309,6 +317,22 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     }
     return void save(scope, field.key, raw.trim() === "" ? null : raw);
   };
+
+  /** 重置界面状态：只清 UiState，不动 ConfigDocument（设计 03 §11.3 的边界）。 */
+  async function resetUiStateMemory() {
+    if (!onResetUiState) return;
+    setResettingUiState(true);
+    setNotice(null);
+    setError(null);
+    try {
+      await onResetUiState();
+      setNotice(t("settings.uiState.done"));
+    } catch (value) {
+      setError(toIpcError(value));
+    } finally {
+      setResettingUiState(false);
+    }
+  }
 
   const control = (scope: ScopeDef, field: FieldDef) => {
     const setting = views[scope.id]?.values[field.key];
@@ -434,6 +458,25 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
               </div>
             </section>
           ))}
+
+          <section className="card" aria-labelledby="scope-ui-state">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title" id="scope-ui-state">
+                  {t("settings.uiState.title")}
+                </h2>
+                <p className="card-sub">{t("settings.uiState.hint")}</p>
+              </div>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => void resetUiStateMemory()}
+                disabled={resettingUiState || !onResetUiState}
+              >
+                <RotateCcw size={14} /> {t("settings.uiState.action")}
+              </button>
+            </div>
+          </section>
 
           <div className="hint">
             <Info size={14} /> {t("settings.webNote")}

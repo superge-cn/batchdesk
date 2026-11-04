@@ -23,6 +23,7 @@ vi.mock("./lib/ipc", () => ({
   isTauri: () => true,
   getUiState: vi.fn(),
   setUiState: vi.fn(),
+  resetUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   // I18nProvider 挂载时回读 general 组（语言/主题）；这里给空文档即可。
   getConfig: vi.fn(async () => ({ configVersion: 1, updatedAt: "", scopes: {} })),
   setConfig: vi.fn(async () => ({ scope: "general", values: {} })),
