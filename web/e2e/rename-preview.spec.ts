@@ -54,3 +54,32 @@ test("回滚预演面板呈现零冲突判定（C06 的 UI 面）", async ({ pag
   await expect(page.getByText(/回滚预演/).first()).toBeVisible();
   await expect(page.getByText(/冲突 0/).first()).toBeVisible();
 });
+
+test("预览→执行链跑通：C05 标注逐项可见，确认后执行进入终态（EXE-01）", async ({ page }) => {
+  // 入口顺序本身就是判定对象：没有计划时执行不可点（另一条用例已断），生成预览后
+  // 才可执行——这就是「预览→确认→执行」这条链在界面上的形状。
+  const apply = page.getByRole("button", { name: /^执行$/ });
+  await expect(apply).toBeDisabled();
+
+  await fillRenameForm(page, "full");
+  await page.getByRole("button", { name: /生成计划预览/ }).click();
+
+  const panel = page.getByRole("heading", { name: /C05 预览与冲突检测/ });
+  await expect(panel).toBeVisible();
+  const card = panel.locator("xpath=ancestor::*[self::section][1]");
+  await expect(card).toContainText("将处理 1");
+  // 对照行逐项标注（旧名 → 新名），这是"标注链"里给用户核对的那一份
+  await expect(card.getByText("/mock/dup.txt → /mock/uniq.txt")).toBeVisible();
+
+  await expect(apply).toBeEnabled();
+  await apply.click();
+
+  // 派发即入队，进度按 task:// 事件推进到全部条目收尾（1/1）。
+  await expect(page.getByText(/任务已加入队列/)).toBeVisible();
+  await expect(page.getByText(/1\/1/)).toBeVisible();
+  // 终态徽标必须是本地化文案（labels.tsx 是状态文案的单一来源）：mock 夹具刻意留一条
+  // E2003 失败项以演示 C16 重试，所以这里的终态是"失败"，同时给出重试入口。
+  await expect(page.getByRole("button", { name: /^重试失败项$/ })).toBeVisible();
+  const badge = page.locator(".task-panel .badge");
+  await expect(badge).toHaveText(/失败|部分失败|已完成/);
+});

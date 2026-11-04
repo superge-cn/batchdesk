@@ -20,7 +20,7 @@ import { ErrorBanner } from "./ErrorBanner";
 import { VirtualList } from "./VirtualList";
 import { useI18n, type MessageKey } from "./i18n";
 import type { Translate } from "./labels";
-import { phaseLabel } from "./labels";
+import { phaseLabel, stateBadge } from "./labels";
 import type {
   IpcError,
   PlanDocument,
@@ -1135,7 +1135,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
               <div className="task-panel">
                 <div className="task-head">
                   <span className="task-id" title={task.taskId}>{task.taskId}</span>
-                  <span className="badge">{task.state}</span>
+                  {stateBadge(t, task.state)}
                 </div>
                 <div className="progress" role="progressbar" aria-label={t("common.progress")}>
                   <div

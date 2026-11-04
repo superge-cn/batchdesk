@@ -853,7 +853,7 @@ add("C05",
         6: ("✅", PW, "e2e/rename-preview.spec.ts「改参数后重新预览」＋「回滚预演面板呈现零冲突判定」", ""),
     },
     exe_slots={
-        1: ("◐", CI, "kernel `preview` 5 项＋CLI c05", "「确认→执行」衔接待 UI/e2e"),
+        1: ("✅", PW, "e2e/rename-preview.spec.ts「预览→执行链跑通：C05 标注逐项可见，确认后执行进入终态（EXE-01）」＋kernel `preview` 5 项＋CLI c05", ""),
         2: ("✅", CI, "apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects", ""),
     },
     rbk_slots={
