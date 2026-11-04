@@ -68,6 +68,7 @@ apply_flow::f12_reports_existing_conflicts_and_invalid_targets	ok
 apply_flow::f13_no_match_creates_no_entries_and_writes_nothing	ok
 apply_flow::f13_regex_capture_plan_apply_and_undo	ok
 apply_flow::f13_rejects_invalid_regex_and_missing_capture_references	ok
+apply_flow::read_only_rename_target_is_skipped_without_failing_the_task	ok
 apply_flow::temp_dirs_are_unique_for_parallel_tests	ok
 archive_cancel::cancel_before_the_first_entry_touches_nothing	ok
 archive_cancel::cancel_between_items_keeps_extracted_files_and_stays_undoable	ok
@@ -318,7 +319,10 @@ kernel::generic_apply::tests::merge_skips_when_a_source_size_changed_since_plan	
 kernel::generic_apply::tests::merge_transcodes_inputs_in_order_and_undo_removes_the_output	ok
 kernel::generic_apply::tests::merge_writes_the_bom_only_once	ok
 kernel::generic_apply::tests::move_and_delete_use_their_own_operations	ok
+kernel::generic_apply::tests::non_retryable_permission_error_is_not_retried	ok
+kernel::generic_apply::tests::occupied_target_is_retried_once_and_then_applies	ok
 kernel::generic_apply::tests::overwrite_without_confirmation_is_rejected_before_any_change	ok
+kernel::generic_apply::tests::permission_failure_still_fails_arms_outside_the_named_scope	ok
 kernel::generic_apply::tests::plan_entry_count_limit_is_rejected	ok
 kernel::generic_apply::tests::pooled_apply_matches_serial_results_and_undo	ok
 kernel::generic_apply::tests::pooled_cancel_stops_dispatch_and_rolls_back	ok
@@ -326,6 +330,8 @@ kernel::generic_apply::tests::pooled_quota_is_enforced_deterministically	ok
 kernel::generic_apply::tests::pooled_same_source_edit_content_is_serialized	ok
 kernel::generic_apply::tests::protected_source_is_rechecked_during_execution	ok
 kernel::generic_apply::tests::protected_target_is_skipped_before_any_change	ok
+kernel::generic_apply::tests::readonly_rename_is_skipped_and_reported_without_failing_the_task	ok
+kernel::generic_apply::tests::readonly_source_is_skipped_for_content_rewrites	ok
 kernel::generic_apply::tests::rename_applies_and_writes_a_reversible_journal_entry	ok
 kernel::generic_apply::tests::sequence_resolution_picks_a_free_name	ok
 kernel::generic_apply::tests::split_plan_writes_line_aligned_parts_and_undo_quarantines_them	ok

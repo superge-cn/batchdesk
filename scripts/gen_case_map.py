@@ -21,7 +21,7 @@ CORPUS = {
     "T01": "asserted", "T02": "asserted", "T03": "asserted", "T04": "asserted",
     "T05": "asserted", "T06": "asserted", "T07": "asserted", "T08": "asserted",
     "R01": "asserted", "R02": "asserted", "R03": "asserted", "R04": "asserted",
-    "R06": "asserted", "E03": "partial", "Z01": "asserted", "Z02": "asserted",
+    "R06": "asserted", "E03": "asserted", "Z01": "asserted", "Z02": "asserted",
 }
 MANUAL = {"R05", "E01", "E02", "E04"}  # fixtures/corpus/manual-only.txt
 # c18 横切 harness 覆盖的 plan 命令（apply_flow::c18_plan_dry_run_…）
@@ -412,7 +412,7 @@ add("F06",
         2: (corpus_cell(["T07"])[0], CI, "corpus.rs::t07_headerless_sample_aligns_by_column_position＋apply_flow::f06_plan_surfaces_headerless_and_header_normalization_warnings",
             corpus_cell(["T07"])[1]),
         3: (corpus_cell(["T08"])[0], CI, "corpus.rs::t08_duplicate_and_padded_headers_normalize_without_collapsing（表头规范化与重复列名）", corpus_cell(["T08"])[1]),
-        4: ("◐", CI, "kernel `generic_apply` 50 项（含冲突二次裁决）", "C19 四策略逐项执行未落（C19 属阶段 1）"),
+        4: ("◐", CI, "kernel `generic_apply` 55 项（含冲突二次裁决）", "C19 四策略逐项执行未落（C19 属阶段 1）"),
         5: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         # ↑ csv-merge／csv-rows 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
     },
@@ -571,7 +571,7 @@ add("F12",
             "文件系统层大小写不敏感行为需 Windows/macOS 实机核对（C06-EXE-02 同源）→ Windows 实机日"),
         3: ("◐", CI, "kernel `rename` 长路径三级（200/259/260×开关）单测＋corpus.rs::r01_long_path_samples_follow_path_length_tiers",
             "UNC canonicalize 行为矩阵待实机（Windows 实机日）"),
-        4: ("◐", CI, "corpus.rs::e03_readonly_target_is_marked_by_preflight_and_named_in_preview（预检 Warn＋E2002 且不阻断整任务，F12/C03 计划告警点名只读路径）、apply_flow::f12_and_c03_name_read_only_files_in_plan_warnings（真实 CLI 出口）、rename::tests::readonly_and_locked_facts_are_named_in_preview_warnings", "E03 台账＝partial：执行期「重试一次后按策略跳过」未落地（OQ-37 待裁决）；占用/只读的 Windows 属性与实机行为属实机项"),
+        4: ("◐", CI, "corpus.rs::e03_readonly_target_is_marked_by_preflight_and_named_in_preview、apply_flow::read_only_rename_target_is_skipped_without_failing_the_task（POSIX 真实文件系统）、generic_apply::tests::readonly_rename_is_skipped_and_reported_without_failing_the_task、occupied_target_is_retried_once_and_then_applies（断 rename 调用次数＝2）、non_retryable_permission_error_is_not_retried、permission_failure_still_fails_arms_outside_the_named_scope（范围外仍 Failed）", "Windows FILE_ATTRIBUTE_READONLY 的执行期表现属实机日（真实 FS 断言限 #[cfg(unix)]）"),
         5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
@@ -766,7 +766,7 @@ add("C10",
 
 add("C15",
     name="任务队列与进度", stage="阶段 0", prio="P0★", src="方案 §5.12、§7.5–7.7",
-    plan_tests="kernel `generic_apply` 50 项（含并发 6 项：限额 20 万条目 E3007/并发越界 E1002）",
+    plan_tests="kernel `generic_apply` 55 项（含并发 6 项：限额 20 万条目 E3007/并发越界 E1002）",
     exe1="壳层 generic_plan_kinds_execute_through_the_desktop_queue",
     rbk1="壳层 apply_and_undo_run_through_the_queue_with_events",
     pre=["多任务入队预览", "并发上限 1–16 与 20 万条目边界", "暂停/取消对预览的影响与队列重排标注", "改并发后旧预览失效"],

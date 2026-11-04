@@ -6,7 +6,7 @@
 
 | 编号 | 标题 | 状态 | 适用 | 依赖 |
 |---|---|---|---|---|
-| [01](./01-内核接口与IPC契约.md) | 内核接口与 IPC 契约 | 已评审·实现冻结 v1.47（2026-10-30 retryTask/合帧/注入口/removedLogRecords/§8 reverse 推导规则、F01–F12 动作与载荷、F06 T07/T08 告警、F09 read_ranges、F10 DirectoryLister/write_atomic_with、F11 逐级 create-dir、F12 两阶段 rename；2026-10-31 F12 计划级长路径分级、F13 正则捕获组替换、C02 流式换行转换、C03 查找替换、C10 ZIP 解压/压缩、C11 CSV 去重、C12 CSV 过滤、C15 任务内条目级并发、C04 名称查找替换；v1.42–v1.45 见文末修订记录：取消处置、CSV 五臂流式执行、`ContentRewriter` 返回 `EditOutcome`；2026-11-03 v1.46 `TaskSummary.planId` 可选字段（「任务与撤销」视图据此走 `undoPlan`）） | kernel、src-tauri、web | 基线 §4.2/4.3/4.6/4.7/7.x/8.x/12.4/13.x |
+| [01](./01-内核接口与IPC契约.md) | 内核接口与 IPC 契约 | 已评审·实现冻结 v1.48（2026-10-30 retryTask/合帧/注入口/removedLogRecords/§8 reverse 推导规则、F01–F12 动作与载荷、F06 T07/T08 告警、F09 read_ranges、F10 DirectoryLister/write_atomic_with、F11 逐级 create-dir、F12 两阶段 rename；2026-10-31 F12 计划级长路径分级、F13 正则捕获组替换、C02 流式换行转换、C03 查找替换、C10 ZIP 解压/压缩、C11 CSV 去重、C12 CSV 过滤、C15 任务内条目级并发、C04 名称查找替换；v1.42–v1.45 见文末修订记录：取消处置、CSV 五臂流式执行、`ContentRewriter` 返回 `EditOutcome`；2026-11-03 v1.46 `TaskSummary.planId` 可选字段（「任务与撤销」视图据此走 `undoPlan`）） | kernel、src-tauri、web | 基线 §4.2/4.3/4.6/4.7/7.x/8.x/12.4/13.x |
 | [02](./02-Web双通道传输契约.md) | Web 双通道传输契约 | 已评审·实现冻结 v1.1（2026-10-28 用户确认） | web、WASM、云端（后置） | 01、基线 §13.x |
 | [03](./03-配置schema与迁移契约.md) | 配置 schema 与迁移契约 | 已评审·实现冻结 v1.3（2026-10-28 C37/UiState 增量） | kernel、src-tauri、web | 01、02、基线 §4.5/6.7/9.5/9.6/§15 |
 | [04](./04-文件系统适配层契约.md) | 文件系统适配层契约 | 已评审·实现冻结 v1.12（2026-10-30 长路径收口＋隔离备份/路径预留＋F09 区间读取＋F10 流式原子写＋F11 目录创建；2026-11-03 `open_read_stream` 拉取式读取（C13 归并）；2026-10-31 C02 流式原地重写；2026-11-01 C07 同卷判定/单文件删除/逐级建目录；2026-11-02 S01 的 UNC 探测根改为共享名、`read_stream` 流式读取） | kernel、桌面/WASM 适配 | 01、03、基线 §4.7/5.13 |
