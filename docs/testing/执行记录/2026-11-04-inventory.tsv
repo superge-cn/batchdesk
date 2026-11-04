@@ -86,6 +86,7 @@ corpus::k02_utf8_sample_is_not_mistaken_for_gbk	ok
 corpus::k03_bom_wins_and_target_bom_follows_caller	ok
 corpus::k04_and_k06_are_never_silently_converted	ok
 corpus::k05_ascii_sample_defaults_to_utf8_with_hint	ok
+corpus::k05_short_ascii_sample_defaults_to_utf8_and_prompts_in_the_plan	ok
 corpus::k06_binary_magic_is_rejected_by_c02_plan	ok
 corpus::k07_mixed_encoding_is_flagged_not_repaired	ok
 corpus::k08_utf16_bom_sample_detects_and_transcodes_clean	ok
@@ -448,6 +449,7 @@ kernel::rename::tests::readonly_and_locked_facts_are_named_in_preview_warnings	o
 kernel::rename::tests::scope_stem_and_ext_are_applied_separately	ok
 kernel::rename::tests::source_target_chain_is_not_an_existing_conflict	ok
 kernel::rename::tests::windows_style_targets_still_match_existing_conflicts	ok
+kernel::replace_content::tests::anchored_and_unbounded_regex_still_produce_whole_file_results	ok
 kernel::replace_content::tests::blocked_files_are_not_named_as_readonly	ok
 kernel::replace_content::tests::cell_streaming_matches_whole_file_cell_replace_across_every_chunk_boundary	ok
 kernel::replace_content::tests::cell_streaming_still_refuses_unclosed_quotes_with_e3004	ok
@@ -457,14 +459,19 @@ kernel::replace_content::tests::csv_unclosed_quote_is_reported_and_refused	ok
 kernel::replace_content::tests::empty_find_is_rejected	ok
 kernel::replace_content::tests::empty_replacement_is_a_danger_warning	ok
 kernel::replace_content::tests::plain_replacement_counts_and_replaces_non_overlapping	ok
+kernel::replace_content::tests::plain_streaming_does_not_split_when_the_find_never_matches	ok
 kernel::replace_content::tests::plain_streaming_keeps_e3001_on_invalid_utf8_and_handles_empty_input	ok
 kernel::replace_content::tests::plain_streaming_matches_whole_file_replace_across_every_chunk_boundary	ok
+kernel::replace_content::tests::plain_streaming_must_not_split_a_multibyte_character_at_the_overlap_edge	ok
 kernel::replace_content::tests::plan_blocks_binary_and_non_utf8_sources	ok
 kernel::replace_content::tests::plan_blocks_unclosed_csv_quote_in_cell_mode	ok
 kernel::replace_content::tests::plan_skips_no_matches_and_creates_entries_for_matches	ok
 kernel::replace_content::tests::readonly_and_locked_files_are_named_in_preview_warnings	ok
 kernel::replace_content::tests::regex_capture_groups_replace_and_count	ok
 kernel::replace_content::tests::regex_invalid_or_missing_capture_is_rejected	ok
+kernel::replace_content::tests::regex_streaming_matches_whole_file_replace_across_every_chunk_boundary	ok
+kernel::replace_content::tests::regex_window_bytes_only_accepts_patterns_with_a_computable_bound	ok
+kernel::replace_content::tests::regex_with_capture_reference_streams_identically_to_whole_file	ok
 kernel::split::tests::closes_parts_on_line_boundaries	ok
 kernel::split::tests::empty_file_has_no_spans	ok
 kernel::split::tests::empty_input_returns_plan_with_warning_and_no_entries	ok
@@ -635,6 +642,13 @@ shell::tasks::tests::zip_compress_plan_executes_through_the_desktop_queue_and_un
 shell::tests::f11_facts_probe_every_parent_position_and_flag_files	ok
 shell::tests::protected_snapshot_comparison_ignores_order_and_duplicates	ok
 shell::tests::protected_snapshot_comparison_sees_canonical_changes	ok
+shell::window_state::tests::a_rect_on_the_secondary_monitor_is_restored_including_negative_offsets	ok
+shell::window_state::tests::a_rect_still_inside_a_monitor_is_restored_where_it_was	ok
+shell::window_state::tests::an_off_screen_rect_is_centered_on_the_primary_monitor	ok
+shell::window_state::tests::missing_or_empty_state_leaves_the_window_alone	ok
+shell::window_state::tests::only_full_containment_counts_not_mere_overlap	ok
+shell::window_state::tests::saved_size_without_a_position_restores_size_only	ok
+shell::window_state::tests::snapshot_round_trips_through_the_ui_state_patch_shape	ok
 vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 取消且有已完成项：先问数量，确认后走 undoPlan 撤销	ok
 vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 选择保留：不调用撤销，条目留在 Journal 里	ok
 vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：取消但一条都没完成时不得打扰用户	ok
@@ -682,6 +696,7 @@ vitest::VirtualList.test.tsx::VirtualList 的窗口化 行序号与集合大小�
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 已知码位给出本地化摘要与建议动作，不再把后端英文原文当主文案	ok
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 同一码位在英文下给英文文案	ok
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 未收录的码位退回后端原文而不是空白，并标记未本地化	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 设计 06 §2 的码表已全量收口：53 个码位、每码两段	ok
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 每个收录码位在中英两个语言包里都有 summary 与 action，且文案不为空	ok
 vitest::errors.test.tsx::错误横幅 渲染码位、本地化摘要与建议动作，且关闭按钮可用	ok
 vitest::errors.test.tsx::错误横幅 未收录码位时仍显示码位与后端原文，不出现 raw key	ok

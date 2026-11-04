@@ -16,8 +16,8 @@ OUT = ROOT / "docs/testing/用例覆盖映射表-v0.2.csv"
 
 # 语料台账状态（crates/kernel/tests/assertions.tsv 实测）
 CORPUS = {
-    "K01": "asserted", "K02": "asserted", "K03": "asserted", "K04": "partial",
-    "K05": "partial", "K06": "asserted", "K07": "partial", "K08": "partial",
+    "K01": "asserted", "K02": "asserted", "K03": "asserted", "K04": "asserted",
+    "K05": "asserted", "K06": "asserted", "K07": "asserted", "K08": "partial",
     "T01": "asserted", "T02": "asserted", "T03": "asserted", "T04": "asserted",
     "T05": "asserted", "T06": "asserted", "T07": "asserted", "T08": "asserted",
     "R01": "asserted", "R02": "asserted", "R03": "asserted", "R04": "asserted",
@@ -659,14 +659,14 @@ add("C02",
 
 add("C03",
     name="批量查找替换", stage="阶段 0", prio="P0★", src="方案 §5.14；T §3.2 C03",
-    plan_tests="kernel `replace_content` 17 项＋platform `replace_content` 3 项",
+    plan_tests="kernel `replace_content` 23 项＋platform `replace_content` 3 项",
     exe1="apply_flow::c03_plain_replace_plan_apply_and_undo",
     rbk1="同上",
     pre=["普通与正则替换预览（匹配数/上下文）", "正则捕获组与空替换边界", "@K06 二进制、未闭合引号 E3004 标注", "改规则后旧预览失效"],
     exe=["正常替换（非重叠）", "正则捕获组替换", "@K06 不进入文本管道", "@T01 CSV 引号内命中的单元格保护", "执行中取消/行区间"],
     rbk=["撤销还原", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        True, "kernel `replace_content` 17 项",
+        True, "kernel `replace_content` 23 项",
         ("kernel::replace_content::tests::empty_replacement_is_a_danger_warning＋plan_skips_no_matches_and_creates_entries_for_matches", ""),
         ("apply_flow::c03_blocks_binary_and_unclosed_csv", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
