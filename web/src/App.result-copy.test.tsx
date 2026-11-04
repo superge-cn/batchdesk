@@ -65,7 +65,24 @@ vi.mock("./lib/ipc", () => ({
   toIpcError: (value: unknown) => value
 }));
 
-describe("执行结果表的失败条目文案（06 §3）", () => {
+const FAILURE_EVENT: DoneEvent = {
+  taskId: "task-apply",
+  kind: "apply",
+  summary: {
+    planId: "01RESULT",
+    taskId: "task-apply",
+    entries: [
+      { entryId: "e1", status: "ok" },
+      {
+        entryId: "e2",
+        status: "failed",
+        error: { code: "E2002", message: RAW_MESSAGE, detail: RAW_DETAIL, retryable: false }
+      }
+    ]
+  }
+};
+
+describe("执行结果表的失败条目文案（06 §2／§3）", () => {
   beforeEach(() => {
     doneListeners.length = 0;
     settledState = "partial-failed";
@@ -81,24 +98,8 @@ describe("执行结果表的失败条目文案（06 §3）", () => {
     await user.click(screen.getByRole("button", { name: /^移入隔离目录$/ }));
     await waitFor(() => expect(doneListeners.length).toBeGreaterThan(0));
 
-    const event: DoneEvent = {
-      taskId: "task-apply",
-      kind: "apply",
-      summary: {
-        planId: "01RESULT",
-        taskId: "task-apply",
-        entries: [
-          { entryId: "e1", status: "ok" },
-          {
-            entryId: "e2",
-            status: "failed",
-            error: { code: "E2002", message: RAW_MESSAGE, detail: RAW_DETAIL, retryable: false }
-          }
-        ]
-      }
-    };
     await act(async () => {
-      doneListeners.forEach((listener) => listener(event));
+      doneListeners.forEach((listener) => listener(FAILURE_EVENT));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -108,5 +109,27 @@ describe("执行结果表的失败条目文案（06 §3）", () => {
     expect(cell.textContent).not.toContain(RAW_DETAIL);
     // 悬停提示同样不得带出技术原文
     expect(cell.getAttribute("title")).not.toContain("/home/operator");
+  });
+
+  it("条目状态用本地化文案，不露出内核枚举原词（09 §2）", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByPlaceholderText(/资料归档|Documents/), "/mock/tree");
+    await user.click(screen.getByRole("button", { name: /生成计划预览/ }));
+    await screen.findByText(/计划已生成/);
+    await user.click(screen.getByLabelText(/我已核对预览/));
+    await user.click(screen.getByRole("button", { name: /^移入隔离目录$/ }));
+    await waitFor(() => expect(doneListeners.length).toBeGreaterThan(0));
+
+    await act(async () => {
+      doneListeners.forEach((listener) => listener(FAILURE_EVENT));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // 一条成功、一条失败：徽章文案来自资源包，而不是 ApplyStatus 的线协议字符串
+    expect(await screen.findByText("成功")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+    expect(screen.queryByText("ok")).toBeNull();
+    expect(screen.queryByText("failed")).toBeNull();
   });
 });

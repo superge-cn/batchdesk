@@ -55,6 +55,7 @@ import {
   cancelTask,
   planOperation,
   retryTask,
+  undoDryRun,
   undoPlan
 } from "./lib/ipc";
 
@@ -103,6 +104,32 @@ describe("功能视图的任务控制与撤销", () => {
     const retry = await screen.findByTestId("retry-failed");
     await user.click(retry);
     await waitFor(() => expect(retryTask).toHaveBeenCalledWith("task-apply"));
+  });
+
+  it("回滚预演的条目状态用本地化文案，不露出枚举原词（09 §2）", async () => {
+    // C06 预演报告里每行是 UndoDryRunStatus（ok/conflict/missing）——线协议字符串，
+    // 不是用户文案。三档各给一条，断界面显示的是资源包里的措辞。
+    vi.mocked(undoDryRun).mockResolvedValueOnce({
+      planId: "01PLAN",
+      entries: [
+        { entryId: "01PLAN-0001", status: "ok" },
+        { entryId: "01PLAN-0002", status: "conflict", code: "E2007" },
+        { entryId: "01PLAN-0003", status: "missing" }
+      ],
+      conflictCount: 1,
+      missingCount: 1
+    });
+    const user = userEvent.setup();
+    render(<FeaturePages view="f12" onBack={() => undefined} />);
+    await planThrough(user);
+    await user.click(screen.getByRole("button", { name: /回滚预演/ }));
+
+    const rows = await screen.findAllByText(/01PLAN-000/);
+    const texts = rows.map((row) => row.textContent ?? "");
+    expect(texts.join(" ")).toContain("可撤销");
+    expect(texts.join(" ")).toContain("冲突");
+    expect(texts.join(" ")).toContain("目标已缺失");
+    expect(texts.join(" ")).not.toMatch(/\b(ok|conflict|missing)\b/);
   });
 
   it("撤销调用 undoPlan（走共享 Journal 通道，不自建撤销）", async () => {

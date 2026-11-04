@@ -1,5 +1,5 @@
 import type { MessageKey } from "./i18n";
-import type { ProgressPhase, TaskState } from "./lib/ipc/types";
+import type { ApplyStatus, ProgressPhase, TaskState, UndoDryRunStatus } from "./lib/ipc/types";
 
 /**
  * 任务状态与阶段的用户可见文案。
@@ -50,6 +50,41 @@ export function stateBadge(t: Translate, state: TaskState) {
   if (state === "running") return <span className="badge">{label}</span>;
   if (state === "queued") return <span className="badge">{label}</span>;
   return <span className="badge badge-warn">{label}</span>;
+}
+
+/**
+ * 条目级状态的用户文案：内核线协议给的是 `ok`／`skipped`／`missing` 这类枚举字符串，
+ * 直接印在界面上就是未本地化文案（09 §2）。两处消费点（C09 执行结果表、功能页回滚预演）
+ * 共用同一份映射，避免同一个枚举在两个页面叫不同名字。
+ */
+const APPLY_STATUS_KEYS: Record<ApplyStatus, MessageKey> = {
+  ok: "common.status.applied",
+  overwritten: "common.status.overwritten",
+  skipped: "common.status.skipped",
+  failed: "common.status.failed"
+};
+
+const DRY_RUN_STATUS_KEYS: Record<UndoDryRunStatus, MessageKey> = {
+  ok: "common.status.revertible",
+  // 预演里的"冲突"与 C05 预览行同义，复用同一条文案，不再另起一词
+  conflict: "feature.status.conflict",
+  missing: "common.status.missing"
+};
+
+export function applyStatusLabel(t: Translate, status: ApplyStatus): string {
+  return t(APPLY_STATUS_KEYS[status]);
+}
+
+/** 条目状态徽章：语气色由结果决定，文案由资源包决定。 */
+export function applyStatusBadge(t: Translate, status: ApplyStatus) {
+  const label = applyStatusLabel(t, status);
+  if (status === "ok") return <span className="badge badge-safe">{label}</span>;
+  if (status === "failed") return <span className="badge badge-danger">{label}</span>;
+  return <span className="badge badge-warn">{label}</span>;
+}
+
+export function dryRunStatusLabel(t: Translate, status: UndoDryRunStatus): string {
+  return t(DRY_RUN_STATUS_KEYS[status]);
 }
 
 /** 任务是否仍在推进（非终态）。 */

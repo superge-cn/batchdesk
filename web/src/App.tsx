@@ -49,7 +49,7 @@ import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
 import { describeError } from "./errors";
 import { VirtualList } from "./VirtualList";
-import { phaseLabel, stateBadge, type Translate } from "./labels";
+import { applyStatusBadge, phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
 import { SettingsPage } from "./SettingsPage";
 import { I18nProvider, useI18n, type MessageKey } from "./i18n";
@@ -1310,19 +1310,7 @@ function AppShell() {
                                   ? `${entry.error.code} · ${failure.title}`
                                   : "—"}
                               </span>
-                              <span>
-                                <span
-                                  className={`badge ${
-                                    entry.status === "ok"
-                                      ? "badge-safe"
-                                      : entry.status === "failed"
-                                        ? "badge-danger"
-                                        : "badge-warn"
-                                  }`}
-                                >
-                                  {entry.status}
-                                </span>
-                              </span>
+                              <span>{applyStatusBadge(t, entry.status)}</span>
                             </div>
                           );
                         }}

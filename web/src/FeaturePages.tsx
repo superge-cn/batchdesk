@@ -20,7 +20,7 @@ import { ErrorBanner } from "./ErrorBanner";
 import { VirtualList } from "./VirtualList";
 import { useI18n, type MessageKey } from "./i18n";
 import type { Translate } from "./labels";
-import { phaseLabel, stateBadge } from "./labels";
+import { dryRunStatusLabel, phaseLabel, stateBadge } from "./labels";
 import type {
   IpcError,
   PlanDocument,
@@ -1165,7 +1165,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                     getKey={(entry) => entry.entryId}
                     renderRow={(entry) => (
                       <div className="muted">
-                        {entry.entryId} · {entry.status}
+                        {entry.entryId} · {dryRunStatusLabel(t, entry.status)}
                         {entry.detail ? ` · ${entry.detail}` : ""}
                       </div>
                     )}
