@@ -675,7 +675,7 @@ add("C03",
         3: (corpus_cell(["K06"])[0], CI, "corpus.rs::K06（C02 接入的魔数管道）", corpus_cell(["K06"])[1]),
         4: ("◐", CI, "apply_flow::c03_csv_cell_mode_preserves_quoted_newlines（T01 台账＝asserted）",
             "CSV 单元格模式会把记录终止符规范化为 LF，源 CRLF 未保留"),
-        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 整段变换＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂，覆盖本行「执行中取消」部分）", "实现缺口：流式重叠窗口与行区间未做"),
+        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 流式（plain/cell 按 ADR-0057、可界定正则按 ADR-0064）＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂取消）", "大输入内存实测归 C-1／C-2 的 Windows 重测；界定不出的正则（无界量词/锚点/\\b/分组量化/零宽）仍整段"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply", "本功能部分失败注入未测"),

@@ -641,6 +641,157 @@ impl ReplaceRewriter {
 /// 与适配层的固定块读取（方案 §4.8 的 4 MB 建议值）无关。
 const REPLACE_STREAM_CHUNK: usize = 64 * 1024;
 
+/// 正则匹配长度的**字节上界**（ADR-0064）：窗口化只有在尾巴比任何可能的匹配都长时
+/// 才不会漏替换。算得出上界才返回 `Some`；算不出**一律返回 `None` 退回整段**（＝现状），
+/// 因为窗口偏小的后果是静默改坏内容，而退回整段的后果只是内存 O(文件)。
+///
+/// 三类必须拒绝的构造（各自的静默出错形态见 ADR-0064 §1）：
+/// - 锚点与单词边界（`^` `$` `\A` `\z` `\Z` `\b` `\B`）：窗口将每块端点当成文本端点／丢掉左邻字节；
+/// - 无界重复（`*` `+` `{m,}`）与带量词的分组 `(…){n}`：没有上界可算；
+/// - 括号里的扩展语法（`(?…)`：标志组与非捕获组）：保守拒绝，不去推断其长度语义。
+pub fn regex_window_bytes(pattern: &str) -> Option<usize> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut bound: usize = 0;
+    // 最后一个可计数原子的长度（1 个字符）；量化符要改写它。
+    let mut last: Option<usize> = None;
+    let mut group_depth: usize = 0;
+    let mut index = 0;
+    while index < chars.len() {
+        match chars[index] {
+            '^' | '$' => return None,
+            '\\' => {
+                let next = *chars.get(index + 1)?;
+                if matches!(next, 'b' | 'B' | 'A' | 'z' | 'Z') {
+                    return None;
+                }
+                index += 2;
+                bound += 1;
+                last = Some(1);
+            }
+            '[' => {
+                // 字符类整体记 1 个字符；`]` 出现在首位或 `^` 之后时是字面量。
+                let mut cursor = index + 1;
+                if chars.get(cursor) == Some(&'^') {
+                    cursor += 1;
+                }
+                if chars.get(cursor) == Some(&']') {
+                    cursor += 1;
+                }
+                let mut closed = false;
+                while cursor < chars.len() {
+                    match chars[cursor] {
+                        '\\' => cursor += 2,
+                        ']' => {
+                            cursor += 1;
+                            closed = true;
+                            break;
+                        }
+                        _ => cursor += 1,
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+                index = cursor;
+                bound += 1;
+                last = Some(1);
+            }
+            '.' => {
+                index += 1;
+                bound += 1;
+                last = Some(1);
+            }
+            '(' => {
+                if chars.get(index + 1) == Some(&'?') {
+                    return None;
+                }
+                group_depth += 1;
+                index += 1;
+                last = None;
+            }
+            ')' => {
+                if group_depth == 0 {
+                    return None;
+                }
+                group_depth -= 1;
+                index += 1;
+                // 分组本身不计数；其后若跟量化符则无法定界（见 `*`/`+`/`{` 分支）。
+                last = None;
+            }
+            '|' => {
+                index += 1;
+                last = None;
+            }
+            '*' | '+' => return None,
+            '?' => {
+                // `x?` 的上界仍是 x 本身；`x{1,4}?` 之类懒惰量化仍是有界的，交给 `{` 分支。
+                last?;
+                index += 1;
+            }
+            '{' => {
+                // 量化对象必须是刚计过数的那个原子；分组与交替之后的量化一律拒绝。
+                let counted = last?;
+                let mut cursor = index + 1;
+                let mut min_digits = String::new();
+                while cursor < chars.len() && chars[cursor].is_ascii_digit() {
+                    min_digits.push(chars[cursor]);
+                    cursor += 1;
+                }
+                if min_digits.is_empty() {
+                    return None;
+                }
+                let mut max_digits = String::new();
+                if cursor < chars.len() && chars[cursor] == ',' {
+                    cursor += 1;
+                    while cursor < chars.len() && chars[cursor].is_ascii_digit() {
+                        max_digits.push(chars[cursor]);
+                        cursor += 1;
+                    }
+                    // `{m,}` 是上界无穷（含 `{m,0}` 之外的所有空数字情形）。
+                    if max_digits.is_empty() {
+                        return None;
+                    }
+                } else if cursor >= chars.len() || chars[cursor] != '}' {
+                    return None;
+                }
+                if cursor >= chars.len() || chars[cursor] != '}' {
+                    return None;
+                }
+                let max: usize = if max_digits.is_empty() {
+                    min_digits.parse().ok()?
+                } else {
+                    max_digits.parse().ok()?
+                };
+                if max > 1024 {
+                    // 上界能算，但乘出来的窗口比任何合理的文件还大：退回整段更诚实。
+                    return None;
+                }
+                let added = counted.checked_mul(max)?;
+                bound = bound - counted + added;
+                last = Some(added);
+                index = cursor + 1;
+                // 懒惰标记 `?` 不改变上界。
+                if chars.get(index) == Some(&'?') {
+                    index += 1;
+                }
+            }
+            other => {
+                if other == ')' || other == '}' {
+                    return None;
+                }
+                index += 1;
+                bound += 1;
+                last = Some(1);
+            }
+        }
+    }
+    if group_depth != 0 || bound == 0 {
+        return None;
+    }
+    // 字符 → 字节：UTF-8 单字符最多 4 字节；上界取放大值，宁可尾巴留长。
+    Some(bound.saturating_mul(4).max(4))
+}
+
 fn rewrite_io_error(error: std::io::Error) -> KernelError {
     KernelError::new(
         "E3005",
@@ -657,6 +808,18 @@ fn rewrite_utf8_error(error: std::str::Utf8Error) -> KernelError {
         Some(error.to_string()),
         false,
     )
+}
+
+/// 安全边界必须回退到**字符边界**（ADR-0064）：按字节退 `overlap`/`window` 时，
+/// 缓冲区整块合法的情形下边界正好可能落在多字节字符中间——半个字符写进输出、
+/// 另外半个留在缓冲里，下一块的 UTF-8 校验会对一份完全合法的文件报 `E3001`。
+fn char_boundary_floor(buffer: &[u8], limit: usize) -> usize {
+    let mut limit = limit.min(buffer.len());
+    // UTF-8 延续字节形如 0b10xx_xxxx：落在它上面就不是字符起点，逐字节回退到边界。
+    while limit > 0 && matches!(buffer.get(limit), Some(byte) if (0x80..=0xBF).contains(byte)) {
+        limit -= 1;
+    }
+    limit
 }
 
 impl ReplaceRewriter {
@@ -689,6 +852,7 @@ impl ReplaceRewriter {
                 buffer.len().saturating_sub(overlap)
             };
             safe = safe.min(valid);
+            safe = char_boundary_floor(&buffer[..valid], safe);
             let text = std::str::from_utf8(&buffer[..valid]).expect("just validated");
             let mut matches: Vec<(usize, usize)> = Vec::new();
             let mut search = 0;
@@ -710,6 +874,88 @@ impl ReplaceRewriter {
                 }
                 output.write_all(replacement).map_err(rewrite_io_error)?;
                 cursor = end;
+            }
+            let consumed = if cursor >= safe {
+                cursor
+            } else {
+                output
+                    .write_all(&buffer[cursor..safe])
+                    .map_err(rewrite_io_error)?;
+                safe
+            };
+            buffer.drain(..consumed);
+            if eof {
+                return Ok(());
+            }
+        }
+    }
+
+    /// 能不能走窗口化流式：算得出字节上界、且模式不会零宽匹配，才给 `(正则, 窗口)`。
+    /// 任一条件不满足就返回 `None`——**退回整段**，绝不带着偏小的窗口去改用户文件。
+    fn streamable_regex(&self) -> Option<(Regex, usize)> {
+        let window = regex_window_bytes(&self.find)?;
+        let regex = Regex::new(&self.find).ok()?;
+        // 零宽匹配（`a|` 之类的空分支）让推进纪律变得含混：整段路径能正确处理的相邻空匹配，
+        // 在这里要靠"起点 < safe"逐块推进，边界太多，不如不流式。
+        if regex.is_match("") {
+            return None;
+        }
+        Some((regex, window))
+    }
+
+    /// regex 文本模式的窗口化流式替换（ADR-0064）：`window` 是 `regex_window_bytes` 算出的
+    /// **匹配长度字节上界**，尾巴比任何可能的匹配都长，所以「起点 < `len - window`」的判定
+    /// 与整段 `replace_all` 逐字节等价；内存 O(window + 块)。
+    fn rewrite_regex_windowed(
+        &self,
+        regex: &Regex,
+        window: usize,
+        input: &mut dyn Read,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError> {
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; REPLACE_STREAM_CHUNK];
+        loop {
+            let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
+            let eof = read == 0;
+            buffer.extend_from_slice(&chunk[..read]);
+            // 跨块被切开的多字节字符不算错：不完整尾部留到下一块，EOF 才算错（同 plain 臂）。
+            let valid = match std::str::from_utf8(&buffer) {
+                Ok(_) => buffer.len(),
+                Err(error) if error.error_len().is_none() && !eof => error.valid_up_to(),
+                Err(error) => return Err(rewrite_utf8_error(error)),
+            };
+            let mut safe = if eof {
+                buffer.len()
+            } else {
+                buffer.len().saturating_sub(window)
+            };
+            safe = safe.min(valid);
+            safe = char_boundary_floor(&buffer[..valid], safe);
+            let text = std::str::from_utf8(&buffer[..valid]).expect("just validated");
+            let mut cursor = 0usize;
+            let mut search = 0usize;
+            while search <= valid {
+                let Some(m) = regex.find(&text[search..valid]) else {
+                    break;
+                };
+                let start = search + m.start();
+                let end = search + m.end();
+                if start >= safe {
+                    // 起点在保留窗口内：换成更长的匹配仍有可能，等下一块。
+                    break;
+                }
+                if start > cursor {
+                    output
+                        .write_all(&buffer[cursor..start])
+                        .map_err(rewrite_io_error)?;
+                }
+                let replaced = regex.replace(&text[start..end], self.replacement.as_str());
+                output
+                    .write_all(replaced.as_bytes())
+                    .map_err(rewrite_io_error)?;
+                cursor = end;
+                search = end;
             }
             let consumed = if cursor >= safe {
                 cursor
@@ -795,8 +1041,15 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
             self.rewrite_plain(input, output)?;
             return Ok(crate::generic_apply::EditOutcome::default());
         }
-        // regex：整段（ADR-0057 §2）。正则的最大匹配长度不可知，窗口化只能取启发式
-        // 上界，一旦小于实际匹配长度就会静默漏替换——留作独立议题，不在此夹带。
+        // regex：能算出匹配长度字节上界、且不会零宽匹配时走窗口化流式（ADR-0064）。
+        if structure == ContentStructure::Text {
+            if let Some((regex, window)) = self.streamable_regex() {
+                self.rewrite_regex_windowed(&regex, window, input, output)?;
+                return Ok(crate::generic_apply::EditOutcome::default());
+            }
+        }
+        // 界定不出的正则（`*`/`+`/锚点/单词边界/分组量化/零宽匹配）仍走整段：
+        // 窗口偏小的代价是静默改坏内容，整段的代价只是内存 O(文件)。
         let mut data = Vec::new();
         input.read_to_end(&mut data).map_err(rewrite_io_error)?;
         let replaced = replace_bytes(
@@ -1251,6 +1504,189 @@ mod tests {
                 "step {step} diverged from the whole-file path"
             );
         }
+    }
+
+    #[test]
+    fn regex_window_bytes_only_accepts_patterns_with_a_computable_bound() {
+        // 算得出上界：字面串、定长类、有界重复。
+        for pattern in ["ab", "[0-9]{3}", "a{2,5}", "\\d{4}", "(ab|cdef)"] {
+            assert!(
+                regex_window_bytes(pattern).is_some(),
+                "{pattern} 应当算得出字节上界"
+            );
+        }
+        // 上界放大值必须真的 ≥ 任何可能匹配的字节长度。
+        assert!(regex_window_bytes("[0-9]{3}").unwrap() >= 3 * 4);
+        // 界定不出／语义依赖整段上下文：一律 None（＝退回整段）。
+        for pattern in [
+            "a.*b",      // 无界
+            "\\d+",      // 无界
+            "x{2,}",     // 开顶上界
+            "foo$",      // 块尾会被当成文本尾
+            "^\\s",      // 块首会被当成文本首
+            "\\bcat\\b", // 左邻字节不在窗口内
+            "(?i)abc",   // 内联标志组
+            "(ab)+",     // 分组量化
+            "[a-z",      // 非法/看不懂的构造
+        ] {
+            assert_eq!(
+                regex_window_bytes(pattern),
+                None,
+                "{pattern} 不该被窗口化：窗口偏小的代价是静默改坏内容"
+            );
+        }
+    }
+
+    #[test]
+    fn regex_streaming_matches_whole_file_replace_across_every_chunk_boundary() {
+        // 捕获引用 ＋ 多字节字符 ＋ 匹配横跨块边界：窗口化路径必须与整段逐字节一致。
+        let data: Vec<u8> = "价格12元;中ab;价789元".repeat(300).into_bytes();
+        let entry = rewrite_entry("/data/a.txt");
+        for (pattern, replacement) in [
+            ("价格[0-9]{1,3}元", "COST"),
+            ("[0-9]{3}", "999"),
+            ("中a.", "★"),
+        ] {
+            let rewriter = ReplaceRewriter::new(
+                ReplaceMode::Regex,
+                pattern.to_string(),
+                replacement.to_string(),
+                CsvMode::Cell,
+                None,
+            );
+            let whole = replace_bytes(
+                &data,
+                ReplaceMode::Regex,
+                pattern,
+                replacement,
+                CsvMode::Cell,
+                ContentStructure::Text,
+                None,
+            )
+            .unwrap();
+            for step in [1usize, 2, 5, 64 * 1024] {
+                let streamed = rewrite_with(&rewriter, &entry, &data, step).unwrap();
+                assert_eq!(
+                    streamed, whole,
+                    "pattern {pattern} 在 step {step} 与整段路径不一致"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn regex_with_capture_reference_streams_identically_to_whole_file() {
+        // `$1` 展开在两条路径必须同源：窗口化臂复用 `regex.replace`，不另写展开逻辑。
+        let data: Vec<u8> = "id=0123;".repeat(500).into_bytes();
+        let entry = rewrite_entry("/data/a.txt");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Regex,
+            "id=([0-9]{4})".to_string(),
+            "#$1#".to_string(),
+            CsvMode::Cell,
+            None,
+        );
+        let whole = replace_bytes(
+            &data,
+            ReplaceMode::Regex,
+            "id=([0-9]{4})",
+            "#$1#",
+            CsvMode::Cell,
+            ContentStructure::Text,
+            None,
+        )
+        .unwrap();
+        for step in [1usize, 3, 64 * 1024] {
+            assert_eq!(
+                rewrite_with(&rewriter, &entry, &data, step).unwrap(),
+                whole,
+                "捕获引用在 step {step} 与整段不一致"
+            );
+        }
+    }
+
+    #[test]
+    fn anchored_and_unbounded_regex_still_produce_whole_file_results() {
+        // 界定不出的模式退回整段后，结果与旧行为一致（这里断言的是"没被窗口化带跑"）。
+        let data: Vec<u8> = "aaa\nbbb\naaa".as_bytes().to_vec();
+        let entry = rewrite_entry("/data/a.txt");
+        for pattern in ["a.*b", "^bbb$", "\\baaa\\b"] {
+            let rewriter = ReplaceRewriter::new(
+                ReplaceMode::Regex,
+                pattern.to_string(),
+                "X".to_string(),
+                CsvMode::Cell,
+                None,
+            );
+            let whole = replace_bytes(
+                &data,
+                ReplaceMode::Regex,
+                pattern,
+                "X",
+                CsvMode::Cell,
+                ContentStructure::Text,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                rewrite_with(&rewriter, &entry, &data, 2).unwrap(),
+                whole,
+                "{pattern} 退回整段后结果必须不变"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_streaming_must_not_split_a_multibyte_character_at_the_overlap_edge() {
+        // 复现：find 是 6 字节的多字节串，overlap=5；整块读取时 `len - 5` 很可能落在
+        // 「中」的第 2/3 个延续字节上——按字节消费会把一个字符劈成"半字符入输出、
+        // 半字符留缓冲"，下一块再从 UTF-8 校验里冒出假的 E3001。
+        let data: Vec<u8> = "中".repeat(300_000).into_bytes();
+        let entry = rewrite_entry("/data/a.txt");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Plain,
+            "中中".to_string(),
+            "X".to_string(),
+            CsvMode::Cell,
+            None,
+        );
+        let whole = replace_bytes(
+            &data,
+            ReplaceMode::Plain,
+            "中中",
+            "X",
+            CsvMode::Cell,
+            ContentStructure::Text,
+            None,
+        )
+        .unwrap();
+        // 块大小取 3 的倍数：缓冲区整块都是合法 UTF-8，此时 `len - overlap` 才会
+        // 真的落在「中」的延续字节上（块大小取非倍数时，不完整的尾巴会被
+        // `valid_up_to` 先兜住，看不见这个缺陷）。
+        for step in [3072usize, 3 * 64 * 1024] {
+            let streamed = rewrite_with(&rewriter, &entry, &data, step).unwrap();
+            assert_eq!(
+                streamed, whole,
+                "step {step}：安全边界必须回退到字符边界，否则半个字符会被劈开"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_streaming_does_not_split_when_the_find_never_matches() {
+        // 无匹配时 `cursor` 停在 0，写出的是 `buffer[0..safe]`——这条分支才是
+        // "安全边界落在字符中间"最直接的暴露面。
+        let data: Vec<u8> = "中".repeat(100_000).into_bytes();
+        let entry = rewrite_entry("/data/a.txt");
+        let rewriter = ReplaceRewriter::new(
+            ReplaceMode::Plain,
+            "qq".to_string(),
+            "X".to_string(),
+            CsvMode::Cell,
+            None,
+        );
+        let streamed = rewrite_with(&rewriter, &entry, &data, 3072).unwrap();
+        assert_eq!(streamed, data, "整块合法时按字节退 overlap 会劈开字符");
     }
 
     #[test]
