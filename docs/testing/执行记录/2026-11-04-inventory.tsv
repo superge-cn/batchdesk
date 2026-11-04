@@ -660,6 +660,7 @@ vitest::App.navigation.test.tsx::功能视图导航可达 「任务与撤销」�
 vitest::App.navigation.test.tsx::功能视图导航可达 「设置」是能点开的真实视图：五组配置与语言选择都在	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检落地前不派发；期间界面仍可操作；落地瞬间参数已变则拒绝派发	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检阻断时不派发执行（E2004 前移为执行前阻断，零副作用）	ok
+vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §3） 失败条目显示码位＋本地化摘要，不显示后端 message／detail 原文	ok
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 启动时把上次目录填进输入框，并把最近目录挂成候选	ok
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 生成预览后把这次目录写回 UiState，且保持去重置顶	ok
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 没有记录时不预填、也不写候选（空状态由用户自己选）	ok
@@ -687,6 +688,7 @@ vitest::TaskHistory.test.tsx::任务与撤销视图 失败任务可重试，调�
 vitest::TaskHistory.test.tsx::任务与撤销视图 撤销按 planId 走 undoPlan，且 undo 任务自己不提供重试	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 中断任务给的是续跑/回滚/放弃，而不是取消	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 实时事件态覆盖静态快照：跑完的任务立刻显示已完成、取消按钮消失	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 加载失败时只显示本地化文案，不渲染后端 message／detail 原文	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 2000 条只挂窗口内的行，未渲染的条目不在 DOM 里	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 占位高度等于 条数 × 行高，滚动条比例因此真实	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 滚动后窗口跟着位移：新窗口渲染、旧窗口从 DOM 摘除	ok
