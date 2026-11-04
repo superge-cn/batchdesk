@@ -15,6 +15,8 @@
 9. 界面源码不得渲染 `IpcError.message`／`detail` 原文（设计 06 §3：技术细节只进
    诊断日志，文案不得含路径/文件名/堆栈）——取原文的位置只允许 errors.ts 的兜底
    与 IPC 归一化层。
+10. 界面源码不得把线协议枚举（`{x.status}`／`{x.state}`）当文案渲染（设计 09 §2），
+   枚举→key 的唯一出口是 `web/src/labels.tsx`。
 
 只使用标准库；CI 的 web job 与本地门禁必跑。
 
@@ -70,6 +72,16 @@ EXEMPT_MARKER = "i18n-exempt"
 # 绝对路径与源码位置），只能进诊断日志，界面渲染必须走 `describeError`／`ErrorBanner`。
 # 这一条此前只写在 ADR 里、靠人记得，本批同一族的第二处泄漏（执行结果表）就是这么漏的。
 RAW_ERROR_TEXT_RE = re.compile(r"\berror\??\.(message|detail)\b")
+# 第 ⑩ 项：界面不得把线协议枚举当文案渲染。`{entry.status}`／`{task.state}` 这类插值
+# 印出来的是 `ok`／`partial-failed` 这种协议字符串——同一个 bug 在 2026-11-04 连出现两次
+# （任务状态徽标、条目级状态），第三次只能靠机器挡。枚举→key 的唯一出口是 `labels.tsx`。
+# 只认"整段插值就是一条成员访问"这一种写法（`{row.status}`／`{ detail.summary.state }`）：
+# 要求花括号里不含逗号/冒号/展开，否则会把 `{ ...current, state: event.state }` 这类
+# 对象字面量误判成渲染点。函数调用形态（`{label(task.state)}`）不在射程内，如实写明。
+RAW_PROTOCOL_ENUM_RE = re.compile(
+    r"\{\s*[A-Za-z_$][\w$]*(?:\??\.[\w$]+)*\.(status|state)\s*\??\s*\}"
+)
+
 # 允许读原文的两处：`errors.ts` 的"码表外兜底"与 IPC 归一化层（它们就是唯一的出口）。
 RAW_ERROR_TEXT_ALLOWED = {
     Path("web/src/errors.ts"),
@@ -281,6 +293,26 @@ def main() -> int:
     if len(leaks) == 0 and not (SRC_DIR / "ErrorBanner.tsx").exists():
         failures.append("找不到 web/src/ErrorBanner.tsx：界面错误文案没有唯一出口（探测器自校失败）")
 
+    # 10. 界面不得渲染线协议枚举（设计 09 §2；同上，靠机器而非记性）。
+    enum_leaks: list[str] = []
+    for path in source_files():
+        relative = path.relative_to(ROOT)
+        if path.suffix != ".tsx":
+            continue
+        if any(str(relative).startswith(str(skip)) for skip in HARDCODED_SKIP):
+            continue
+        lines = strip_comments(path.read_text(encoding="utf-8")).splitlines()
+        for number, line in enumerate(lines, start=1):
+            if RAW_PROTOCOL_ENUM_RE.search(line):
+                enum_leaks.append(
+                    f"{relative}:{number} 把线协议枚举直接渲染成文案（应走 labels.tsx 的枚举→key）："
+                    f"{line.strip()[:70]}"
+                )
+    if enum_leaks:
+        failures.extend(enum_leaks)
+    if not (SRC_DIR / "labels.tsx").exists():
+        failures.append("找不到 web/src/labels.tsx：枚举→key 文案没有单一来源（探测器自校失败）")
+
     if failures:
         print("国际化门禁未通过：", file=sys.stderr)
         for failure in failures:
@@ -292,7 +324,7 @@ def main() -> int:
         f"{len(bundles)} 个语言包 × {len(default_keys)} 个 key，key 集合/占位符/语言残留一致；"
         f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文；"
         f"错误码文案 {len(mapped)} 个码位两段齐全，且与设计 06 §2 码表逐码对齐；"
-        f"界面 {len(scanned_ui)} 个源码文件零后端错误原文。"
+        f"界面 {len(scanned_ui)} 个源码文件零后端错误原文、零线协议枚举裸露。"
     )
     return 0
 

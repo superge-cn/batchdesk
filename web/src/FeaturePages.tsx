@@ -348,13 +348,28 @@ function isNoHeader(value: string | undefined) {
   return normalized === "无" || normalized === "no" || normalized === "false"; // i18n-exempt
 }
 
-function statusBadge(t: Translate, status: string) {
-  if (status === "normal") return <span className="badge badge-safe">{t("feature.status.normal")}</span>;
-  if (status === "conflict") return <span className="badge badge-danger">{t("feature.status.conflict")}</span>;
-  if (status === "invalid") return <span className="badge badge-danger">{t("feature.status.invalid")}</span>;
-  if (status === "too-long") return <span className="badge badge-warn">{t("feature.status.tooLong")}</span>;
-  if (status === "protected") return <span className="badge badge-danger">{t("feature.status.protected")}</span>;
-  return <span className="badge">{status}</span>;
+/**
+ * 预览行状态徽章。`Record` 全覆盖＋语气色表：内核将来加一个状态时这里编译不过，
+ * 而不是走兜底分支把线协议字符串（`too-long` 之类）原样印到界面上（09 §2）。
+ */
+const PREVIEW_STATUS_KEYS: Record<PreviewStatus, MessageKey> = {
+  normal: "feature.status.normal",
+  conflict: "feature.status.conflict",
+  invalid: "feature.status.invalid",
+  "too-long": "feature.status.tooLong",
+  protected: "feature.status.protected"
+};
+
+const PREVIEW_STATUS_TONES: Record<PreviewStatus, string> = {
+  normal: "badge badge-safe",
+  conflict: "badge badge-danger",
+  invalid: "badge badge-danger",
+  "too-long": "badge badge-warn",
+  protected: "badge badge-danger"
+};
+
+function statusBadge(t: Translate, status: PreviewStatus) {
+  return <span className={PREVIEW_STATUS_TONES[status]}>{t(PREVIEW_STATUS_KEYS[status])}</span>;
 }
 
 const FEATURE_TITLES: Record<View, MessageKey> = {
@@ -1204,7 +1219,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                   {preview.rows.map((row) => (
                     <div className="row" key={row.entryId}>
                       <span>
-                        {statusBadge(t, row.status as PreviewStatus)}
+                        {statusBadge(t, row.status)}
                         {row.twoPhase ? t("feature.c05.twoPhase") : ""}
                       </span>
                       <span className="path">
