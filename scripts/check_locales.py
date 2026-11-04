@@ -38,6 +38,10 @@ KEY_DOMAIN_RE = re.compile(
 ERROR_MAP_FILE = SRC_DIR / "errors.ts"
 ERROR_KEY_RE = re.compile(r'"error\.(E\d{4})\.(summary|action)"')
 ERROR_BUNDLE_KEY_RE = re.compile(r"^error\.(E\d{4})\.(summary|action|detail)$")
+# 设计 06 §2 的码表：映射表必须与契约表**逐码对齐**——将来码表新增一个码位而
+# errors.ts／语言包没接文案，这里直接红（此前是"人记得去补"）。
+DESIGN06_FILE = ROOT / "docs" / "design" / "06-错误码与用户文案契约.md"
+DESIGN06_CODE_RE = re.compile(r"^\|\s*(E\d{4})\s*\|", re.M)
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 CJK_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 
@@ -227,6 +231,21 @@ def main() -> int:
                         "（要么补映射，要么删文案）"
                     )
 
+        if DESIGN06_FILE.exists():
+            table = set(DESIGN06_CODE_RE.findall(DESIGN06_FILE.read_text(encoding="utf-8")))
+            if not table:
+                failures.append("设计 06 §2 的码表解析为空：门禁自校失败（探测器失效＝没有正例）")
+            unbound = sorted(table - set(mapped))
+            strays = sorted(set(mapped) - table)
+            if unbound:
+                failures.append(
+                    f"设计 06 §2 有 {len(unbound)} 个码位没进 errors.ts 映射表：{', '.join(unbound)}"
+                )
+            if strays:
+                failures.append(
+                    f"errors.ts 有 {len(strays)} 个码位不在设计 06 §2 码表里：{', '.join(strays)}"
+                )
+
     if failures:
         print("国际化门禁未通过：", file=sys.stderr)
         for failure in failures:
@@ -237,7 +256,7 @@ def main() -> int:
         "国际化门禁通过："
         f"{len(bundles)} 个语言包 × {len(default_keys)} 个 key，key 集合/占位符/语言残留一致；"
         f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文；"
-        f"错误码文案 {len(mapped)} 个码位两段齐全。"
+        f"错误码文案 {len(mapped)} 个码位两段齐全，且与设计 06 §2 码表逐码对齐。"
     )
     return 0
 
