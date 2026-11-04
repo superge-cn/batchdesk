@@ -934,11 +934,19 @@ pub fn plan_c01(input: PlanC01Input) -> Result<PlanDocument, KernelError> {
                 };
                 let skip = already_in_target(&file.sample, source, input.target);
                 let reason = if skip {
-                    format!(
+                    // 「默认 UTF-8 并提示」（§5.2 异常处理）在**无需转换**时同样要成立：
+                    // 纯 ASCII/过短的样本往往已经是目标编码，此时若只报"无需转换"，
+                    // 用户就永远看不到"这个判定是兜底默认值"这件事。
+                    let mut reason = format!(
                         "{origin} {}; already in target encoding {}, no conversion needed",
                         source.as_str(),
                         input.target.as_str()
-                    )
+                    );
+                    if let Some(note) = &detection.note {
+                        reason.push_str("; note: ");
+                        reason.push_str(note);
+                    }
+                    reason
                 } else {
                     let mut reason =
                         format!("{origin} {} -> {}", source.as_str(), input.target.as_str());

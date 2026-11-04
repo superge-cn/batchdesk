@@ -286,10 +286,21 @@ pub fn detect(sample: &[u8], prior: PlatformPrior) -> EncodingDetection {
     };
     let mut note = prior_note(prior, encoding);
     if control_polluted {
-        note = Some(
-            "decoded sample contains control characters; possible binary or misdetection"
-                .to_string(),
-        );
+        // §5.2 的输出要求是"判定编码、置信度、是否需人工确认"三件都要报，
+        // 所以这里不能只说"含控制字符"——要点名候选并说明是低置信结论。
+        note = Some(if suspected_mixed_encoding(sample) {
+            format!(
+                "suspected mixed encoding (statistical candidate {label} fits only part of the sample); \
+                 not auto-repaired, manual handling suggested (方案 §5.2 异常处理)",
+                label = encoding.as_str(),
+            )
+        } else {
+            format!(
+                "low-confidence statistical candidate {}; decoded sample contains control \
+                 characters, so it is not adopted silently (方案 §5.2 置信度策略)",
+                encoding.as_str(),
+            )
+        });
     }
     EncodingDetection {
         encoding: Some(encoding),
@@ -298,6 +309,47 @@ pub fn detect(sample: &[u8], prior: PlatformPrior) -> EncodingDetection {
         bom: None,
         note,
     }
+}
+
+/// 疑似混合编码的结构判据（方案 §5.2 异常处理"不承诺修复，标记文件并建议人工处理"）：
+/// 整段严格 UTF-8 失败，但样本能切成"一段 legacy 中文字节＋一段合法多字节 UTF-8"两半，
+/// 各自在自己的编码下无损——就是语料 K07 那种"前 GBK 后 UTF-8 直接拼接"。
+///
+/// 刻意不做任何打分/阈值：三个条件都是"能/不能解码"的事实判定，判据成立才标注；
+/// 而且这个标注只改变提示文案，不改变结论（仍是需人工确认、C01 仍阻断 E3001）。
+fn suspected_mixed_encoding(sample: &[u8]) -> bool {
+    if sample.len() < 8 || std::str::from_utf8(sample).is_ok() {
+        return false;
+    }
+    let mid = sample.len() / 2;
+    // 两半各试几个切分点，避免正好劈开一个多字节序列而被误判。
+    for offset in [0usize, 1, 2, 3] {
+        let split = (mid + offset).min(sample.len() - 1).max(1);
+        let (head, tail) = sample.split_at(split);
+        for (legacy, modern) in [(head, tail), (tail, head)] {
+            if !utf8_multibyte(modern) || std::str::from_utf8(legacy).is_ok() {
+                continue;
+            }
+            let fits_a_legacy_candidate = [
+                SourceEncoding::Gb18030,
+                SourceEncoding::Big5,
+                SourceEncoding::ShiftJis,
+            ]
+            .into_iter()
+            .any(|candidate| !candidate.to_encoding().decode(legacy).2);
+            if fits_a_legacy_candidate {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 合法 UTF-8 且含多字节字符（§5.2 ② 的"通过且含多字节字符"同一判据）。
+fn utf8_multibyte(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .map(|text| text.chars().any(|ch| ch.len_utf8() > 1))
+        .unwrap_or(false)
 }
 
 fn prior_note(prior: PlatformPrior, encoding: SourceEncoding) -> Option<String> {

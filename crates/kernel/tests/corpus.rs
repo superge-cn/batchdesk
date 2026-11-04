@@ -608,6 +608,22 @@ fn k04_and_k06_are_never_silently_converted() {
             "{corpus} 的 C01 计划必须产出 blocked E3001"
         );
     }
+    // K04 的判定点是"走统计判定并提示低置信"（§5.2 ③＋置信度策略）：
+    // 报告必须点名候选并说明是低置信，而不是只丢一句"含控制字符"。
+    let k04 = detect(&sample("K04", "K04.csv"), PlatformPrior::ChineseWindows);
+    let note = k04.note.clone().expect("统计判定必须留下可呈现的提示");
+    assert!(
+        note.contains("low-confidence statistical candidate"),
+        "K04 的提示要说明低置信与候选，实际：{note}"
+    );
+    assert!(
+        note.contains(k04.encoding.expect("K04 应给出统计候选").as_str()),
+        "提示必须点名候选编码，实际：{note}"
+    );
+    assert!(
+        !note.contains("suspected mixed"),
+        "K04 是无 BOM UTF-16，不该被标成混合编码：{note}"
+    );
 }
 
 #[test]
@@ -623,6 +639,47 @@ fn k07_mixed_encoding_is_flagged_not_repaired() {
         Some("E3001".to_string()),
         "K07 的 C01 计划必须产出 blocked E3001"
     );
+    // T 行要求"标记疑似混合编码"——光有 E3001 不算标记，报告里要写清是什么问题、
+    // 以及"不承诺修复、建议人工处理"（§5.2 异常处理原文）。
+    let note = detection.note.expect("K07 必须留下混合编码提示");
+    assert!(
+        note.contains("suspected mixed encoding"),
+        "K07 缺「疑似混合编码」专项提示，实际：{note}"
+    );
+    assert!(
+        note.contains("not auto-repaired") && note.contains("manual handling"),
+        "提示必须写明「不承诺修复＋建议人工处理」，实际：{note}",
+    );
+    assert_eq!(
+        blocked_code("K07", &data)
+            .as_deref()
+            .map(str::to_string)
+            .as_deref(),
+        Some("E3001"),
+        "标记之后仍不自动转换"
+    );
+}
+
+/// K05（纯 ASCII 短文件）：§5.2 异常处理要的是「默认 UTF-8 并提示」，
+/// 而提示必须到达计划条目（界面只渲染条目的 reason／warnings）。
+#[test]
+fn k05_short_ascii_sample_defaults_to_utf8_and_prompts_in_the_plan() {
+    let data = sample("K05", "K05.csv");
+    let detection = detect(&data, PlatformPrior::Other);
+    assert_eq!(detection.encoding, Some(SourceEncoding::Utf8));
+    assert!(
+        !detection.needs_manual,
+        "过短/纯 ASCII 走 §5.2 异常处理分支，不该升级成需人工确认"
+    );
+    let note = detection.note.expect("§5.2 要求默认 UTF-8 并给出提示");
+    let plan = plan_c01(c01_input("K05", &data)).expect("plan_c01 生成计划");
+    let entry = &plan.entries[0];
+    assert!(
+        entry.reason.contains(note.as_str()),
+        "提示必须写进条目 reason 才会被界面呈现，实际：{}",
+        entry.reason
+    );
+    assert!(entry.blocked.is_none(), "K05 不该被阻断：{entry:?}");
 }
 
 #[test]
