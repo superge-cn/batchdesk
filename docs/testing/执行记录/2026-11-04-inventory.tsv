@@ -730,6 +730,7 @@ playwright::rename-preview.spec.ts::无计划时执行入口被禁用（PRE-03 �
 playwright::rename-preview.spec.ts::生成计划后渲染计划预览与 C05 对照面板	ok
 playwright::rename-preview.spec.ts::改参数后重新预览：旧面板被新面板替换（PRE-04 / PRE-06）	ok
 playwright::rename-preview.spec.ts::回滚预演面板呈现零冲突判定（C06 的 UI 面）	ok
+playwright::rename-preview.spec.ts::预览→执行链跑通：C05 标注逐项可见，确认后执行进入终态（EXE-01）	ok
 playwright::settings-i18n.spec.ts::设置页可达，切到英文后整页换语言且关键操作不被遮挡	ok
 playwright::stale-plan.spec.ts::C09 工作台：改保留策略后执行入口关闭（勾选确认后仍关闭）	ok
 playwright::stale-plan.spec.ts::F12 功能页：改前缀后执行/撤销/回滚预演全部关闭	ok
