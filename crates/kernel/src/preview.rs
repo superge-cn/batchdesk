@@ -336,6 +336,88 @@ mod tests {
     }
 
     #[test]
+    fn each_conflict_kind_is_labelled_with_its_own_kind() {
+        // TC-C05-PRE-05（冲突矩阵抽样）：existing／within-batch／case-only 三类在预览层
+        // 必须**逐类可辨**——状态同为 conflict，但 detail 要带各自的类别，界面才点得出名；
+        // 三类同处一计划时还要各带自己的类别（防把某一类的文案串到别的行上）。
+        let kinds = [
+            ConflictKind::Existing,
+            ConflictKind::WithinBatch,
+            ConflictKind::CaseOnly,
+        ];
+        for (index, kind) in kinds.iter().enumerate() {
+            let mut single = entry(
+                &format!("e{index}"),
+                &format!("/data/src{index}.txt"),
+                &format!("/data/dst{index}.txt"),
+            );
+            single.conflict = Some(PlanConflict {
+                kind: kind.as_str().to_string(),
+                risk_level: kind.risk_level(),
+            });
+            single.resolution = Some(PlanResolution::Skip);
+            let preview = rename_preview(&plan(crate::rename::F12_KIND, vec![single])).unwrap();
+            assert_eq!(
+                preview.rows[0].status,
+                PreviewStatus::Conflict,
+                "kind {}",
+                kind.as_str()
+            );
+            assert_eq!(
+                preview.rows[0].detail.as_deref(),
+                Some(format!("conflict: {}", kind.as_str()).as_str()),
+                "the row must name its own conflict kind"
+            );
+            assert_eq!(preview.counts.conflicts, 1);
+            assert_eq!(preview.counts.to_process, 0);
+        }
+
+        let mixed: Vec<PlanEntry> = kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let mut item = entry(
+                    &format!("m{index}"),
+                    &format!("/data/src{index}.txt"),
+                    &format!("/data/dst{index}.txt"),
+                );
+                item.conflict = Some(PlanConflict {
+                    kind: kind.as_str().to_string(),
+                    risk_level: kind.risk_level(),
+                });
+                item.resolution = Some(PlanResolution::Skip);
+                item
+            })
+            .collect();
+        let preview = rename_preview(&plan(crate::rename::F12_KIND, mixed)).unwrap();
+        let details: Vec<&str> = preview
+            .rows
+            .iter()
+            .map(|row| row.detail.as_deref().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            details,
+            vec![
+                "conflict: existing",
+                "conflict: within-batch",
+                "conflict: case-only"
+            ]
+        );
+        assert_eq!(preview.counts.conflicts, 3);
+        assert_eq!(preview.counts.to_process, 0);
+        // 逐行点名 ＋ 一条缺省策略说明
+        assert_eq!(preview.highlights.len(), 4);
+        assert!(
+            preview
+                .highlights
+                .iter()
+                .filter(|line| line.contains("conflicts with an existing or in-batch name"))
+                .count()
+                == 3
+        );
+    }
+
+    #[test]
     fn two_phase_entries_collapse_into_one_mapping_row() {
         // 环（A→B、B→A）展开为两阶段：源→临时、临时→目标；预览折叠回旧名→新名。
         let temp_a = "/data/.batchdesk-rename-01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8-0-0";

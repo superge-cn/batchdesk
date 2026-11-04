@@ -4095,6 +4095,43 @@ fn c04_invalid_regex_and_missing_capture_are_rejected() {
         "--json",
     ]);
     assert!(!empty_find.status.success());
+    // 边界要在 CLI 层也带码位（TC-C05-PRE-02）：只断"非零退出"会让码位换错也看不见。
+    let stderr = String::from_utf8_lossy(&empty_find.stderr);
+    assert!(stderr.contains("E1002"), "stderr: {stderr}");
+
+    let unknown_scope = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        "a",
+        "--replace",
+        "b",
+        "--scope",
+        "bogus",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(!unknown_scope.status.success());
+    let stderr = String::from_utf8_lossy(&unknown_scope.stderr);
+    assert!(stderr.contains("E1002"), "stderr: {stderr}");
+
+    let scope_without_value = batchdesk(&[
+        "c04",
+        "--dir",
+        path_text(&work),
+        "--find",
+        "a",
+        "--replace",
+        "b",
+        "--plan-id",
+        PLAN_ID,
+        "--scope",
+    ]);
+    assert!(!scope_without_value.status.success());
+    let stderr = String::from_utf8_lossy(&scope_without_value.stderr);
+    assert!(stderr.contains("E1001"), "stderr: {stderr}");
 }
 
 #[test]
