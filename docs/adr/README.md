@@ -93,6 +93,7 @@
 | [0060](./0060-桌面壳CSP与capabilities的最小化取值.md) | 桌面壳加固：生产 CSP 与 `devCsp` 分离（`script-src 'self'`、`object-src 'none'`，唯一例外 `style-src 'unsafe-inline'`）；capabilities 仅 `core:default`；`withGlobalTauri=false`＋`freezePrototype`；6 项静态断言 | 已采纳 |
 | [0061](./0061-错误文案的界面分层与错误码映射表.md) | 错误文案分层：界面只显示码位＋本地化 summary/action（不渲染后端 message/detail）、21 码位映射表、未收录码位回退原文、表单校验改走提示条、门禁第 8 项 | 已采纳 |
 | [0062](./0062-UiState的前端联动上次目录与上次页面.md) | UiState 联动：上次目录/最近目录＋上次页面（`lastSection`/`lastFeature`）；读改写而非新命令（patch 是顶层浅合并）、语义对齐内核 `remember_directory`、不设上限、预填只填空输入框、写失败静默、恢复要认当前导航表 | 已采纳 |
+| [0063](./0063-只读与占用事实的分档采集.md) | 只读/占用事实分两档：计划期只读属性位（`locked` 恒 false）、预检期才做写句柄探测；执行期改判挂 OQ-37 | 已采纳 |
 | [0015](./0015-F01分片计划与撤销语义.md) | F01 分片计划与撤销语义（split 动作＋range＋流式区间复制） | 已采纳 |
 | [0016](./0016-F04合并计划与编码统一语义.md) | F04 合并计划与编码统一语义（merge 动作＋单条 entry＋BOM 只写一次） | 已采纳 |
 | [0017](./0017-F05-CSV分片记录边界与多区间原子写.md) | F05 CSV 分片记录边界与多区间原子写（csv 载荷＋copy_ranges_atomic） | 已采纳 |
