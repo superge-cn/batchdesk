@@ -675,6 +675,38 @@ fn precheck_entry(
     Prechecked::Proceed { target, overwrite }
 }
 
+/// OQ-37 裁决①：只有 T v1.12 §3.2 的 E03 行点名的功能族——改名族（F12/F13/C04）与
+/// C03 内容重写——把"写不进去"记为**跳过并报告**；其余写臂维持 `Failed`（响亮失败），
+/// 因为 F04/C09 之类"产物没写出来"若变安静跳过，用户可能根本不看见。
+fn skips_permission_failures(plan: &PlanDocument) -> bool {
+    matches!(
+        plan.kind.as_str(),
+        crate::rename::F12_KIND
+            | crate::regex_rename::F13_KIND
+            | crate::name_replace::C04_KIND
+            | crate::replace_content::C03_KIND
+    )
+}
+
+/// 方案 §5.13 的"执行时重试一次"：只在 §5.13/§5.14 点名的功能族里重，且只重
+/// `retryable` 的错误（设计 06：`E2003` 被占用＝true、`E2002` 无权限/只读＝false——
+/// 只读不会因为再试一次就变成可写）。第二次仍失败就交给 `settle_entry` 落终态。
+fn perform_with_retry(
+    view: &WorkerView<'_>,
+    plan: &PlanDocument,
+    entry: &crate::plan::PlanEntry,
+    target: Option<&str>,
+    overwrite: bool,
+) -> Result<Result<Performed, KernelError>, KernelError> {
+    let outcome = perform(view, plan, entry, target, overwrite);
+    if let Ok(Err(error)) = &outcome {
+        if error.retryable && skips_permission_failures(plan) {
+            return perform(view, plan, entry, target, overwrite);
+        }
+    }
+    outcome
+}
+
 /// 执行并记账（主线程调用；串行路径与并发回收共用）：
 /// perform 失败释放配额并计失败；Journal 写入失败尽力回退本次动作。
 #[allow(clippy::too_many_arguments)]
@@ -692,6 +724,11 @@ fn settle_entry(
         Ok(Ok(performed)) => performed,
         Ok(Err(error)) => {
             exec.license.release(&plan.kind, 1);
+            if skips_permission_failures(plan) && matches!(error.code.as_str(), "E2002" | "E2003") {
+                // 方案 §5.13／§5.14（OQ-37 裁决①）：只读/占用写不进去＝**跳过并报告**，
+                // 条目不进 failed 计数，任务终态因此不会被判成整体失败。
+                return Ok(skipped_entry(entry.entry_id.clone(), error));
+            }
             *failed += 1;
             return Ok(failed_entry(entry.entry_id.clone(), error));
         }
@@ -789,7 +826,7 @@ fn execute_serial(
                     continue;
                 }
                 let target_param = edit_content_target_param(entry, &target);
-                let outcome = perform(view, plan, entry, target_param, overwrite);
+                let outcome = perform_with_retry(view, plan, entry, target_param, overwrite);
                 let report = settle_entry(
                     exec,
                     plan,
@@ -836,9 +873,9 @@ fn flush_chunk(
         let mut handles = Vec::with_capacity(chunk.len());
         for item in &chunk {
             let target_param = edit_content_target_param(item.entry, &item.target);
-            handles.push(
-                scope.spawn(move || perform(view, plan, item.entry, target_param, item.overwrite)),
-            );
+            handles.push(scope.spawn(move || {
+                perform_with_retry(view, plan, item.entry, target_param, item.overwrite)
+            }));
         }
         let mut error: Option<KernelError> = None;
         for (item, handle) in chunk.iter().zip(handles) {
@@ -953,7 +990,7 @@ fn execute_pooled(
                     });
                 } else {
                     let target_param = edit_content_target_param(entry, &target);
-                    let outcome = perform(view, plan, entry, target_param, overwrite);
+                    let outcome = perform_with_retry(view, plan, entry, target_param, overwrite);
                     let report = settle_entry(
                         exec,
                         plan,
@@ -3367,6 +3404,11 @@ mod tests {
         copy_corrupts: Mutex<bool>,
         /// 故障注入：写这些路径时返回 E5001（模拟磁盘满/权限失败的条目级失败）。
         fail_writes: Mutex<Vec<String>>,
+        /// 故障注入：路径 →（错误码, retryable, 剩余可失败次数）。权限类终态与
+        /// 「执行时重试一次」只能用真实错误码驱动，E5001 那条注入口顶不了这个坑。
+        permission_failures: Mutex<HashMap<String, (String, bool, u64)>>,
+        /// 计数：rename 被调用了几次——"执行时重试一次"必须数得出次数才不空转。
+        rename_calls: std::sync::atomic::AtomicU64,
         /// 内存目录集合：支撑 create_dir / remove_dir_if_empty 臂（不模拟非空判定）。
         dirs: Mutex<Vec<String>>,
         /// read_stream 每次回调的块大小：既证"走了流式口"，也刻意把多字节序列切开。
@@ -3416,6 +3458,31 @@ mod tests {
 
         fn open_stream_calls(&self) -> u64 {
             self.open_stream_calls.load(Ordering::Relaxed)
+        }
+
+        /// 注入权限类写失败：`times` 次后自动放行（＝1 才能证明"重试一次"真发生了）。
+        fn set_permission_failure(&self, path: &str, code: &str, retryable: bool, times: u64) {
+            self.permission_failures
+                .lock()
+                .unwrap()
+                .insert(path.to_string(), (code.to_string(), retryable, times));
+        }
+
+        /// 命中则返回错误并消耗一次额度（剩余次数为 0 时后续写成功）——
+        /// 「重试一次」只有能数得出次数才算被证明。
+        fn permission_error(&self, path: &str) -> Option<KernelError> {
+            let mut guard = self.permission_failures.lock().unwrap();
+            let (code, retryable, remaining) = guard.get_mut(path)?;
+            if *remaining == 0 {
+                return None;
+            }
+            *remaining -= 1;
+            Some(KernelError::new(
+                code.clone(),
+                "injected permission failure",
+                None,
+                *retryable,
+            ))
         }
 
         fn set_fail_writes(&self, paths: &[&str]) {
@@ -3475,6 +3542,9 @@ mod tests {
         }
 
         fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), KernelError> {
+            if let Some(error) = self.permission_error(path) {
+                return Err(error);
+            }
             if self
                 .fail_writes
                 .lock()
@@ -3521,6 +3591,9 @@ mod tests {
             path: &str,
             write: &mut dyn FnMut(&mut dyn std::io::Write) -> Result<(), KernelError>,
         ) -> Result<(), KernelError> {
+            if let Some(error) = self.permission_error(path) {
+                return Err(error);
+            }
             if self
                 .fail_writes
                 .lock()
@@ -3556,6 +3629,9 @@ mod tests {
             path: &str,
             rewrite: &mut crate::fs::RewriteCallback<'_>,
         ) -> Result<(), KernelError> {
+            if let Some(error) = self.permission_error(path) {
+                return Err(error);
+            }
             if self
                 .fail_writes
                 .lock()
@@ -3601,6 +3677,11 @@ mod tests {
             to: &str,
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
+            self.rename_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(error) = self.permission_error(to) {
+                return Err(error);
+            }
             let mut files = self.files.lock().unwrap();
             let data = files
                 .remove(from)
@@ -3632,6 +3713,9 @@ mod tests {
             to: &str,
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
+            if let Some(error) = self.permission_error(to) {
+                return Err(error);
+            }
             if self
                 .fail_writes
                 .lock()
@@ -4181,6 +4265,167 @@ mod tests {
                 to: "/data/a.txt".to_string()
             }
         );
+    }
+
+    /// OQ-37 裁决①的落点：改名族遇到写不进去（E2002 只读）＝跳过并报告，
+    /// 不记 failed、不写 Journal、源文件留在原地，任务终态因此不是整体失败。
+    #[test]
+    fn readonly_rename_is_skipped_and_reported_without_failing_the_task() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.set_permission_failure("/data/b.txt", "E2002", false, 1);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut plan_doc = plan(vec![action_entry(
+            "e1",
+            "/data/a.txt",
+            Some("/data/b.txt"),
+            PlanAction::Rename,
+        )]);
+        plan_doc.kind = crate::rename::F12_KIND.to_string();
+        let outcome = apply_generic_plan(
+            &plan_doc,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed, "只读不得把整任务判死");
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(
+            outcome.report.entries[0]
+                .error
+                .as_ref()
+                .expect("跳过也要带着码位上报")
+                .code,
+            "E2002"
+        );
+        assert_eq!(journal.entries.len(), 0, "没写成就不该有撤销记录");
+        assert!(fs.exists("/data/a.txt"), "改名被拒后源文件必须留在原地");
+        assert!(!fs.exists("/data/b.txt"));
+    }
+
+    /// 反向对照：裁决①的范围只到改名族与 C03。其余写臂（这里取未点名的 kind）
+    /// 遇到同一种失败仍须记 Failed——"产物没写出来"不能变安静跳过。
+    #[test]
+    fn permission_failure_still_fails_arms_outside_the_named_scope() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.set_permission_failure("/data/b.txt", "E2002", false, 1);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                Some("/data/b.txt"),
+                PlanAction::Rename,
+            )]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Failed);
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Failed);
+    }
+
+    /// 方案 §5.13 的"执行时重试一次"：E2003（被占用）按设计 06 是 retryable，
+    /// 注入点只放行一次——第一枪失败、第二枪成功才说明真的重过。
+    #[test]
+    fn occupied_target_is_retried_once_and_then_applies() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.set_permission_failure("/data/b.txt", "E2003", true, 1);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut plan_doc = plan(vec![action_entry(
+            "e1",
+            "/data/a.txt",
+            Some("/data/b.txt"),
+            PlanAction::Rename,
+        )]);
+        plan_doc.kind = crate::rename::F12_KIND.to_string();
+        let outcome = apply_generic_plan(
+            &plan_doc,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(
+            fs.rename_calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "E2003 可重试＝必须真的再打过一次，而不是恰好一次成功"
+        );
+        assert!(fs.exists("/data/b.txt"), "重试一次后应改名成功");
+        assert_eq!(journal.entries.len(), 1, "成功条目必须留撤销记录");
+    }
+
+    /// 只读不重试：设计 06 里 `E2002.retryable=false`——再试一次也不会变可写。
+    #[test]
+    fn non_retryable_permission_error_is_not_retried() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        // 只注入一次额度：若执行器错误地去重试，第二枪就会成功并把条目做成 Ok。
+        fs.set_permission_failure("/data/b.txt", "E2002", false, 1);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut plan_doc = plan(vec![action_entry(
+            "e1",
+            "/data/a.txt",
+            Some("/data/b.txt"),
+            PlanAction::Rename,
+        )]);
+        plan_doc.kind = crate::rename::F12_KIND.to_string();
+        let outcome = apply_generic_plan(
+            &plan_doc,
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(journal.entries.len(), 0);
+    }
+
+    /// 裁决①的范围另一头：内容重写族（C03）就地改写失败同样"跳过并报告"。
+    #[test]
+    fn readonly_source_is_skipped_for_content_rewrites() {
+        struct NoopRewriter;
+        impl ContentRewriter for NoopRewriter {
+            fn rewrite(
+                &self,
+                _entry: &crate::plan::PlanEntry,
+                _input: &mut dyn std::io::Read,
+                _output: &mut dyn std::io::Write,
+            ) -> Result<EditOutcome, KernelError> {
+                Ok(EditOutcome { detail: None })
+            }
+        }
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.set_permission_failure("/data/a.txt", "E2002", false, 1);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut plan_doc = plan(vec![action_entry(
+            "e1",
+            "/data/a.txt",
+            None,
+            PlanAction::EditContent,
+        )]);
+        plan_doc.kind = crate::replace_content::C03_KIND.to_string();
+        let mut ctx = GenericApplyContext {
+            fs: &fs,
+            license: &license,
+            journal: &mut journal,
+            task_id: "task-1".to_string(),
+            now_rfc3339: "2026-11-04T00:00:00Z".to_string(),
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            progress: None,
+            cancel: None,
+            content_editor: None,
+            content_rewriter: Some(&NoopRewriter),
+            directory_lister: None,
+        };
+        let outcome = apply_generic_plan(&plan_doc, &ApplyOptions::default(), &mut ctx).unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed, "只读不得判死整任务");
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Skipped);
+        assert_eq!(journal.entries.len(), 0, "没写成就不该有撤销记录");
+        assert!(fs.exists("/data/a.txt"), "源文件必须仍在原地");
     }
 
     #[test]

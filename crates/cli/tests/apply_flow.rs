@@ -2406,6 +2406,80 @@ fn f12_prefix_plan_apply_and_undo_renames_files_and_directories() {
 }
 
 #[test]
+fn read_only_rename_target_is_skipped_without_failing_the_task() {
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("b.txt"), b"b").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, plan.stdout).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // 目录不可写＝改名一定吃 EACCES → 适配层映射成 E2002，这是真实文件系统
+        // 上"只读目标"的形态，不靠 mock。
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(
+        apply.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(
+        report["state"], "completed",
+        "只读写不进去不得把整任务判死：{report}"
+    );
+    let entries = report["report"]["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(entries.len(), 2);
+    for entry in &entries {
+        assert_eq!(entry["status"], "skipped", "只读条目应记跳过：{entry}");
+        assert_eq!(entry["error"]["code"], "E2002");
+    }
+    assert!(root.join("a.txt").exists() && root.join("b.txt").exists());
+    assert!(!root.join("new_a.txt").exists());
+    assert!(
+        !dir.0.join("journal.jsonl").exists(),
+        "没写成就不该留下撤销记录"
+    );
+}
+
+#[test]
 fn f12_reports_existing_conflicts_and_invalid_targets() {
     let dir = TempDir::new();
     let root = dir.0.join("rename");
