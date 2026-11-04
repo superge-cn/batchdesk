@@ -2405,8 +2405,16 @@ fn f12_prefix_plan_apply_and_undo_renames_files_and_directories() {
     assert!(!root.join("new_a.txt").exists());
 }
 
+/// E03 的执行期语义在**真实文件系统**上的证据。刻意限 POSIX：这里靠"目录不可写"
+/// 制造 EACCES→E2002，而 Windows 的只读是文件属性位、不给目录用，同一段代码在那边
+/// 会变成"改名本来就该成功"（Windows CI 上实测得到 `ok`，因此必须显式不跑，
+/// 而不是假装它验证了 Windows 的只读行为）。Windows `FILE_ATTRIBUTE_READONLY` 的
+/// 执行期表现仍属 Windows 实机日。
+#[cfg(unix)]
 #[test]
 fn read_only_rename_target_is_skipped_without_failing_the_task() {
+    use std::os::unix::fs::PermissionsExt;
+
     let dir = TempDir::new();
     let root = dir.0.join("rename");
     fs::create_dir_all(&root).unwrap();
@@ -2429,13 +2437,8 @@ fn read_only_rename_target_is_skipped_without_failing_the_task() {
     let plan_path = dir.0.join("plan.json");
     fs::write(&plan_path, plan.stdout).unwrap();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // 目录不可写＝改名一定吃 EACCES → 适配层映射成 E2002，这是真实文件系统
-        // 上"只读目标"的形态，不靠 mock。
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
-    }
+    // 目录置为不可写：改名必然吃 EACCES，这是真实文件系统上的"写不进去"形态。
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
     let apply = batchdesk(&[
         "apply",
         "--plan",
@@ -2446,11 +2449,9 @@ fn read_only_rename_target_is_skipped_without_failing_the_task() {
         path_text(&dir.0.join("journal.jsonl")),
         "--json",
     ]);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // 先恢复写位，任何断言失败都不该把临时目录留在不可清理的状态。
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+
     assert!(
         apply.status.success(),
         "apply failed\nstdout:\n{}\nstderr:\n{}",
