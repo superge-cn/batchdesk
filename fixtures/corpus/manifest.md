@@ -8,7 +8,7 @@
 >
 > 补充说明：T v1.12 §3.2 的"特征"列未逐条复制到本表（本表以"构造方式摘要"定位语料）；如需按特征检索，请直接查 §3.2 对应行。
 >
-> **范围口径（已确认）**：CI 的语料步骤**只处理"自动化"子集**，`人工` 的 4 条**显式排除**并单列跟踪。**当前 CI 已执行 K01–K08、T01–T08、R01–R04/R06 的断言（19 asserted／4 partial），E03 与 Z01/Z02 仍只有生成与范围核对**；因此 CI 绿灯仍不能表述为"自动化语料零失败"，更不能表述为 T v1.12 §1.3 字面的"语料回归零失败"——后者由**自动化 + 人工两栏共同构成**，两栏都过才计入阶段级验收（T v1.12 §4.2 的"回归通过"）。
+> **范围口径（已确认）**：CI 的语料步骤**只处理"自动化"子集**，`人工` 的 4 条**显式排除**并单列跟踪。**当前 CI 已执行 K01–K08、T01–T08、R01–R04/R06、Z01/Z02 的断言（19 asserted／5 partial），E03 已接「预检标记＋预览点名」（2026-11-04，ADR-0063），其执行期跳过仍待 OQ-37 裁决**；因此 CI 绿灯仍不能表述为"自动化语料零失败"，更不能表述为 T v1.12 §1.3 字面的"语料回归零失败"——后者由**自动化 + 人工两栏共同构成**，两栏都过才计入阶段级验收（T v1.12 §4.2 的"回归通过"）。
 
 | 编号 | 类别 | 构造方式摘要 | 脚本状态 | 备注 |
 |---|---|---|---|---|
@@ -45,11 +45,12 @@
 
 | 状态 | 条数 | 说明 |
 |---|---|---|
-| 就绪（脚本进 CI） | **24**（K01 示范 + 本轮 23） | 已有脚本，CI 生成 + 范围核对；**逐条断言 harness**：19 asserted（K01–K03、K06、T01–T08、R01–R04、R06、Z01、Z02）／4 partial（K04、K05、K07、K08）／1 pending（E03），见 `crates/kernel/tests/assertions.tsv` |
+| 就绪（脚本进 CI） | **24**（K01 示范 + 本轮 23） | 已有脚本，CI 生成 + 范围核对；**逐条断言 harness**：19 asserted（K01–K03、K06、T01–T08、R01–R04、R06、Z01、Z02）／5 partial（K04、K05、K07、K08、E03）／0 pending，见 `crates/kernel/tests/assertions.tsv` |
 | 待补 | **0** | — |
 | **人工**（CI 显式排除） | 4（R05、E01、E02、E04） | 单列跟踪，见下 |
 | **合计** | **28** | |
 
+> **落地记录（2026-11-04，E03 标记半程）**：E03 由 pending 升 **partial**——`corpus::e03_readonly_target_is_marked_by_preflight_and_named_in_preview` 先自证样本确为只读（否则断言退化为空转），再断言 ① S01 预检发 `readonly` Warn 项携 `E2002` 且 `task_blocked=false`（任务不整体失败）；② F12 与 C03 的计划告警点名该只读路径（事实由 `platform::preflight::path_check_light`/`is_read_only` 采集，见 [ADR-0063](../../docs/adr/0063-只读与占用事实的分档采集.md)）；③ 真实 CLI 出口 `apply_flow::f12_and_c03_name_read_only_files_in_plan_warnings`。**仍缺**：方案 §5.13 的「执行时重试一次后按策略跳过」——把 `E2002/E2003` 由 `Failed` 改判 `Skipped` 连带影响 C16 重试失败项集合与「部分失败」统计，属产品可见语义，登记 OQ-37 等人类裁决，裁决前不改执行器。
 > **落地记录（2026-10-31，C10）**：Z01/Z02 转 asserted——platform `ZipArchiveService` 按通用标志位 bit 11 判定 UTF-8，未设置且非 ASCII 时回退 GB18030（Z01 解码「中文资料.txt」）；kernel `plan_c10` 跳过 `../` 越界条目（Z02），CLI c10 仅解压 `safe/ok.txt` 并可用 undo 清理；台账 **19 asserted／4 partial／1 pending**（仅 E03）。
 >
 > **落地记录（2026-10-31，C02）**：K06 魔数探测接入 `plan_c02`——PNG 样本在计划期 blocked E3001（binary file signature），不进入文本管道；台账 K06 由 partial 转 asserted（17 asserted／4 partial／3 pending）。
