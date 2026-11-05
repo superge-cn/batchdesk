@@ -1,6 +1,6 @@
 # 03 配置 Schema 与迁移契约
 
-> 状态：已评审·实现冻结 v1.3（2026-10-27 评审；2026-10-28 增量修订，用户确认） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.4（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
 >
 > 上游：[01-内核接口与IPC契约](01-内核接口与IPC契约.md)（命令名与错误结构）、[02-Web双通道传输契约](02-Web双通道传输契约.md)（Web 存储形态）。
 > 权威：方案 §4.5（三档优先级/存储位置/版本迁移/安全默认值）、§6.7（设置区分组）、§7.3（参数配置）、§4.6／§9.6（日志双轨与保留）、§9.5（配方与配置带版本、位图配置驱动）、§8.5（授权数据单独加密）、§13.8（跨形态只经配方导出迁移）、§15（处理模板与持久化扩展）。
@@ -242,6 +242,12 @@ pub fn migration_chain() -> &'static [(u32, MigrationFn)];  // [(1, m1_to_2), (2
 
 - 事件：`config://migrated`（`{fromVersion, toVersion}`）——迁移发生时通知设置页刷新显示。
 
+**实现状态（v1.4，2026-11-05）**：
+
+- `saveRecipe`／`getRecipe`／`listRecipes`／`deleteRecipe`／`exportRecipe`／`importRecipe` 六条均已实现并接入界面（模板库视图＋功能页「存为处理模板」，见设计 12 §5、[ADR-0072](../adr/0072-处理模板前端只做存取半边.md)）；命令与 DTO 同步进设计 01 §4.4.2。
+- `saveRecipe` 落盘前对每个步骤剔除路径参数（`RecipeDocumentV3::strip_paths`）：模板不保存源路径/输出目录（不变量 13），此前只有导入路径会剔除。名单按本仓库参数名真实语义校正——`source`／`target` 是**编码**不是路径，旧表把 `source` 当路径会让模板丢编码。
+- **`loadRecipe` 未实现**，阻塞于 [OQ-36](../OPEN-QUESTIONS.md)（`TemplateStep.kind` 是动作、壳层按功能码路由，一对多）。界面因此**不提供**「一键套用」；本表保留该行是契约目标，不是现状。
+
 ## 8. 授权数据的边界（§8.5 / §9.5）
 
 - 功能位图"以配置驱动"（§9.5）指**工程上以数据文件驱动校验核心**；该文件属授权数据：**单独加密存储、不与普通配置混放**（§8.5），由 LicenseService 实现自管（篇 01 §3 trait），不进 ConfigDocument、不暴露明文给 web/。
@@ -311,6 +317,7 @@ interface UiState {
 | v1.1 | 2026-10-28 | 补 `ScopeView` 定义；澄清 `logging.retentionDays` 仅指操作日志保留并修正 §9.6 引用；修正篇 01 §9 引用；迁移样本字段名/枚举与 §4.1 对齐并由 `check_schema.py` 校验。 |
 | v1.2 | 2026-10-28 | `GeneralScope.theme` 工程默认由 `"system"` 改为 `"light"`（U v1.3 §5 D-U5 浅色默认，用户确认）；枚举 `system/light/dark` 不变。 |
 | v1.3 | 2026-10-28 | RecipeDocument v2/v3（match/steps/迁移、CURRENT_RECIPE_SCHEMA_VERSION=3）；新增 getRecipe 与 UiState 契约（get/set/reset、独立 uiStateVersion、重置规则）；对应方案 §15 与 OQ-26/27。 |
+| v1.4 | 2026-11-05 | §7 补「实现状态」：`saveRecipe`/`getRecipe`/`listRecipes`/`deleteRecipe`/`exportRecipe`/`importRecipe` 六条已实现并接入界面（模板库＋功能页保存入口，ADR-0072），命令与 DTO 同步进设计 01 §4.4.2（v1.51）；`saveRecipe` 落盘前剔除路径参数（名单按参数名真实语义校正：`source`/`target` 是编码不是路径）；**`loadRecipe` 未实现**，阻塞 OQ-36（动作→功能码一对多），界面不提供「一键套用」——表格保留该行属契约目标，不是现状 |
 
 > **实现记录（不改契约，2026-11-03）**：设置区 UI 已落地（`web/src/SettingsPage.tsx`，设计 12 v0.18），按本篇 §4.1 的五个可写 scope 一组一页签面板渲染——字段清单与枚举值取自 §4.1，来源标记读 `SettingValue.effectiveSource`（`user` 显示"已自定义"、`default` 显示"默认值"），分组重置走 `resetScope`（**不**逐项 `setConfig`），高版本只读以 `E1007` 呈现为只读横幅并回读现值。`general.language`／`general.theme` 的写入路径与界面即时生效的关系见设计 09 v0.2 §8；字段注册表在 `web/src/SettingsPage.tsx` 的 `SCOPES`（加字段＝加一行，不改渲染代码）。本篇 schema、默认值、错误码与迁移链**均未变更**。
 >

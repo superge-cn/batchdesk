@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Info, Loader2, Undo2 } from "lucide-react";
+import { Info, Loader2, Save, Undo2 } from "lucide-react";
 import {
   applyPlan,
   getTask,
@@ -11,6 +11,7 @@ import {
   renamePreview,
   cancelTask,
   retryTask,
+  saveRecipe,
   toIpcError,
   undoDryRun,
   undoPlan
@@ -29,6 +30,7 @@ import type {
   PreviewStatus,
   ProgressPhase,
   RenamePreview,
+  SaveRecipeInput,
   TaskState,
   UndoDryRun
 } from "./lib/ipc/types";
@@ -715,6 +717,12 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
   const [canUndo, setCanUndo] = useState(false);
   /** 保护目录命中的危险二次确认（方案 §3.3＋§7.11）。 */
   const [dangerOpen, setDangerOpen] = useState(false);
+  /** 存为处理模板（方案 §15.2.1：保存入口在参数/预览页，不在独立表单）。 */
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templateDescription, setTemplateDescription] = useState("");
+  const [templateExtensions, setTemplateExtensions] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   const setField = (name: string, value: string) =>
     setForm((previous) => ({ ...previous, [name]: value }));
@@ -879,6 +887,54 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     }
   };
 
+  /**
+   * 存为处理模板。
+   *
+   * `kind` 取**计划里实际出现的动作**（`PlanEntry.action`），不靠人维护一张
+   * 「功能码 → 动作」对照表：那张表正是 OQ-36 说的一对多来源，写死了迟早漂移。
+   * 一份计划里出现多种动作时（C07 的清单可能是 move/copy 混排）拒绝保存而不是
+   * 挑一个——挑错等于把另一部分语义悄悄丢掉。
+   */
+  const onSaveTemplate = async () => {
+    if (!plan) return;
+    const counts = new Map<string, number>();
+    for (const entry of plan.entries) {
+      counts.set(entry.action, (counts.get(entry.action) ?? 0) + 1);
+    }
+    if (counts.size !== 1) {
+      setNotice(t("feature.template.mixed"));
+      return;
+    }
+    const action = Array.from(counts.keys())[0] as SaveRecipeInput["kind"];
+    setSavingTemplate(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const extensions = templateExtensions
+        .split(/[,\uFF0C\s]+/)
+        .map((value) => value.trim().replace(/^\./, "").toLowerCase())
+        .filter(Boolean);
+      const saved = await saveRecipe({
+        name: templateName.trim(),
+        description: templateDescription.trim() || undefined,
+        match: extensions.length > 0 ? { extensions } : undefined,
+        kind: action,
+        // 参数快照就是计划自己带的那份（设计 01 §5）；源路径与输出目录由壳层剔除，
+        // 这里不再抄一份路径键表——两份清单必然漂移，判据只留内核一处。
+        paramsSnapshot: plan.params
+      });
+      setTemplateOpen(false);
+      setTemplateName("");
+      setTemplateDescription("");
+      setTemplateExtensions("");
+      setNotice(t("feature.template.saved", { name: saved.name }));
+    } catch (value) {
+      setError(toIpcError(value));
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
   const active = task !== null && !["completed", "partial-failed", "failed", "cancelled"].includes(task.state);
   const terminalOk = task !== null && ["completed", "partial-failed"].includes(task.state);
   // 参数改动后旧计划立即失效：执行／撤销／回滚预演都不得沿用旧 planId。
@@ -1013,6 +1069,77 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                 </div>
                 <span className="plan-id" title={plan.planId}>{plan.planId}</span>
               </div>
+              {/* 处理模板的保存入口在预览处（方案 §15.2.1：不在独立表单）。
+                  存的是这次计划的参数快照与动作；源路径/输出目录由壳层剔除，不落模板。 */}
+              <div className="toolbar">
+                <span className="hint">{t("feature.template.hint")}</span>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  data-testid="save-template"
+                  disabled={plan.entries.length === 0 || stale || savingTemplate}
+                  onClick={() => setTemplateOpen((open) => !open)}
+                >
+                  <Save size={14} /> {t("feature.template.cta")}
+                </button>
+              </div>
+              {templateOpen && (
+                <div className="field-grid" data-testid="template-form">
+                  <div className="field">
+                    <label htmlFor={`${view}-template-name`}>{t("feature.template.name")}</label>
+                    <input
+                      id={`${view}-template-name`}
+                      className="input"
+                      value={templateName}
+                      onChange={(event) => setTemplateName(event.target.value)}
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`${view}-template-ext`}>
+                      {t("feature.template.extensions")}
+                    </label>
+                    <input
+                      id={`${view}-template-ext`}
+                      className="input"
+                      value={templateExtensions}
+                      onChange={(event) => setTemplateExtensions(event.target.value)}
+                      placeholder="csv, txt"
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="field wide">
+                    <label htmlFor={`${view}-template-desc`}>
+                      {t("feature.template.description")}
+                    </label>
+                    <input
+                      id={`${view}-template-desc`}
+                      className="input"
+                      value={templateDescription}
+                      onChange={(event) => setTemplateDescription(event.target.value)}
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div className="button-row">
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      data-testid="save-template-submit"
+                      disabled={savingTemplate || templateName.trim().length === 0}
+                      onClick={() => void onSaveTemplate()}
+                    >
+                      {savingTemplate ? t("feature.template.saving") : t("feature.template.submit")}
+                    </button>
+                    <button
+                      className="button button-ghost"
+                      type="button"
+                      onClick={() => setTemplateOpen(false)}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="table">
                 <div className="row row-head">
                   <span>{t("feature.table.source")}</span>

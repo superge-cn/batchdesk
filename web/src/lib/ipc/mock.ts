@@ -17,6 +17,10 @@ import type {
   PreflightReport,
   ProgressEvent,
   ProgressPhase,
+  RecipeDocument,
+  RecipeExportPayload,
+  RecipePage,
+  SaveRecipeInput,
   ScopeView,
   SettingValue,
   StorageInfo,
@@ -26,6 +30,7 @@ import type {
   TaskJob,
   TaskState,
   TaskSummary,
+  TemplateStep,
   UiState
 } from "./types";
 
@@ -647,4 +652,142 @@ export function mockSetUiState(patch: Record<string, unknown>): UiState {
 export function mockResetUiState(): UiState {
   uiState = { uiStateVersion: 1, updatedAt: "" };
   return mockGetUiState();
+}
+
+// —— 处理模板（C37；设计 03 §7）——
+// 只是一份同形状夹具：不碰磁盘、不做版本迁移（迁移与拒绝高版本由内核/壳层负责），
+// 但**保留两条语义**——缺 schemaVersion 报 E1001、高版本报 E1007，
+// 否则浏览器里永远看不到「导入被拒」那条界面路径。
+let recipeCounter = 0;
+let recipes: RecipeDocument[] = [
+  {
+    recipeId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8R1",
+    schemaVersion: 3,
+    name: "CSV 分片（每片 5 万行）",
+    description: "演示夹具：真实模板由桌面壳落盘",
+    steps: [
+      {
+        stepId: "step-1",
+        kind: "split",
+        paramsSnapshot: { rows: 50000 },
+        source: "original"
+      }
+    ],
+    match: { extensions: ["csv"], tags: ["分割"] },
+    createdAt: "2026-11-01T09:00:00Z",
+    updatedAt: "2026-11-04T10:00:00Z",
+    usageCount: 3
+  }
+];
+
+const PATH_KEYS = new Set([
+  "file",
+  "files",
+  "path",
+  "paths",
+  "sources",
+  "sourcepath",
+  "sourcepaths",
+  "output",
+  "outputdir",
+  "outputdirectory",
+  "dir",
+  "directory",
+  "folder",
+  "root",
+  "roots",
+  "sourceroot",
+  "targetroot",
+  "unclassifieddir",
+  "list",
+  "manifest",
+  "archive"
+]);
+
+function stripPaths(params: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(params).filter(([key]) => !PATH_KEYS.has(key.toLowerCase()))
+  );
+}
+
+export function mockListRecipes(offset = 0, limit = 50): RecipePage {
+  return { items: recipes.slice(offset, offset + limit), total: recipes.length };
+}
+
+export function mockGetRecipe(recipeId: string): RecipeDocument {
+  const found = recipes.find((item) => item.recipeId === recipeId);
+  if (!found) fail("E2001", `recipe not found: ${recipeId}`);
+  return found;
+}
+
+export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
+  const steps: TemplateStep[] = input.steps
+    ? input.steps.map((step) => ({ ...step, paramsSnapshot: stripPaths(step.paramsSnapshot) }))
+    : [
+        {
+          stepId: "step-1",
+          kind: input.kind ?? "rename",
+          paramsSnapshot: stripPaths(input.paramsSnapshot ?? {}),
+          source: "original"
+        }
+      ];
+  const existing = input.recipeId
+    ? recipes.find((item) => item.recipeId === input.recipeId)
+    : undefined;
+  recipeCounter += 1;
+  const document: RecipeDocument = {
+    recipeId: input.recipeId ?? `01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8S${recipeCounter}`,
+    schemaVersion: 3,
+    name: input.name,
+    description: input.description,
+    steps,
+    match: input.match,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    usageCount: existing?.usageCount
+  };
+  recipes = existing
+    ? recipes.map((item) => (item.recipeId === document.recipeId ? document : item))
+    : [...recipes, document];
+  return document;
+}
+
+export function mockDeleteRecipe(recipeId: string): void {
+  recipes = recipes.filter((item) => item.recipeId !== recipeId);
+}
+
+export function mockExportRecipe(recipeId: string): RecipeExportPayload {
+  return { payload: JSON.stringify(mockGetRecipe(recipeId), null, 2) };
+}
+
+export function mockImportRecipe(payload: string): RecipeDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    fail("E1002", "invalid recipe payload");
+  }
+  const value = parsed as Partial<RecipeDocument> & {
+    paramsSnapshot?: Record<string, unknown>;
+    kind?: TemplateStep["kind"];
+  };
+  const version = value.schemaVersion;
+  if (typeof version !== "number") fail("E1001", "schemaVersion is required");
+  if (version > 3) fail("E1007", `模板版本 ${version} 高于本版支持的 3`);
+  const steps: TemplateStep[] = value.steps
+    ? value.steps.map((step) => ({ ...step, paramsSnapshot: stripPaths(step.paramsSnapshot) }))
+    : [
+        {
+          stepId: "step-1",
+          kind: value.kind ?? "rename",
+          paramsSnapshot: stripPaths(value.paramsSnapshot ?? {}),
+          source: "original"
+        }
+      ];
+  return mockSaveRecipe({
+    name: value.name ?? "导入的模板",
+    description: value.description,
+    match: value.match,
+    steps
+  });
 }

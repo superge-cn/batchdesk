@@ -780,6 +780,12 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
         }
     };
     let store = config_store(&state);
+    // 模板不保存路径（方案 §15.2.1、不变量 13）：界面已经把源/输出移出快照，这里再兜一层——
+    // 保存入口只有一个，但调用方不止一个（将来的 Web 形态、脚本化保存），
+    // 只靠"调用方自觉"迟早会有一条路径漏进模板。
+    // 返回的被删键清单在这条路上刻意丢掉：这里没有可写的日志轨（诊断日志轨仍待 ADR），
+    // 而它真正的用处是让调用方/测试能断言"删了哪些"，不是给用户看的。
+    let _removed = document.strip_paths();
     store.save_recipe(&mut document).map_err(IpcError::from)?;
     Ok(document)
 }

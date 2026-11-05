@@ -7,9 +7,9 @@
 
 | # | 门禁 | 命令 | 说明 |
 |---|---|---|---|
-| ① | lint + 格式 | `cargo clippy --workspace --all-targets -- -D warnings` ＋ `cargo fmt --all -- --check` | **从第一行代码起生效**，不留"先欠着"的历史债；不通过即不合并 |
+| ① | lint + 格式 | `cargo clippy --workspace --all-targets -- -D warnings` ＋ `cargo fmt --all -- --check`；桌面壳是**独立 workspace**，另跑 `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` ＋ `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | **从第一行代码起生效**，不留"先欠着"的历史债；不通过即不合并。`--all`／`--workspace` 都够不到 src-tauri——2026-11-05 就是在这里漏掉一处 rustfmt 漂移 |
 | ② | 许可证 + 漏洞 | `cargo deny check licenses advisories` | **每周跑一次**（CI 定时任务）；SBOM 工具已选 cargo-cyclonedx（ADR-0008），CI deny job 覆盖根与 src-tauri 独立 workspace 并已全绿（run 40872864062）；许可证白名单见 `deny.toml` |
-| ③ | 测试 | `cargo test --workspace` | 单元测试；**语料回归断言尚未实现**（见 §2） |
+| ③ | 测试 | `cargo test --workspace --all-features`（＋桌面壳独立 workspace 的 `cargo test --manifest-path src-tauri/Cargo.toml`） | 单元测试＋24 条语料断言（全部 asserted，台账 `crates/kernel/tests/assertions.tsv`）；前端 `pnpm test`／`pnpm test:e2e`（见 §2） |
 | ④ | 语料/文档一致性 | `python fixtures/corpus/check_scope.py`；`python fixtures/corpus/verify_corpus.py --hashes`；`python fixtures/migrations/check_schema.py`；`python scripts/check_docs.py` | 范围/哈希/幂等/迁移样本/链接锚点/版本锚点/错误码白名单 |
 
 > `verify_corpus.py` 需先生成语料；CI 用 `--rebuild --hashes` 从零生成两次并比较。`check_scope.py` 现在还会校验每条就绪语料的 `expected.md` 是否回指 T v1.12 §3.2。
@@ -20,14 +20,14 @@
 |---|---|---|
 | **引擎层**（`crates/kernel`） | 覆盖率目标 **≥80%** | 纯函数式设计（方案 §4.3 的变换器层），便于单测 |
 | UI 层、基础设施层 | **不设覆盖率指标** | 理由：这两层的覆盖数容易靠"凑数用例"堆高，反而掩盖真实缺陷；以功能级验收与冒烟替代 |
-| **语料生成与范围核对** | `fixtures/` 全量 | **CI 必跑**；当前只生成样本并核对自动化/人工范围，**逐条预期断言尚未实现**；语料规则见 `fixtures/README.md` |
+| **语料生成、范围核对与断言** | `fixtures/` 全量 | **CI 必跑**；生成样本＋核对自动化/人工范围＋24 条自动化语料的逐条断言（24 asserted／0 partial／0 pending，见 `assertions.tsv`）；仍未覆盖的是 XCT 语料与 4 条人工语料，故 CI 绿灯不得表述为"语料零失败"；语料规则见 `fixtures/README.md` |
 | 三类用例（预览/执行/回滚） | 功能完成**当日**人工执行 | 对应 T v1.12 §4.1 的功能级签字，不后置 |
 
 ## 3. 流程纪律
 
 - **小步提交**：一个提交只做一件事，便于回滚与定位；
 - **每日冒烟**：跑 T v1.12 §6.2 的 S-A/S-B/S-C（30 分钟内完成），失败即日修；
-- **交叉评审**：按 D-T1=A，开发自测 + 功能间交叉互测；评审人对被评审功能的语料生成与范围核对结果负责（逐条断言 harness 落地后改为对回归结果负责）；
+- **交叉评审**：按 D-T1=A，开发自测 + 功能间交叉互测；评审人对被评审功能的语料生成与范围核对结果负责（逐条断言 harness 已落地，2026-11-04 起改为对回归结果负责）；
 - **验收当日签**：功能级验收在完成当日签署，**杜绝阶段末集中补测**（集中补测会把缺陷挤到阶段级，掩盖真实进度）；
 - **完成即标注**：每完成一个任务、功能或切片，当日同步 `docs/DEVELOPMENT-PLAN.md` 与 `docs/design/TRACEABILITY.md` 的状态、证据与剩余缺口（规则见 [AGENTS.md](AGENTS.md) 协作纪律第 4 条）；只在会话或提交信息里说“做完了”不算完成，无可复核证据只能写“切片/部分”。
 

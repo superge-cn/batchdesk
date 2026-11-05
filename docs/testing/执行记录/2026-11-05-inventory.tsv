@@ -431,6 +431,8 @@ kernel::recipe::tests::missing_schema_version_is_e1001	ok
 kernel::recipe::tests::newer_schema_version_is_rejected_with_e1007	ok
 kernel::recipe::tests::script_parameters_are_rejected	ok
 kernel::recipe::tests::step_count_and_duplicate_ids_are_enforced	ok
+kernel::recipe::tests::strip_path_params_drops_real_paths_and_keeps_encodings	ok
+kernel::recipe::tests::strip_paths_covers_every_step_and_reports_each_key_once	ok
 kernel::recipe::tests::v1_recipe_is_wrapped_into_a_single_step	ok
 kernel::recipe::tests::v2_recipe_keeps_metadata_and_wraps_params	ok
 kernel::recipe::tests::v3_recipe_round_trips_and_strips_paths	ok
@@ -556,6 +558,7 @@ platform::csv_range::tests::utf16_source_is_short_circuited_for_blocking	ok
 platform::fs::tests::backup_copies_into_quarantine_and_keeps_the_original	ok
 platform::fs::tests::content_hash_matches_blake3_and_rejects_unknown_algorithm	ok
 platform::fs::tests::copy_range_atomic_writes_only_the_requested_slice	ok
+platform::fs::tests::copy_ranges_atomic_writes_the_prefix_once_before_all_ranges	ok
 platform::fs::tests::extended_path_is_identity_on_unix	ok
 platform::fs::tests::open_read_stream_pulls_bytes_on_demand_and_reports_missing_files	ok
 platform::fs::tests::quarantine_rename_restores_the_file	ok
@@ -669,6 +672,7 @@ vitest::App.navigation.test.tsx::功能视图导航可达 侧栏每一项都渲�
 vitest::App.navigation.test.tsx::功能视图导航可达 默认视图是 C09 工作台，且能回到它	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 「任务与撤销」是能点开的真实视图，不是 disabled 占位	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 「设置」是能点开的真实视图：五组配置与语言选择都在	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 「处理模板」是能点开的真实视图：列表出得来，未裁决的部分不给假按钮	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检落地前不派发；期间界面仍可操作；落地瞬间参数已变则拒绝派发	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检阻断时不派发执行（E2004 前移为执行前阻断，零副作用）	ok
 vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §2／§3） 失败条目显示码位＋本地化摘要，不显示后端 message／detail 原文	ok
@@ -685,6 +689,9 @@ vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 撤
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 改参数后旧计划立即失效：提示出现且执行/撤销被禁用（T 配方 P4）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 保护目录命中：执行前必须二次确认，且初始焦点不在危险按钮（方案 §3.3/§7.11、U §3.5）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 计划失败时呈现 06 码位而非自由文本	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 用计划里实际出现的动作存模板，参数快照取 plan.params	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 计划含多种动作时拒绝保存，不挑一个把另一部分语义丢掉	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 空计划不给存：没有条目就没有动作可存	ok
 vitest::FeaturePages.virtual.test.tsx::功能页计划预览的窗口化（方案 6.2） 3000 条计划只渲染窗口内的行，DOM 行数不随条目数线性增长	ok
 vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 类别标题走设计 06 §2A 的界面文案，不露出内核 slug	ok
 vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 界面没跟上的类别显示成缺陷，而不是伪装成一条正常文案	ok
@@ -705,6 +712,10 @@ vitest::TaskHistory.test.tsx::任务与撤销视图 中断任务给的是续跑/
 vitest::TaskHistory.test.tsx::任务与撤销视图 回滚任务不给二次撤销，回滚失败也不给重试（壳层会拒，判据是 job 不是 kind）	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 实时事件态覆盖静态快照：跑完的任务立刻显示已完成、取消按钮消失	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 加载失败时只显示本地化文案，不渲染后端 message／detail 原文	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 列出模板：动作显示中文名而不是线协议枚举，步骤与建议扩展名可见	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 删除是两段式：第一下只进入确认态，确认后才真调用	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 导入高版本模板：错误码与本地化摘要都要出现，不显示后端原文	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 导出把模板 JSON 摊在可复制的文本框里	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 2000 条只挂窗口内的行，未渲染的条目不在 DOM 里	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 占位高度等于 条数 × 行高，滚动条比例因此真实	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 滚动后窗口跟着位移：新窗口渲染、旧窗口从 DOM 摘除	ok
@@ -749,3 +760,4 @@ playwright::rename-preview.spec.ts::预览→执行链跑通：C05 标注逐项�
 playwright::settings-i18n.spec.ts::设置页可达，切到英文后整页换语言且关键操作不被遮挡	ok
 playwright::stale-plan.spec.ts::C09 工作台：改保留策略后执行入口关闭（勾选确认后仍关闭）	ok
 playwright::stale-plan.spec.ts::F12 功能页：改前缀后执行/撤销/回滚预演全部关闭	ok
+playwright::templates.spec.ts::模板库可达：列表出得来，导入高版本被拒并给出错误码，不提供假的套用入口	ok

@@ -13,7 +13,7 @@ import type { MessageKey } from "./i18n";
  */
 
 /**
- * 23 个功能视图＝侧栏里除 C09 工作台与两个顶层项之外的全部页面。
+ * 23 个功能视图＝侧栏里除 C09 工作台与三个顶层项（处理模板／任务与撤销／设置）之外的全部页面。
  * F13 不在其中：它的登记是「切片完成（CLI，无 UI）」——见 `docs/DEVELOPMENT-PLAN.md`
  * §4 阶段 0 清单分组实现第 3 条，属既定范围而不是遗漏。
  */
@@ -43,11 +43,11 @@ export type FeatureView =
   | "c14";
 
 /** 顶层视图（与功能页区分）：`lastSection` 直接记它们的 id。 */
-export type TopLevelView = "c09" | "tasks" | "settings";
+export type TopLevelView = "c09" | "templates" | "tasks" | "settings";
 
 export type View = FeatureView | TopLevelView;
 
-export const TOP_LEVEL_VIEWS: TopLevelView[] = ["c09", "tasks", "settings"];
+export const TOP_LEVEL_VIEWS: TopLevelView[] = ["c09", "templates", "tasks", "settings"];
 
 /** 侧栏顺序即数组顺序（此前也如此，未改行为）。 */
 export const NAV_ENTRIES: Array<{ id: View; label: MessageKey; tag: string }> = [
@@ -76,6 +76,7 @@ export const NAV_ENTRIES: Array<{ id: View; label: MessageKey; tag: string }> = 
   { id: "c02", label: "nav.c02", tag: "C02" },
   { id: "c03", label: "nav.c03", tag: "C03" },
   { id: "tasks", label: "nav.tasks", tag: "QUEUE" },
+  { id: "templates", label: "nav.templates", tag: "TPL" },
   { id: "settings", label: "nav.settings", tag: "SET" }
 ];
 

@@ -1,5 +1,11 @@
 import type { MessageKey } from "./i18n";
-import type { ApplyStatus, ProgressPhase, TaskState, UndoDryRunStatus } from "./lib/ipc/types";
+import type {
+  ApplyStatus,
+  PlanAction,
+  ProgressPhase,
+  TaskState,
+  UndoDryRunStatus
+} from "./lib/ipc/types";
 import { NAV_LABEL_BY_ID } from "./navCatalog";
 
 /**
@@ -107,4 +113,35 @@ export const ACTIVE_STATES: TaskState[] = ["queued", "running", "paused", "cance
 
 export function isActiveState(state: TaskState): boolean {
   return ACTIVE_STATES.includes(state);
+}
+
+/**
+ * 动作级类型的用户文案（内核 `PlanAction`）。
+ *
+ * 处理模板存的是动作不是功能码（`split` 服务 f01/f02/f03/f05），列表里要给人看的是
+ * "这个模板干什么"，不能印 `csv-extract` 这种线协议枚举（设计 09 §2）。
+ */
+const ACTION_KEYS: Record<PlanAction, MessageKey> = {
+  rename: "feature.action.rename",
+  move: "feature.action.move",
+  copy: "feature.action.copy",
+  archive: "feature.action.archive",
+  extract: "feature.action.extract",
+  "create-dir": "feature.action.createDir",
+  transcode: "feature.action.transcode",
+  "edit-content": "feature.action.editContent",
+  delete: "feature.action.delete",
+  split: "feature.action.split",
+  merge: "feature.action.merge",
+  "csv-extract": "feature.action.csvExtract",
+  "csv-columns": "feature.action.csvColumns",
+  "csv-sort": "feature.action.csvSort",
+  "csv-rows": "feature.action.csvRows",
+  listing: "feature.action.listing",
+  "csv-dedup": "feature.action.csvDedup",
+  "csv-filter": "feature.action.csvFilter"
+};
+
+export function actionLabel(t: Translate, action: PlanAction): string {
+  return t(ACTION_KEYS[action]);
 }

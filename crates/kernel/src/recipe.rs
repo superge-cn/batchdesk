@@ -15,14 +15,46 @@ pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 3;
 /// 多步骤上限沿用 F15 单束上限（方案 §15.1，不新增数值）。
 pub const MAX_RECIPE_STEPS: usize = 10;
 
-/// 导入时必须剔除的路径类参数（模板不得保存源路径/输出目录，方案 §15.2.4）。
+/// 导入/保存时必须剔除的路径类参数（模板不得保存源路径/输出目录，方案 §15.2.4）。
 /// 键名统一按小写登记，匹配时先把参数键小写化（大小写不敏感）。
+///
+/// 名单按**本仓库 IPC 参数名的真实语义**登记（2026-11-05 校正）：
+/// - `source` 曾是名单成员，但它在 F04/F06/F07/F08/C01/C11–C14 里是**源编码**
+///   （CLI 的 `--source`），删掉它等于让导出的模板丢了编码；同理 `target` 是**目标编码**，
+///   不能因为名字像路径就进表。路径在那些功能里叫 `output`／`files`。
+/// - 反过来，UI 与 CLI 真正用到的 `file`／`files`／`sources`／`roots`／`manifest`／
+///   `list`／`archive`／`dir` 过去**不在**表里——于是导入一份自家 UI 存的模板时，
+///   绝对路径会原样留在参数里，违反不变量 13。
+///
+/// 只做精确（小写后）匹配，所以 `targetBytes`／`targetEncoding`／`sourcesColumn`
+/// 这类含路径词的正常参数不会被误伤。
 pub const PATH_PARAM_KEYS: &[&str] = &[
-    "source",
+    // 单文件源
+    "file",
+    "path",
     "sourcepath",
+    // 多文件源
+    "files",
+    "paths",
     "sourcepaths",
+    "sources",
+    // 目录/根
+    "dir",
+    "directory",
+    "folder",
+    "root",
+    "roots",
+    "sourceroot",
+    "targetroot",
+    "unclassifieddir",
+    // 输出
+    "output",
     "outputdir",
     "outputdirectory",
+    // 清单/压缩包（路径而非内容）
+    "list",
+    "manifest",
+    "archive",
 ];
 
 /// 导入时直接拒绝的脚本类参数（模板不保存脚本/宏/命令，AGENTS 不变量 13）。
@@ -177,6 +209,22 @@ impl RecipeDocumentV3 {
         }
         Ok(())
     }
+
+    /// 逐个步骤剔除路径类参数，返回被剔除的键（去重后按出现顺序）。
+    ///
+    /// 保存与导入两条路都走它：**模板永不保存路径**是不变量 13 的硬要求，
+    /// 只靠调用方（界面）自觉会把"导入一份别人存的模板"变成路径入口。
+    pub fn strip_paths(&mut self) -> Vec<String> {
+        let mut removed = Vec::new();
+        for step in &mut self.steps {
+            for key in strip_path_params(&mut step.params_snapshot) {
+                if !removed.contains(&key) {
+                    removed.push(key);
+                }
+            }
+        }
+        removed
+    }
 }
 
 fn script_key(params: &Map<String, Value>) -> Option<&str> {
@@ -235,9 +283,7 @@ pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocumentV3, KernelEr
         3 => {
             let mut v3: RecipeDocumentV3 =
                 serde_json::from_value(payload).map_err(recipe_parse_error)?;
-            for step in &mut v3.steps {
-                strip_path_params(&mut step.params_snapshot);
-            }
+            v3.strip_paths();
             Ok(v3)
         }
         other => Err(KernelError::new(
@@ -322,6 +368,69 @@ impl RecipeDocumentV2 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 路径键表的口径：真路径删掉，**编码参数不能跟着删**。
+    ///
+    /// 2026-11-05 校正：旧表把 `source` 当路径，而它是 F04/F06/C01/C11–C14 的源编码；
+    /// 同时 `file`/`files`/`output`/`manifest` 这些 UI 真用的路径键又不在表里。
+    #[test]
+    fn strip_path_params_drops_real_paths_and_keeps_encodings() {
+        let mut params = Map::new();
+        params.insert("source".to_string(), json!("gb18030"));
+        params.insert("target".to_string(), json!("utf-8-bom"));
+        params.insert("targetBytes".to_string(), json!(1024));
+        params.insert("delimiter".to_string(), json!(","));
+        params.insert("files".to_string(), json!(["/src/a.csv", "/src/b.csv"]));
+        params.insert("output".to_string(), json!("/out/merged.csv"));
+        params.insert("manifest".to_string(), json!("/src/list.csv"));
+        params.insert("unclassifiedDir".to_string(), json!("/src/other"));
+        let removed = strip_path_params(&mut params);
+        assert_eq!(
+            removed,
+            vec![
+                "files".to_string(),
+                "manifest".to_string(),
+                "output".to_string(),
+                "unclassifiedDir".to_string(),
+            ]
+        );
+        for key in ["source", "target", "targetBytes", "delimiter"] {
+            assert!(params.contains_key(key), "{key} 不该被当成路径删掉");
+        }
+    }
+
+    #[test]
+    fn strip_paths_covers_every_step_and_reports_each_key_once() {
+        let mut first = Map::new();
+        first.insert("file".to_string(), json!("/src/a.txt"));
+        first.insert("targetBytes".to_string(), json!(1024));
+        let mut last = Map::new();
+        last.insert("file".to_string(), json!("/src/b.txt"));
+        last.insert("outputDir".to_string(), json!("/out"));
+        let mut recipe = RecipeDocumentV3::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            "两步模板",
+            PlanAction::Split,
+            first,
+            "2026-11-05T00:00:00Z",
+        );
+        recipe.steps.push(TemplateStep {
+            step_id: "step-2".to_string(),
+            kind: PlanAction::Transcode,
+            params_snapshot: last,
+            source: StepSource::Previous,
+        });
+        assert_eq!(
+            recipe.strip_paths(),
+            vec!["file".to_string(), "outputDir".to_string()]
+        );
+        for step in &recipe.steps {
+            assert!(step.params_snapshot.get("file").is_none());
+            assert!(step.params_snapshot.get("outputDir").is_none());
+        }
+        assert_eq!(recipe.steps[0].params_snapshot["targetBytes"], json!(1024));
+        assert!(recipe.strip_paths().is_empty(), "重复调用不应再报被删键");
+    }
 
     #[test]
     fn v1_recipe_is_wrapped_into_a_single_step() {

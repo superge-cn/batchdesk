@@ -41,8 +41,9 @@ DEFAULT_LANG = "zh-CN"
 REQUIRED_LANGS = ["zh-CN", "en-US"]
 
 # 资源 key 的域前缀：与 web/src 的 t("...")／注册表字面量共用同一套命名。
+# `templates` 是 2026-11-05 新增的顶层视图（处理模板，C37）的域。
 KEY_DOMAIN_RE = re.compile(
-    r"^(?:app|nav|common|task|c09|feature|tasks|settings|error|warning)\.[A-Za-z0-9_.]+$"
+    r"^(?:app|nav|common|task|c09|templates|feature|tasks|settings|error|warning)\.[A-Za-z0-9_.]+$"
 )
 # 错误码文案族：映射表在 web/src/errors.ts，key 形如 error.E2004.summary（设计 06 §3）。
 ERROR_MAP_FILE = SRC_DIR / "errors.ts"

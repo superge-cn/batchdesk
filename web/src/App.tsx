@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
+  Sparkles,
   Sun,
   Trash2,
   Undo2,
@@ -60,6 +61,7 @@ import { warningKindTitle } from "./warnings";
 import { VirtualList } from "./VirtualList";
 import { applyStatusBadge, phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
+import { TemplatesPage } from "./TemplatesPage";
 import { SettingsPage } from "./SettingsPage";
 import { I18nProvider, useI18n, type MessageKey } from "./i18n";
 import {
@@ -133,6 +135,7 @@ const NAV_ICONS: Record<View, LucideIcon> = {
   c02: Files,
   c03: Files,
   tasks: History,
+  templates: Sparkles,
   settings: Settings,
 };
 
@@ -1323,6 +1326,8 @@ function AppShell() {
             </div>
             ) : activeView === "tasks" ? (
               <TaskHistory live={taskViews} onBack={() => selectView("c09")} />
+            ) : activeView === "templates" ? (
+              <TemplatesPage onBack={() => selectView("c09")} />
             ) : activeView === "settings" ? (
               <SettingsPage onBack={() => selectView("c09")} onResetUiState={resetUiStateMemory} />
             ) : (

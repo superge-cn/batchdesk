@@ -1,6 +1,6 @@
 # 01 内核接口与 IPC 契约
 
-> 状态：已评审·实现冻结 v1.50（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额、C04 `plan_c04`/名称查找替换、C14 `plan_c14`/`csv-columns` 动作/`csvColumns` 载荷/列拆分合并、C07 `plan_c07`/清单驱动 move/copy/跨盘校验删源、C08 `plan_c08`/按规则归档（复用 move 动作）、C13 `plan_c13`/`csv-sort` 动作/`csvSort` 载荷/类型感知排序与外排、C18 计划幂等契约（derived_ulid）与横切 harness、UI 接入（planOperation kind 路由 f05/f11/f12＋`renamePreview`/`undoDryRun` 壳层命令；批量接入 f01–f04/c01–c03；第三批接入 f06–f09 共用 `CsvPlanParams` 参数面与 f10 清单、并定稿终态快照剪枝顺序——ADR-0042；第四批接入 c04/c11/c12/c13/c14，共用 `OpPlanParams` 超集参数面——ADR-0043；第五批接入 c07 清单/c08 规则/c10 ZIP 壳层计划，`run_apply` 为 c10 增设专用执行器分支（`apply_archive_plan`＋`ZipArchiveService`，保留逐文件 Journal 撤销语义）——ADR-0044；2026-11-02 追加 F11 的逐级前缀事实（`PlanF11Input.existing_files`）与 `parent-is-file` 的计划期跳过＋集中报告——ADR-0049；2026-11-02 追加 §5 `ApplyEntryReport.detail`（条目级明细）与 `ContentEditor`→`EditedContent` 返回型、§3 的 `Transcoded.replacement_count` 口径改为替换字符个数——ADR-0050；2026-11-02 追加 §2.2 取消处置（`ApplyOptions.cancelPolicy`：缺省回滚／桌面壳保留＋问询后 undo）——ADR-0052；2026-11-02 追加 F04 merge 的流式执行（`read_stream`＋`StreamTranscoder`）——ADR-0053；2026-11-03 追加 F06/F07/F08/C11/C12 执行臂流式化（`csv_merge::RecordFeeder` 增量记录供给器，执行器内部实现、不改 IPC 契约与错误码）——ADR-0054；2026-11-03 追加 §5 `ContentRewriter::rewrite` 返回 `EditOutcome{detail}`（与 `EditedContent.detail` 同载体）——ADR-0055；2026-11-03 §2.3 `TaskSummary.planId` 追加可选字段（serde default＋缺省省略，旧 S03 快照仍可反序列化），供「任务与撤销」视图直接走 `undoPlan`；2026-11-05 追加 §2.3 `TaskSummary.job`（任务类别独立于功能码，v1.49）；2026-11-05 追加 §5 `csv` 载荷可选 `shardBom`——F05 支持 UTF-16 带 BOM 源直接分片、每片补写 BOM（v1.50，ADR-0070）；2026-11-04 追加 §5.1 只读/占用的**计划期点名**（F12/F13/C04 的 `accessFacts`、C03 的 `PlanC03File.readonly`，事实由壳层/CLI 经 `platform::preflight` 采集），并如实修正该行"已补执行内重试"的结论——执行期"重试一次后按策略跳过"从未落地，改判语义阻塞 [OQ-37](../OPEN-QUESTIONS.md)） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.51（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-10-29 追加任务队列说明、E2010、S01/S02/S03；2026-10-30 追加 retryTask 实现说明、进度合帧、CleanupOutcome.removedLogRecords、§8 reverse 推导规则与 F01 `split` 动作/`range` 字段、F02/F03 分片基准、F04 `merge` 动作/载荷、F05 `csv` 载荷与 `plan_f05`、F06 `csvMerge` 载荷与 `plan_f06`、F07 `csv-extract` 动作/载荷与 `plan_f07`、F08 `csv-rows` 动作/载荷与 `plan_f08`、F06 T07/T08 告警 `no-header-positional`/`header-normalized`/`duplicate-column-names`、F09 `plan_f09`/`csvRows` 区间字段/`read_ranges`、F10 `listing` 动作/`plan_f10`/`DirectoryLister`/`write_atomic_with`、F11 `plan_f11`/逐级 `create-dir`/`CreateDir`/`RemoveDir` Journal、F12 `plan_f12`/两阶段 rename、2026-10-31 追加 F12 计划级长路径分级与重命名族语料断言、F13 `plan_f13`/正则捕获组替换、C02 `plan_c02`/流式换行重写、C03 `plan_c03`/查找替换、C10 `plan_c10`/ZIP 解压、C10 `plan_c10_compress`/ZIP 压缩、C11 `plan_c11`/`csv-dedup` 动作/`csvDedup` 载荷/CSV 去重、C12 `plan_c12`/`csv-filter` 动作/`csvFilter` 载荷/CSV 过滤、C15 任务内条目级并发/执行期限额、C04 `plan_c04`/名称查找替换、C14 `plan_c14`/`csv-columns` 动作/`csvColumns` 载荷/列拆分合并、C07 `plan_c07`/清单驱动 move/copy/跨盘校验删源、C08 `plan_c08`/按规则归档（复用 move 动作）、C13 `plan_c13`/`csv-sort` 动作/`csvSort` 载荷/类型感知排序与外排、C18 计划幂等契约（derived_ulid）与横切 harness、UI 接入（planOperation kind 路由 f05/f11/f12＋`renamePreview`/`undoDryRun` 壳层命令；批量接入 f01–f04/c01–c03；第三批接入 f06–f09 共用 `CsvPlanParams` 参数面与 f10 清单、并定稿终态快照剪枝顺序——ADR-0042；第四批接入 c04/c11/c12/c13/c14，共用 `OpPlanParams` 超集参数面——ADR-0043；第五批接入 c07 清单/c08 规则/c10 ZIP 壳层计划，`run_apply` 为 c10 增设专用执行器分支（`apply_archive_plan`＋`ZipArchiveService`，保留逐文件 Journal 撤销语义）——ADR-0044；2026-11-02 追加 F11 的逐级前缀事实（`PlanF11Input.existing_files`）与 `parent-is-file` 的计划期跳过＋集中报告——ADR-0049；2026-11-02 追加 §5 `ApplyEntryReport.detail`（条目级明细）与 `ContentEditor`→`EditedContent` 返回型、§3 的 `Transcoded.replacement_count` 口径改为替换字符个数——ADR-0050；2026-11-02 追加 §2.2 取消处置（`ApplyOptions.cancelPolicy`：缺省回滚／桌面壳保留＋问询后 undo）——ADR-0052；2026-11-02 追加 F04 merge 的流式执行（`read_stream`＋`StreamTranscoder`）——ADR-0053；2026-11-03 追加 F06/F07/F08/C11/C12 执行臂流式化（`csv_merge::RecordFeeder` 增量记录供给器，执行器内部实现、不改 IPC 契约与错误码）——ADR-0054；2026-11-03 追加 §5 `ContentRewriter::rewrite` 返回 `EditOutcome{detail}`（与 `EditedContent.detail` 同载体）——ADR-0055；2026-11-03 §2.3 `TaskSummary.planId` 追加可选字段（serde default＋缺省省略，旧 S03 快照仍可反序列化），供「任务与撤销」视图直接走 `undoPlan`；2026-11-05 追加 §2.3 `TaskSummary.job`（任务类别独立于功能码，v1.49）；2026-11-05 追加 §5 `csv` 载荷可选 `shardBom`——F05 支持 UTF-16 带 BOM 源直接分片、每片补写 BOM（v1.50，ADR-0070）；2026-11-05 追加 §4.4.2 处理模板六条命令与 DTO（`RecipeDocument`／`TemplateStep`／`RecipeMatch`／`SaveRecipeInput`／`RecipePage`），定稿「保存时剔除路径参数、判据只留内核一处」，并写明 `loadRecipe` 仍未实现（阻塞 OQ-36）——C37 前端只做存取半边（v1.51，ADR-0072）；2026-11-04 追加 §5.1 只读/占用的**计划期点名**（F12/F13/C04 的 `accessFacts`、C03 的 `PlanC03File.readonly`，事实由壳层/CLI 经 `platform::preflight` 采集），并如实修正该行"已补执行内重试"的结论——执行期"重试一次后按策略跳过"从未落地，改判语义阻塞 [OQ-37](../OPEN-QUESTIONS.md)） ｜ 适用：crates/kernel、src-tauri、web/ ｜ 日期：2026-10-27
 >
 > 本文件是**工程实现契约**：定义表现层与应用层、应用层与领域引擎之间的可执行接口。
 > 产品行为与数值阈值一律回指基线，本文不另立；本文新增的**字段命名、命令名、错误码位**属工程契约，评审冻结后生效（见 §9）。
@@ -318,6 +318,59 @@ type LogPage      = Page<LogRecord> & { ephemeral?: boolean };  // Web 会话内
 
 > 任务队列命令 `cancelTask`/`pauseTask`/`resumeTask`/`listTasks`/`getTask` 已按 §4.1 的入出参实现；**S03 已实现任务快照持久化与 `recoverTask`**（`interrupted` 状态不自动续跑）。**`retryTask` 已实现（v1.5）**：仅对终态 `partial-failed`/`failed` 的 apply 任务生效，缺省重试全部失败条目、`entryIds` 可选子集（必须都是该任务报告中的失败条目，否则 E1002）；生成**新 taskId** 引用原 planId（§6），原任务保持终态；Journal 已 applied 条目幂等排除，编排级失败（报告零条目）时重跑全部条目；undo 任务不可重试（重试语义见方案 §7.6：沿用原参数与冲突策略，apply 期重新裁决冲突）。分页默认值属壳层实现参数，不改变 §2.3 的契约。
 
+### 4.4.2 处理模板命令（C37，v1.51）
+
+六个命令此前只存在于壳层实现、未进本契约；2026-11-05 前端接上模板库后补齐（签名以 `src-tauri/src/lib.rs` 为准，口径以设计 03 §5–§7 为准）。
+
+| 命令 | 入参 | 出参 | 说明 |
+|---|---|---|---|
+| `listRecipes` | `{offset?, limit?}` | `RecipePage` | 列表只读；坏文件跳过并计入 `warnings`，不整页失败 |
+| `getRecipe` | `{recipeId}` | `RecipeDocument` | 不存在报 E2001 |
+| `saveRecipe` | `{recipe: SaveRecipeInput}` | `RecipeDocument` | 带 `recipeId` 即覆盖；只给 `kind`＋`paramsSnapshot` 时按单步模板落地（`steps[0]`） |
+| `deleteRecipe` | `{recipeId}` | `void` | 幂等 |
+| `exportRecipe` | `{recipeId}` | `{payload: string}` | v3 JSON；落盘位置由壳层另存对话框决定 |
+| `importRecipe` | `{payload: string}` | `RecipeDocument` | 导入即迁移；`schemaVersion` 高于 3 报 **E1007**；导入后必须重新预览 |
+
+**保存时剔除路径参数（v1.51 定稿）**：`saveRecipe` 在落盘前对每个步骤调 `strip_path_params`，只留声明式参数。名单按**本仓库参数名的真实语义**登记（内核 `PATH_PARAM_KEYS`）：`file`／`files`／`sources`／`output`／`outputDir`／`root(s)`／`manifest`／`list`／`archive`／`dir` 等是真路径；`source`／`target` 在 F04/F06/F07/F08/C01/C11–C14 里是**源/目标编码**，不得入表（旧表把它们里的 `source` 当路径，导入时会把编码删掉）。判据只留内核一处，界面不抄第二份键表。
+
+**`loadRecipe` 仍未实现**：它要把模板变成 `PlanDocument`，而 `TemplateStep.kind` 是**动作**（`split`／`rename`／`csv-rows`）、壳层按**功能码**（`f01`／`f03`／`f08`／`f09`）路由，一对多——阻塞于 [OQ-36](../OPEN-QUESTIONS.md)。界面因此只做存取、管理与导入导出，不提供「一键套用」入口。
+
+```ts
+interface SaveRecipeInput {
+  recipeId?: string;                    // 带即覆盖
+  name: string;
+  description?: string;
+  match?: RecipeMatch;                  // 只读扩展名与用户标签，仅作"可能适用"建议
+  kind?: PlanAction;                    // Phase A：动作级类型（不是功能码）
+  paramsSnapshot?: Record<string, unknown>;
+  steps?: TemplateStep[];                // Phase B：多步骤（≤10）
+}
+
+interface RecipeDocument {
+  recipeId: string;
+  schemaVersion: number;                 // 独立于 configVersion；v3＝steps
+  name: string;
+  description?: string;
+  steps: TemplateStep[];
+  match?: RecipeMatch;
+  sourceFormat?: "desktop" | "web";
+  createdAt: string;
+  updatedAt?: string;
+  lastUsedAt?: string;
+  usageCount?: number;
+  pinned?: boolean;
+}
+
+interface TemplateStep {
+  stepId: string;
+  kind: PlanAction;                      // 动作级；功能码不落模板（OQ-36）
+  paramsSnapshot: Record<string, unknown>; // 不含源路径/输出目录/脚本（不变量 13）
+  source: "original" | "previous";
+}
+
+interface RecipePage { items: RecipeDocument[]; total: number }
+```
+
 ## 5. Plan/Apply 数据模型
 
 ```ts
@@ -629,3 +682,4 @@ interface JournalEntry {
 | v1.48 | 2026-11-04 | OQ-37 裁决①落地：`generic_apply` 对改名族（f12/f13/c04）与 C03 的 `E2002`/`E2003` 记 **Skipped＋带码报告**（不增 failed、不写 Journal、源文件留原位），并新增 `perform_with_retry`——只对 `retryable=true` 的 `E2003` 重打一次，`E2002` 不重试（设计 06）。其余写臂维持 `Failed`。§5.1 该行由"半程"定稿。验收：`generic_apply::tests::readonly_rename_is_skipped_and_reported_without_failing_the_task`、`readonly_source_is_skipped_for_content_rewrites`、`occupied_target_is_retried_once_and_then_applies`（断 `rename` 调用次数＝2）、`non_retryable_permission_error_is_not_retried`、`permission_failure_still_fails_arms_outside_the_named_scope`（范围外仍 Failed）、`apply_flow::read_only_rename_target_is_skipped_without_failing_the_task`（POSIX 真实 FS：chmod 555 → EACCES → E2002 → skipped）。先红实证：分别摘掉改判分支与重试分支，对应正例转红、反向对照仍绿 |
 | v1.49 | 2026-11-05 | §2.3 `TaskSummary` 追加 **必填** `job: "apply" \| "undo"`（Rust 侧 `#[serde(default)]`＝`Apply`，旧 S03 快照仍可反序列化）：`kind` 装的是被处理计划的功能码，撤销任务也是它，界面此前按 `kind === "undo"` 判别回滚任务，那个值壳层从不发出——于是回滚任务照样提供「重试失败项」（`retryTask` 必拒 E1002）与二次「撤销」（回滚是终态）。恢复路径按 `StoredJob` 重算 `job`，不信任快照里的旧值。决策见 [ADR-0066](../adr/0066-任务类别需要独立于功能码的字段.md)。 |
 | v1.50 | 2026-11-05 | §5 的 `csv` 载荷追加可选 `shardBom`（`Bom`，缺省省略）：F05 支持 **UTF-16 带 BOM** 源直接分片。方案 §5.1 的 BOM 策略要求 UTF-16/UTF-32 **每片都写 BOM**（无 BOM 则分片无法被识别），而源字节直通时分片区间只覆盖 0 起的那段，其余分片没有 BOM。落地方式：内核 `CsvRecordScanner::new_utf16` 按码元投影扫描（结构字符只可能是 ASCII，记录长度仍按源字节计），表头区间因含 BOM 而自行带出首片前缀；首片区间不从 0 起时（`keepHeader=false` 的第 2 片起）由计划给该条目标 `shardBom`，执行层 `FsAdapter::copy_ranges_atomic` 新增 `prefix` 参数在全部区间之前写一次，`expected.size` 计入前缀。无 BOM 的 UTF-16 不猜测重写形态，仍 E3001 提示先走 C01。验收：K08 语料（T v1.12 §3.2）由 partial 转 asserted——`corpus::k08_utf16_bom_sample_detects_transcodes_and_splits_with_a_bom_per_part`、`apply_flow::k08_utf16_csv_parts_each_start_with_a_bom`（真实 FS：三片产物逐片 FF FE 开头）、`apply_flow::k08_utf16_csv_parts_without_header_still_start_with_a_bom`（第 2 片起走补写路径，并逐字节比对源区间）。线协议追加式、旧计划仍可反序列化；决策见 [ADR-0070](../adr/0070-UTF-16分片每片写BOM.md)。 |
+| v1.51 | 2026-11-05 | §4.4.2 补**处理模板六条命令**（`listRecipes`/`getRecipe`/`saveRecipe`/`deleteRecipe`/`exportRecipe`/`importRecipe`）与 DTO（`RecipeDocument`/`TemplateStep`/`RecipeMatch`/`SaveRecipeInput`/`RecipePage`）：这六条此前只在壳层实现、从未进契约，前端接上模板库后补齐。同时定稿**保存时剔除路径参数**——`saveRecipe` 落盘前对每步调 `strip_path_params`，名单按本仓库参数名真实语义校正：`source`／`target` 在 F04/F06/F07/F08/C01/C11–C14 里是**编码**，旧表把 `source` 当路径删掉会让模板丢编码；而 UI 真用的 `file`／`files`／`output`／`manifest`／`list`／`archive`／`dir` 等又不在旧表里（导入自家模板会留绝对路径）。判据只留内核一处，界面不抄第二份键表。**`loadRecipe` 仍未实现**，阻塞于 OQ-36（动作→功能码一对多），界面因此不提供「一键套用」。验收：`recipe::tests::strip_path_params_drops_real_paths_and_keeps_encodings`、`recipe::tests::strip_paths_covers_every_step_and_reports_each_key_once`；界面 `TemplatesPage.test.tsx`（4 项）＋`FeaturePages.template.test.tsx`（3 项）＋`App.navigation` 的模板可达断言；决策见 [ADR-0072](../adr/0072-处理模板前端只做存取半边.md)。 |

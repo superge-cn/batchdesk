@@ -4,11 +4,16 @@ import {
   mockApply,
   mockCancel,
   mockCleanup,
+  mockDeleteRecipe,
+  mockExportRecipe,
   mockGetConfig,
+  mockGetRecipe,
   mockGetStorageInfo,
   mockGetTask,
   mockGetUiState,
+  mockImportRecipe,
   mockListen,
+  mockListRecipes,
   mockListTasks,
   mockMeta,
   mockPause,
@@ -20,6 +25,7 @@ import {
   mockResetUiState,
   mockResume,
   mockRetry,
+  mockSaveRecipe,
   mockSetConfig,
   mockSetUiState,
   mockUndoDryRun,
@@ -38,6 +44,10 @@ import type {
   PlanDocument,
   PlanOperationInput,
   RecoveryAction,
+  RecipeDocument,
+  RecipeExportPayload,
+  RecipePage,
+  SaveRecipeInput,
   StorageInfo,
   TaskDetail,
   TaskDoneEvent,
@@ -265,4 +275,44 @@ export async function setUiState(patch: Record<string, unknown>): Promise<UiStat
 export async function resetUiState(): Promise<UiState> {
   if (!isTauri()) return mockResetUiState();
   return invoke<UiState>("resetUiState");
+}
+
+// ── 处理模板（C37；设计 03 §7）────────────────────────────────────────
+//
+// 六个命令都不涉及"应用"：把模板变成计划的是 `loadRecipe`，而它卡在 OQ-36
+// （模板只存动作，动作→功能码是一对多）。界面因此只做存取与导入导出，
+// 不提供"点一下直接跑"——那既是未裁决的契约缺口，也是方案 §15.2.2 明令禁止的。
+
+export async function listRecipes(offset = 0, limit = 50): Promise<RecipePage> {
+  return isTauri()
+    ? invoke<RecipePage>("listRecipes", { offset, limit })
+    : mockListRecipes(offset, limit);
+}
+
+export async function getRecipe(recipeId: string): Promise<RecipeDocument> {
+  return isTauri() ? invoke<RecipeDocument>("getRecipe", { recipeId }) : mockGetRecipe(recipeId);
+}
+
+export async function saveRecipe(input: SaveRecipeInput): Promise<RecipeDocument> {
+  return isTauri()
+    ? invoke<RecipeDocument>("saveRecipe", { recipe: input })
+    : mockSaveRecipe(input);
+}
+
+export async function deleteRecipe(recipeId: string): Promise<void> {
+  if (!isTauri()) return mockDeleteRecipe(recipeId);
+  await invoke<void>("deleteRecipe", { recipeId });
+}
+
+export async function exportRecipe(recipeId: string): Promise<RecipeExportPayload> {
+  return isTauri()
+    ? invoke<RecipeExportPayload>("exportRecipe", { recipeId })
+    : mockExportRecipe(recipeId);
+}
+
+/** 导入即低版本迁移、高版本 E1007；**导入后必须重新预览**（方案 §15.2.2）。 */
+export async function importRecipe(payload: string): Promise<RecipeDocument> {
+  return isTauri()
+    ? invoke<RecipeDocument>("importRecipe", { payload })
+    : mockImportRecipe(payload);
 }

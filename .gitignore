@@ -43,3 +43,9 @@ Thumbs.db
 web/test-results/
 web/playwright-report/
 web/blob-report/
+
+# ── 本机工具产生的目录（不是仓库内容）────────────────────
+# .Trash-0/：部分桌面环境把删除的文件挪到挂载点根目录，出现在工作区里纯属巧合
+# .workbuddy/：代理的工作记忆与会话数据（项目记忆有价值，但不是版本化产物）
+.Trash-0/
+.workbuddy/

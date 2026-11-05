@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+- **处理模板有界面了，但只有「存取」那一半——「一键套用」仍等一个裁决（[ADR-0072](docs/adr/0072-处理模板前端只做存取半边.md)，2026-11-05）**。后端六条命令（`saveRecipe`/`getRecipe`/`listRecipes`/`deleteRecipe`/`exportRecipe`/`importRecipe`）从 2026-10-29 起就在 `src-tauri` 注册好了，而 `web/src` 对它们的调用数是 **0**：模板功能对用户而言一直不存在。卡住"套用"的是 [OQ-36](docs/OPEN-QUESTIONS.md)——模板里存的是 `PlanAction`（`split`／`edit-content`／`csv-rows`），壳层按功能码（`f01`／`c01`／`f08`）路由，而动作到功能码是**一对多**（`split` = f01/f02/f03），反推不出该走哪条采集路径。既然"存取"这一半不依赖裁决，就先把这一半做完。
+
+  动工顺带查出三个潜伏缺陷，都不是新代码：① `kernel::recipe::PATH_PARAM_KEYS` 把 `source` 当路径键删——它是**编码**（`SourceEncoding`），于是保存一份 C01 转码模板会把「从 GB18030 转」这个最关键参数吃掉；② 真正的路径键反而没登记（`files`／`paths`／`manifest`／`outputDir`／`unclassifiedDir`…），不变量 13「模板不存绝对源路径」在保存这条路上等于空转；③ **只有 `importRecipe` 走了剔除、`saveRecipe` 没走**——同一份数据两个入口两种结果，差异会直接漂进用户的模板文件。
+
+  现在键表按语义重写、剔除逻辑收进 `RecipeDocumentV3::strip_paths()`（逐 step、键去重、返回被删清单），壳层保存前调用它，与导入同源；界面新增顶层视图「处理模板」（列表/步骤摘要/两段式删除/导出为只读文本/导入），功能页工具条可「存为处理模板」，快照取生成计划时的 `plan.params` 原样交出去；动作名显示「分割」而不是 `split`。**没有「一键套用」按钮**——页面用常驻横幅写明它卡在哪，因为点了没反应比没有按钮更糟。
+
+  验证：`cargo test --workspace` **621 → 623 项**、壳层 42 项、Vitest **73 → 81 项（16 文件）**、Playwright **16 → 17 项**，`tsc`／`vite build`／`check_locales`（2 × 626 key）／`check_docs`／`check_dist_csp` 全 0。**仍未做**：`loadRecipe` 与一键套用（OQ-36 裁决后才动）、Phase B 多步模板、模板扩展名匹配（`RecipeMatch` 只存不用）、Web/OPFS 适配。
+
+  顺带发现一处门禁缺口并补上：桌面壳是独立 workspace，根 workspace 的 `cargo fmt --all --check` 够不到它，于是 `src-tauri/src/tasks.rs` 里有一处不合 rustfmt 的代码随库多日、本地与 CI 全绿。现已格式化，并在 lint job 增加 `rustfmt（桌面壳独立 workspace）` 一步。
+
 - **「还剩 1 条 partial」这类数字，现在由门禁对着 CSV 核（[ADR-0071](docs/adr/0071-用例覆盖统计以两份CSV为单一来源.md)，2026-11-05）**。K08 收口当天，覆盖映射表重算成 **✅175／◐88／⛔33**、执行台账待人工 33，但有四处还在写旧值：开发计划 §3.3 写「语料断言只剩 1 条 partial（K08）」（它前一天已收口）、同一节写「34 条待人工用例」、FAQ 行写「✅174／◐89／⛔33」且**同一条里又写「34 条待人工行」**（自己跟自己打架）、追踪表测试行与映射表 md 的 §2 汇总写「✅174／◐89」——而那一节的标题恰好是「汇总（**由 CSV 计算，非手填**）」。
 
   漏检不是因为没门禁，而是**探测范围比覆盖面窄**：门禁 ⑫ 核语料断言口径，但开发计划的扫描锚点只有 `| 验证 |` 一行，§3.3 与 FAQ 从来没进过射程；`check_case_map` 核了映射表 CSV 的 296 行对账，却不核 md 里那份汇总，而**执行台账的 md 早就有同款核对**——范式现成，只是没复制过来。

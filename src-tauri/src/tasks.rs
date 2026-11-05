@@ -509,7 +509,9 @@ impl TaskQueue {
         let plan_id = job.plan_id();
         let (kind, job_kind) = match &job {
             StoredJob::Apply { plan, .. } => (plan.plan.kind.clone(), TaskJob::Apply),
-            StoredJob::Undo { plan_id } => (journal_plan_kind(&self.inner.paths, plan_id), TaskJob::Undo),
+            StoredJob::Undo { plan_id } => {
+                (journal_plan_kind(&self.inner.paths, plan_id), TaskJob::Undo)
+            }
         };
         let summary = TaskSummary {
             task_id: task_id.to_string(),

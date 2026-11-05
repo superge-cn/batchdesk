@@ -56,6 +56,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
         run: cargo fmt --all -- --check
+      # 桌面壳是**独立 workspace**（`cargo test --manifest-path src-tauri/Cargo.toml`），
+      # 上面的 `--all` 只作用于根 workspace，够不到 src-tauri。
+      # 2026-11-05 发现 `src-tauri/src/tasks.rs` 里有一处不符合 rustfmt 的代码已随库多日，
+      # 本地与 CI 全绿——因为没人检查过这一半。补一条，别让"格式一致"只覆盖一半代码。
+      - name: rustfmt（桌面壳独立 workspace）
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: clippy（零容忍）
         run: |
           # 失败时把 lint 明细以 ::error:: 注解输出：日志下载需仓库管理权限，
