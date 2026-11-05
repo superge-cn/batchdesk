@@ -45,6 +45,11 @@ export const state = {
   recoverCalls: Array<[string, string]>,
   planOverride: null as Record<string, unknown> | null,
   getTaskNull: false,
+  planReject: null as unknown,
+  planInput: null as unknown,
+  applyCalls: [] as Array<[string, unknown]>,
+  dryRunOverride: null as Record<string, unknown> | null,
+  stateListeners: Array<(event: { taskId: string; state: string }) => void> = [],
   undoCalls: [] as string[],
   calls: { getConfig: 0, setConfig: 0, resetScope: 0 }
 };
@@ -71,6 +76,9 @@ export function resetState(navigation?: UiNavigation) {
   state.recoverCalls = [];
   state.planOverride = null;
   state.getTaskNull = false;
+  state.planInput = null;
+  state.applyCalls = [];
+  state.dryRunOverride = null;
   state.calls = { getConfig: 0, setConfig: 0, resetScope: 0 };
 }
 
@@ -98,23 +106,27 @@ export async function getTask(taskId: string) {
 export async function listenTaskProgress() {
   return () => undefined;
 }
-export async function listenTaskState() {
-  return () => undefined;
+export function listenTaskState(callback: (event: { taskId: string; state: string }) => void) {
+  state.stateListeners.push(callback);
+  return Promise.resolve(() => undefined);
 }
 export const doneListeners: Array<(event: unknown) => void> = [];
 export function listenTaskDone(callback: (event: unknown) => void) {
   doneListeners.push(callback);
   return Promise.resolve(() => undefined);
 }
-export async function planOperation() {
+export async function planOperation(input?: unknown) {
+  state.planInput = input ?? null;
   state.planCalls += 1;
+  if (state.planReject) throw state.planReject;
   if (state.planOverride) return state.planOverride;
   return state.planNull ? null : PLAN;
 }
 export async function preflightPlan() {
   return PASS_REPORT;
 }
-export async function applyPlan() {
+export async function applyPlan(planId: string, options?: unknown) {
+  state.applyCalls.push([planId, options]);
   return { taskId: "task-apply" };
 }
 export async function undoPlan(planId: string) {

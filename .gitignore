@@ -51,3 +51,6 @@ web/blob-report/
 # .workbuddy/：代理的工作记忆与会话数据（项目记忆有价值，但不是版本化产物）
 .Trash-0/
 .workbuddy/
+# 无 WASM 探针：镜像转译产物（源码在 web/.probe，见其 README）
+web/.probe/mirror/
+web/.probe/entry-*.mjs
