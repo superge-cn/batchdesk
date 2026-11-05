@@ -48,6 +48,7 @@ import { FeaturePages } from "./FeaturePages";
 import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
 import { describeError } from "./errors";
+import { warningKindTitle } from "./warnings";
 import { VirtualList } from "./VirtualList";
 import { applyStatusBadge, phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
@@ -1100,7 +1101,7 @@ function AppShell() {
                             <div className={`warning ${warning.riskLevel}`} key={`${warning.kind}-${index}`}>
                               <Info size={14} />
                               <span>
-                                <strong>{warning.kind}</strong>
+                                <strong>{warningKindTitle(t, warning.kind)}</strong>
                                 {warning.suggestion ? ` · ${warning.suggestion}` : ""}
                               </span>
                             </div>

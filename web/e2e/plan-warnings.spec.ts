@@ -14,7 +14,8 @@ test.describe("功能页的集中报告", () => {
     await page.getByRole("button", { name: /生成计划预览/ }).click();
 
     await expect(page.getByRole("heading", { name: "计划预览" })).toBeVisible();
-    const report = page.getByText("parent-is-file", { exact: true });
+    // 类别标题走资源包（设计 06 §2A）；这里断的是界面文案，不是内核 slug。
+    const report = page.getByText("父级位置是文件", { exact: true });
     await expect(report).toBeVisible();
     await expect(page.getByText(/父级 \/mock\/root\/folder-a 是文件/)).toBeVisible();
     // 计数与逐项点名同时存在：计数不能成为唯一出口。

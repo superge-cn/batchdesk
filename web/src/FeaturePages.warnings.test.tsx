@@ -76,16 +76,30 @@ describe("功能页的集中报告（warnings）逐项点名", () => {
     vi.mocked(planOperation).mockResolvedValue(warningPlan);
   });
 
-  it("报告出类别、建议与风险级，而不是只有计数", async () => {
+  it("类别标题走设计 06 §2A 的界面文案，不露出内核 slug", async () => {
     const user = userEvent.setup();
     render(<FeaturePages view="f11" onBack={() => undefined} />);
     await planThrough(user);
 
-    const kind = await screen.findByText("parent-is-file");
+    // 此前这里断的是 `parent-is-file` 本身——把线协议串当文案钉进了测试（09 §2）。
+    const kind = await screen.findByText("父级位置是文件");
     const entry = kind.closest(".warning");
     expect(entry).not.toBeNull();
     expect(entry).toHaveClass("caution");
+    // 建议行仍来自内核（是否继续原样显示属设计 06 §5 待决），本批不改它的显示
     expect(screen.getByText(/parent \/root\/a is a file/)).toBeVisible();
+    expect(screen.queryByText("parent-is-file")).toBeNull();
+  });
+
+  it("界面没跟上的类别显示成缺陷，而不是伪装成一条正常文案", async () => {
+    vi.mocked(planOperation).mockResolvedValue({
+      ...warningPlan,
+      warnings: [{ kind: "brand-new-category", riskLevel: "caution", suggestion: "not mapped yet" }]
+    });
+    const user = userEvent.setup();
+    render(<FeaturePages view="f11" onBack={() => undefined} />);
+    await planThrough(user);
+    expect(await screen.findByText(/未登记的预警类别（brand-new-category）/)).toBeInTheDocument();
   });
 
   it("对照：计划没有 warnings 时不得凭空出现集中报告块", async () => {

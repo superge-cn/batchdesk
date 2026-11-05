@@ -17,6 +17,7 @@ import {
 } from "./lib/ipc";
 import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
+import { warningKindTitle } from "./warnings";
 import { VirtualList } from "./VirtualList";
 import { useI18n, type MessageKey } from "./i18n";
 import type { Translate } from "./labels";
@@ -1064,7 +1065,7 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                     <div className={`warning ${warning.riskLevel}`} key={`${warning.kind}-${index}`}>
                       <Info size={14} />
                       <span>
-                        <strong>{warning.kind}</strong>
+                        <strong>{warningKindTitle(t, warning.kind)}</strong>
                         {warning.suggestion ? ` · ${warning.suggestion}` : ""}
                       </span>
                     </div>

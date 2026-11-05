@@ -17,6 +17,9 @@
    与 IPC 归一化层。
 10. 界面源码不得把线协议枚举（`{x.status}`／`{x.state}`）当文案渲染（设计 09 §2），
    枚举→key 的唯一出口是 `web/src/labels.tsx`。
+11. 预警类别三方逐类对齐（设计 06 §2A ↔ `web/src/warnings.ts` ↔ 两语言包）：表里有类别而
+   映射没接、映射里有而表没有、语言包缺文案或多出映射表外的 `warning.*` key，都直接红；
+   表解析为空即报「门禁自校失败」。
 
 只使用标准库；CI 的 web job 与本地门禁必跑。
 
@@ -39,7 +42,7 @@ REQUIRED_LANGS = ["zh-CN", "en-US"]
 
 # 资源 key 的域前缀：与 web/src 的 t("...")／注册表字面量共用同一套命名。
 KEY_DOMAIN_RE = re.compile(
-    r"^(?:app|nav|common|task|c09|feature|tasks|settings|error)\.[A-Za-z0-9_.]+$"
+    r"^(?:app|nav|common|task|c09|feature|tasks|settings|error|warning)\.[A-Za-z0-9_.]+$"
 )
 # 错误码文案族：映射表在 web/src/errors.ts，key 形如 error.E2004.summary（设计 06 §3）。
 ERROR_MAP_FILE = SRC_DIR / "errors.ts"
@@ -72,6 +75,13 @@ EXEMPT_MARKER = "i18n-exempt"
 # 绝对路径与源码位置），只能进诊断日志，界面渲染必须走 `describeError`／`ErrorBanner`。
 # 这一条此前只写在 ADR 里、靠人记得，本批同一族的第二处泄漏（执行结果表）就是这么漏的。
 RAW_ERROR_TEXT_RE = re.compile(r"\berror\??\.(message|detail)\b")
+# 设计 06 §2A 的预警类别表：类别 ↔ 界面 key ↔ 两语言文案必须逐类对齐（同第 ⑧ 项的手法，
+# 对照源从"码位表"换成"类别表"）。映射表在 web/src/warnings.ts。
+WARN_MAP_FILE = SRC_DIR / "warnings.ts"
+WARN_TABLE_ROW_RE = re.compile(r"^\| `([a-z0-9-]+)` \| `warning\.([A-Za-z0-9]+)\.title` \|", re.M)
+WARN_MAP_ENTRY_RE = re.compile(r'"([a-z0-9-]+)":\s*"warning\.([A-Za-z0-9]+)\.title"')
+WARN_BUNDLE_KEY_RE = re.compile(r"^warning\.([A-Za-z0-9]+)\.title$")
+
 # 第 ⑩ 项：界面不得把线协议枚举当文案渲染。`{entry.status}`／`{task.state}` 这类插值
 # 印出来的是 `ok`／`partial-failed` 这种协议字符串——同一个 bug 在 2026-11-04 连出现两次
 # （任务状态徽标、条目级状态），第三次只能靠机器挡。枚举→key 的唯一出口是 `labels.tsx`。
@@ -313,6 +323,49 @@ def main() -> int:
     if not (SRC_DIR / "labels.tsx").exists():
         failures.append("找不到 web/src/labels.tsx：枚举→key 文案没有单一来源（探测器自校失败）")
 
+    # 11. 预警类别三方逐类对齐（设计 06 §2A ↔ web/src/warnings.ts ↔ 两语言包）。
+    design06_text = DESIGN06_FILE.read_text(encoding="utf-8") if DESIGN06_FILE.exists() else ""
+    table = dict(WARN_TABLE_ROW_RE.findall(design06_text[design06_text.index("## 2A."):]
+                 if "## 2A." in design06_text else ""))
+    if not table:
+        failures.append("设计 06 §2A 的预警类别表解析为空：门禁自校失败（探测器失效＝没有正例）")
+    if not WARN_MAP_FILE.exists():
+        failures.append("找不到 web/src/warnings.ts：预警类别没有界面映射表")
+        mapped_warnings: dict[str, str] = {}
+    else:
+        mapped_warnings = dict(
+            WARN_MAP_ENTRY_RE.findall(strip_comments(WARN_MAP_FILE.read_text(encoding="utf-8")))
+        )
+        if not mapped_warnings:
+            failures.append("web/src/warnings.ts 里没有任何 warning.<kind>.title 映射")
+    if table and mapped_warnings:
+        unbound = sorted(set(table) - set(mapped_warnings))
+        strays = sorted(set(mapped_warnings) - set(table))
+        if unbound:
+            failures.append(
+                f"设计 06 §2A 有 {len(unbound)} 个类别没进 warnings.ts 映射：{', '.join(unbound)}"
+            )
+        if strays:
+            failures.append(
+                f"warnings.ts 有 {len(strays)} 个类别不在设计 06 §2A 表里：{', '.join(strays)}"
+            )
+    for kind, key in mapped_warnings.items():
+        bundle_key = f"warning.{key}.title"
+        if table.get(kind) and table[kind] != key:
+            failures.append(
+                f"{kind}：warnings.ts 用 {key}，设计 06 §2A 表定的是 {table[kind]}（key 必须同源）"
+            )
+        for lang in REQUIRED_LANGS:
+            if bundle_key not in bundles[lang]:
+                failures.append(f"{lang} 缺预警类别文案：{bundle_key}")
+    for lang, bundle in bundles.items():
+        for key in bundle:
+            match = WARN_BUNDLE_KEY_RE.match(key)
+            if match and match.group(1) not in set(mapped_warnings.values()):
+                failures.append(
+                    f"{lang}.{key} 的类别没有进 warnings.ts 映射表（要么补映射，要么删文案）"
+                )
+
     if failures:
         print("国际化门禁未通过：", file=sys.stderr)
         for failure in failures:
@@ -324,7 +377,8 @@ def main() -> int:
         f"{len(bundles)} 个语言包 × {len(default_keys)} 个 key，key 集合/占位符/语言残留一致；"
         f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文；"
         f"错误码文案 {len(mapped)} 个码位两段齐全，且与设计 06 §2 码表逐码对齐；"
-        f"界面 {len(scanned_ui)} 个源码文件零后端错误原文、零线协议枚举裸露。"
+        f"界面 {len(scanned_ui)} 个源码文件零后端错误原文、零线协议枚举裸露；"
+        f"预警类别 {len(mapped_warnings)} 类与设计 06 §2A 逐类对齐。"
     )
     return 0
 
