@@ -27,6 +27,7 @@ node --import ./globals.mjs entry-app.cjs                        # App 的上次
 node --import ./globals.mjs entry-cancel.cjs                     # 取消后的撤销询问 12 项
 node --import ./globals.mjs entry-errors.cjs                     # 错误文案分层 24 项
 node --import ./globals.mjs entry-nav.cjs                        # 23 视图导航可达 16 项（约 30–60 秒，逐视图打印进度）
+node --import ./globals.mjs entry-warnings.cjs                   # 功能页集中报告 7 项
 ```
 
 `--import ./globals.mjs` 必须在入口之前跑：它先建 jsdom，再把 `window`/`document`/`navigator`
@@ -39,6 +40,7 @@ node --import ./globals.mjs entry-nav.cjs                        # 23 视图导�
 | `entry-settings.cjs` 7 项 | `SettingsPage.test.tsx`「本机界面状态」2 项 | 区块渲染；点击调用回调一次并给出提示；**`setConfig`/`resetScope` 零调用**；不传回调时按钮 disabled |
 | `entry-app.cjs` 11 项 | `App.uiState.test.tsx` 5 项 | 启动预填上次目录＋候选；生成预览后回写（去重置顶、`lastSection` 不被擦）；无记录不预填不渲染候选；启动回到上次功能页；切页写回 `lastSection` |
 | `entry-cancel.cjs` 12 项 | `App.cancel-review.test.tsx` 5 项 | 取消且有已完成项→询问（数量/已落盘文案/初始焦点在「保留」）；确认→`undoPlan(planId)` 且关框；保留→不撤销；零完成/undo 任务/正常完成三个对照都不打扰 |
+| `entry-warnings.cjs` 7 项 | `FeaturePages.warnings.test.tsx` 3 项 | F11 集中报告逐项点名：类别走界面文案（不露内核 slug）＋`caution` 风险级＋建议行保留内核原文；未登记类别显示成缺陷（`未登记的预警类别（…）`）；对照——无 warnings 时不得凭空出现 `.warnings` 块 |
 | `entry-nav.cjs` 16 项 | `App.navigation.test.tsx` 6 项 | **23 个功能视图逐个可达**（标题＋生成计划预览＋撤销，防"import 了 FeaturePages 却不渲染"的历史缺陷回归）；默认 C09 且可经「返回 C09」返回；任务与撤销真视图（标题＋空队列指引）；设置五分组＋界面语言 zh-CN；处理模板真渲染＋列表非空＋OQ-36 写明＋不给假「应用」按钮 |
 | `entry-errors.cjs` 24 项 | `errors.test.tsx` 7 项 | 已知码位走本地化摘要＋动作（后端原文不当主行）；英文切换；未知码位回退并标 `localized=false`；**码表全量 55**、七分段非空、两语言两段齐全无占位符；横幅语义（alert/码位/摘要/动作/关闭）与未知码位不出现 raw key |
 
@@ -52,7 +54,7 @@ node --import ./globals.mjs entry-nav.cjs                        # 23 视图导�
    让 Node 自己解析即可。入口因此不能用顶层 await（`main()` + `void main()`）。
 3. **`globalThis.navigator` 只有 getter**（Node 22），必须 `Object.defineProperty`。
 
-## 边界（不要当成正式测试）
+## 共享模块\n\n- `settle.ts`：轮询等待，**返回谓词值本身**（entry-nav 初版在这里 `return true` 过，调用点拿到 boolean，错得莫名其妙）。新增探针一律 `import { settle } from "./settle"`。\n\n## 边界（不要当成正式测试）
 
 - 断言是**手写**的，与 committed 测试**同义但不同源**——改了 `src` 的行为要两边一起改，
   否则会出现"探针绿、CI 红"或反之。

@@ -38,6 +38,8 @@ export const state = {
   planCalls: 0,
   settledState: "cancelled" as string,
   planNull: false,
+  planOverride: null as Record<string, unknown> | null,
+  getTaskNull: false,
   undoCalls: [] as string[],
   calls: { getConfig: 0, setConfig: 0, resetScope: 0 }
 };
@@ -57,6 +59,8 @@ export function resetState(navigation?: UiNavigation) {
   state.undoCalls = [];
   state.settledState = "cancelled";
   state.planNull = false;
+  state.planOverride = null;
+  state.getTaskNull = false;
   state.calls = { getConfig: 0, setConfig: 0, resetScope: 0 };
 }
 
@@ -72,6 +76,7 @@ export async function listTasks() {
   return { items: [], total: 0 };
 }
 export async function getTask(taskId: string) {
+  if (state.getTaskNull) return null;
   return {
     taskId,
     summary: { state: state.settledState, phase: "finalizing", done: 2, total: 3, message: "" },
@@ -91,6 +96,7 @@ export function listenTaskDone(callback: (event: unknown) => void) {
 }
 export async function planOperation() {
   state.planCalls += 1;
+  if (state.planOverride) return state.planOverride;
   return state.planNull ? null : PLAN;
 }
 export async function preflightPlan() {
