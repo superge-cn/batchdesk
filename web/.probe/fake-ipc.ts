@@ -163,8 +163,29 @@ export function toIpcError(value: unknown) {
 }
 
 // TemplatesPage（顶层视图 templates）用到的配方命令
-export async function listRecipes() {
-  return { items: [] };
+// 与 web/src/lib/ipc/mock.ts 的预置夹具同名同形，让"模板列表非空"这类断言可复刻。
+const FIXTURE_RECIPE = {
+  recipeId: "01FIXTURE",
+  schemaVersion: 3,
+  name: "CSV 分片（每片 5 万行）",
+  description: "演示夹具：真实模板由桌面壳落盘",
+  steps: [
+    {
+      stepId: "step-1",
+      kind: "split",
+      paramsSnapshot: { rows: 50000 },
+      source: "original"
+    }
+  ],
+  match: { extensions: ["csv"], tags: ["分割"] },
+  createdAt: "2026-11-01T09:00:00Z",
+  updatedAt: "2026-11-04T10:00:00Z"
+};
+
+export async function listRecipes(offset = 0, limit = 200) {
+  void offset;
+  void limit;
+  return { items: [FIXTURE_RECIPE], total: 1 };
 }
 export async function deleteRecipe() {
   return undefined;
