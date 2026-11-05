@@ -18,10 +18,14 @@ impl ArchiveService for ZipArchiveService {
         let path = crate::fs::fs_path(Path::new(archive));
         let metadata = fs::metadata(&path).map_err(|error| io_error(archive, &error))?;
         let file = fs::File::open(&path).map_err(|error| io_error(archive, &error))?;
-        let mut zip = zip::ZipArchive::new(file).map_err(zip_error)?;
+        let zip = zip::ZipArchive::new(file).map_err(zip_error)?;
         let mut entries = Vec::with_capacity(zip.len());
         for index in 0..zip.len() {
-            let entry = zip.by_index(index).map_err(zip_error)?;
+            // 只读中央目录元数据（`by_index_data`），不解码任何条目数据：加密包也能列出
+            // 条目，密码只在 `extract_entry` 处才需要（ADR-0074 §3.1）。旧的
+            // `by_index` 会对加密条目直接返回 "Password required to decrypt file"，
+            // 使加密包连预览都出不来。
+            let entry = zip.by_index_data(index).map_err(zip_error)?;
             let utf8_flag = entry.flags().as_u16() & 0x0800 != 0;
             let (name, gbk_fallback) = decode_name(entry.name_raw(), utf8_flag);
             let supported = matches!(
@@ -53,33 +57,42 @@ impl ArchiveService for ZipArchiveService {
         &self,
         archive: &str,
         index: u64,
+        password: Option<&str>,
         writer: &mut dyn Write,
     ) -> Result<(), KernelError> {
         let path = crate::fs::fs_path(Path::new(archive));
         let file = fs::File::open(&path).map_err(|error| io_error(archive, &error))?;
         let mut zip = zip::ZipArchive::new(file).map_err(zip_error)?;
-        let mut entry = zip
-            .by_index(
-                usize::try_from(index).map_err(|_| {
-                    KernelError::invalid_params("archive entry index is out of range")
-                })?,
-            )
-            .map_err(zip_error)?;
-        if entry.encrypted() {
-            return Err(KernelError::new(
-                "E3003",
-                "encrypted archive entries are not supported",
-                None,
-                false,
-            ));
-        }
+        let index = usize::try_from(index)
+            .map_err(|_| KernelError::invalid_params("archive entry index is out of range"))?;
+        let secret = password
+            .map(str::as_bytes)
+            .filter(|value| !value.is_empty());
+        let mut entry = match secret {
+            Some(secret) => zip.by_index_decrypt(index, secret).map_err(zip_error)?,
+            // 不给密码时 `by_index` 对加密条目返回 PASSWORD_REQUIRED，由 `zip_error`
+            // 映射成 E3008；未加密条目照常读。
+            None => zip.by_index(index).map_err(zip_error)?,
+        };
+        let encrypted = entry.encrypted();
         std::io::copy(&mut entry, writer).map_err(|error| {
-            KernelError::new(
-                "E3005",
-                "archive entry write failed",
-                Some(error.to_string()),
-                false,
-            )
+            // 加密条目的读取失败（ZipCrypto 的 CRC、AES 的认证码）与"密码错"不可区分，
+            // 统一按 E3009 报（ADR-0074 §5.6）。
+            if encrypted && secret.is_some() {
+                KernelError::new(
+                    "E3009",
+                    "archive password is wrong or the archive is damaged",
+                    Some(error.to_string()),
+                    false,
+                )
+            } else {
+                KernelError::new(
+                    "E3005",
+                    "archive entry write failed",
+                    Some(error.to_string()),
+                    false,
+                )
+            }
         })?;
         Ok(())
     }
@@ -301,12 +314,31 @@ fn walk(dir: &Path, paths: &mut Vec<String>) {
 }
 
 fn zip_error(error: zip::result::ZipError) -> KernelError {
-    KernelError::new(
-        "E3003",
-        "archive cannot be read",
-        Some(error.to_string()),
-        false,
-    )
+    use zip::result::ZipError;
+    // 密码相关的三种情形各有不同的处置动作，不能都折进"格式不支持"（ADR-0074 §3.3）：
+    // 缺密码 → 补密码；密码错 → 换密码；其余 → 换工具。
+    match &error {
+        ZipError::UnsupportedArchive(message) if *message == ZipError::PASSWORD_REQUIRED => {
+            KernelError::new(
+                "E3008",
+                "archive is encrypted; a password is required",
+                Some("pass the password when applying".to_string()),
+                false,
+            )
+        }
+        ZipError::InvalidPassword => KernelError::new(
+            "E3009",
+            "archive password is wrong or the archive is damaged",
+            Some(error.to_string()),
+            false,
+        ),
+        _ => KernelError::new(
+            "E3003",
+            "archive cannot be read",
+            Some(error.to_string()),
+            false,
+        ),
+    }
 }
 
 fn io_error(path: &str, error: &std::io::Error) -> KernelError {
@@ -389,7 +421,7 @@ mod tests {
             .index;
         let mut content = Vec::new();
         service
-            .extract_entry(zip_path.to_str().unwrap(), index, &mut content)
+            .extract_entry(zip_path.to_str().unwrap(), index, None, &mut content)
             .unwrap();
         assert_eq!(content, b"alpha");
         let _ = fs::remove_dir_all(&dir);
@@ -405,7 +437,7 @@ mod tests {
         assert!(inspect.entries[1].name.as_deref().unwrap().contains(".."));
         let mut output = Vec::new();
         service
-            .extract_entry(path.to_str().unwrap(), 0, &mut output)
+            .extract_entry(path.to_str().unwrap(), 0, None, &mut output)
             .unwrap();
         assert_eq!(output.len(), 41);
         assert!(!output.is_empty());

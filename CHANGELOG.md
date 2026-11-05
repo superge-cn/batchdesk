@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+- **C10 加密包：密码只进执行期，计划里只留一个布尔（[ADR-0074](docs/adr/0074-C10密码包的秘密注入面.md)，2026-11-05）**。这条用例在台账里挂了很久，缺口写的是「密码包/密码错误未做（ADR-0029 登记）」，读起来像"少一个参数"。真拿一个 `zip -P` 的包去跑才发现缺口有三层：平台 `inspect` 走 `zip.by_index`，遇加密条目直接 `UnsupportedArchive(PASSWORD_REQUIRED)`，**连预览都出不来**；计划因此永远生不出一条 `encrypted` 条目；而 `plan_c10` 里那段"遇到加密条目就 E3003"的分支于是成了**死代码**（全仓 `encrypted: true` 零用例）。再往下还有两处同一假设的副本（`select_entries` 与执行器的 `any(|e| e.encrypted || !e.supported)`），只补参数不补这两处，给了密码也照样跳过。
+
+  决策上否决了三条路：密码进计划（`PlanDocument.params`→`StoredPlan`→`StoredJob`→S03 崩溃快照四处落盘，且 C18 幂等 harness 逐字节比较会把它写进日志）、存密码哈希（等于给离线爆破递素材）、继续不支持（E3003 的文案是"格式不支持"，与"需要密码"是完全不同的处置动作）。选定的是**计划只记事实、秘密只进执行期**：`PlanC10Input.password_provided` 声明"执行期会给密码"，成立时计划写 `params.passwordProvided=true`；密码本体走 `ArchiveApplyContext.password`（CLI 是 `apply --password-stdin`，壳层是内存里的 `plan_secrets`，`Job.secret` 不进 `StoredJob`/`PersistedQueue`）。平台侧 `inspect` 改 `by_index_data`（只读中央目录，无需密码），`extract_entry` 走 `by_index_decrypt`，并启用 `zip/aes-crypto`——ZipCrypto 与 AES-128/192/256 都支持，两者各有真实夹具跑通。
+
+  三道门：整单前置（计划声明需要密码而执行期没给 → `E3008`，**未触盘**）、逐条目兜底（选中条目加密且无密码 → `E3008`）、解密失败（`E3009`）。`E3003` 回归"格式/压缩方法不支持"；新增预警 `encrypted-archive`、`password-unused`（设计 06 §2A 61 → 63 类，§2 码表 53 → 55 码位）。空串按"未给"处理（`--password-stdin` 只剥 CR/LF、不 trim，读到空串直接 `E1002`），避免把空密码当成一个有效密码去试。
+
+  **代价写在 ADR §5 里，不是缺陷**：崩溃恢复与重试拿不到密码（秘密只活在内存，且留着旧密码比让用户重输更危险），恢复后执行加密包必报 `E3008`；预览期不校验密码，错密码要到执行期才报 `E3009`。这两条正是 `TC-C10-EXE-04` 由 ⛔ 转 **◐ 而不是 ✅** 的原因。
+
+  验证：`cargo test --workspace` **630 → 640 项**（新增 `crates/platform/tests/archive_password.rs` 6 项：ZipCrypto／AES-256 两条正密码、错密码 E3009 且零产物并可用 undo 清回、缺密码整单前置、空串算缺、无密码也能 inspect 出 `encrypted`；kernel `archive` 9 → 10 项，原"加密即阻断"用例拆成"承诺密码前阻断"与"明文包给密码只告警、不记密码"两条）、CLI 端到端 3 项（其中一条断言 `!plan_file.contains("secret123")`）、壳层 42 → 43 项（`the_archive_password_never_reaches_the_task_snapshot`：走完整队列解出文件后序列化 `PersistedTask`，断言 JSON 里没有 `secret` 字段）、Vitest **81 → 83 项（17 文件）**、Playwright 17 项；`check_locales`（2 × 634 key、55 码位、63 类别）／`check_docs`／`tsc`／`check_dist_csp` 全 0。**先红实证**：加密包在改动前连 `inspect` 都过不去、`plan_c10` 的 E3003 分支永不可达，两点都先用探针跑出了原始报错再动代码。夹具 `fixtures/archive/password/` 破例入库（只能由第三方工具产出，自家 crate 造样本等于让"写"和"读"共用同一处缺陷），理由与两个 SHA-256 记在 `fixtures/archive/README.md`。
+
+  映射表台账随之变化：`TC-C10-EXE-04` ⛔→◐，分布 **✅175／◐88／⛔33 → ✅175／◐89／⛔32**，自动化可达 264 条＝89.2%，执行台账待人工 **33 → 32**。
+
 - **C-2 大文件档补上 F02／F03，并把「33 条待人工」拆成能排期的六组（2026-11-05）**。两件事同一个病根：**把「没测」当成了「测不了」**。
 
   ① 测量夹具 `fixtures/bench/measure.py` 从建起只会跑 `f01`（按字节分片），于是映射表里 `F02-EXE-05`／`F03-EXE-05` 的缺口一栏写着「未测」，读起来像受环境限制——其实是脚本没这个参数。本轮给 c2 场景加了 `--split bytes|lines|parts`（对应 F01／F02／F03），同一台 Linux 机器、同一份 2.05 GiB 数据集（sha256 与轮次 1 一致）跑完两档：**R-07** F02 每片 300 万行→27 片，行数预扫描含在 plan 内（中位 6.368 秒），apply 中位 8.998 秒，合计 15.366 秒，峰值 RSS 4.2 MiB；**R-08** F03 分 9 份，双遍读盘使 plan 升到中位 10.250 秒、apply 7.428 秒，合计 17.400 秒，峰值 RSS 3.9 MiB。两档都校验了「逐片字节总数＝源字节数」与「逐片按名拼接的 sha256＝源哈希」，任一不成立样本作废。**双遍读盘比 F01 慢 6.7 秒不是退化，是行数预扫描＋均分计算的真实代价**——这行数字以前没人量过。

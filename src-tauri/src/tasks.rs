@@ -261,6 +261,11 @@ struct Job {
     kind: StoredJob,
     /// 崩溃时处于 cancelling 的任务，续跑实际是继续回滚；成功后终态记 cancelled。
     cancel_after_rollback: bool,
+    /// C10 解密密码（ADR-0074）：**只在这个运行期结构里**，不进 `StoredJob`
+    /// （它会被 `PersistedQueue` 序列化写盘）、不进任务快照。因此崩溃恢复与手动
+    /// 重试都拿不到密码，加密包任务会以 E3008 失败并要求重新预览——这是"秘密不落盘"
+    /// 的必然代价，不是缺陷。
+    secret: Option<String>,
 }
 
 pub struct TaskQueue {
@@ -372,14 +377,19 @@ impl TaskQueue {
         Self { inner, sender }
     }
 
-    pub fn enqueue_apply(&self, plan: StoredPlan, options: ApplyOptions) -> String {
+    pub fn enqueue_apply(
+        &self,
+        plan: StoredPlan,
+        options: ApplyOptions,
+        secret: Option<String>,
+    ) -> String {
         let task_id = new_ulid(&format!("task:apply:{}", plan.plan.plan_id));
         let job = StoredJob::Apply { plan, options };
         let total = match &job {
             StoredJob::Apply { plan, .. } => plan.plan.entries.len() as u64,
             StoredJob::Undo { .. } => 0,
         };
-        self.insert(&task_id, job, total, None);
+        self.insert(&task_id, job, total, None, secret);
         task_id
     }
 
@@ -400,6 +410,7 @@ impl TaskQueue {
                 plan_id: plan_id.clone(),
             },
             total,
+            None,
             None,
         );
         task_id
@@ -501,11 +512,21 @@ impl TaskQueue {
             job,
             total,
             Some(format!("retry of task {task_id}")),
+            // 重试拿不到密码（ADR-0074 §5.1）：加密包任务重试会以 E3008 失败，
+            // 需要重新预览。留着旧秘密反而会让"重试"读到过期密码。
+            None,
         );
         Ok(retry_task_id)
     }
 
-    fn insert(&self, task_id: &str, job: StoredJob, total: u64, message: Option<String>) -> String {
+    fn insert(
+        &self,
+        task_id: &str,
+        job: StoredJob,
+        total: u64,
+        message: Option<String>,
+        secret: Option<String>,
+    ) -> String {
         let plan_id = job.plan_id();
         let (kind, job_kind) = match &job {
             StoredJob::Apply { plan, .. } => (plan.plan.kind.clone(), TaskJob::Apply),
@@ -557,6 +578,7 @@ impl TaskQueue {
                 task_id: task_id.to_string(),
                 kind: job,
                 cancel_after_rollback: false,
+                secret,
             })
             .is_err()
         {
@@ -767,6 +789,8 @@ impl TaskQueue {
                 task_id: task_id.to_string(),
                 kind: job,
                 cancel_after_rollback,
+                // 恢复路径没有秘密可带（ADR-0074 §5.1）：加密包任务会以 E3008 失败。
+                secret: None,
             })
             .is_err()
         {
@@ -1075,7 +1099,7 @@ fn run_job(inner: &Arc<Inner>, job: Job) {
     inner.mark_started(&job.task_id, control.pause.load(Ordering::SeqCst));
     let mut result = match job.kind {
         StoredJob::Apply { plan, options } => {
-            run_apply(inner, &job.task_id, &control, plan, options)
+            run_apply(inner, &job.task_id, &control, plan, options, job.secret)
         }
         StoredJob::Undo { plan_id } => run_undo(inner, &job.task_id, &control, &plan_id),
     };
@@ -1125,6 +1149,7 @@ fn run_apply(
     control: &Arc<TaskControl>,
     plan: StoredPlan,
     options: ApplyOptions,
+    secret: Option<String>,
 ) -> JobResult {
     let plan_id = plan.plan.plan_id.clone();
     let mut journal = match FileJournal::open(inner.paths.journal_path.clone()) {
@@ -1152,6 +1177,8 @@ fn run_apply(
             protected_dirs: plan.protected_dirs.clone(),
             case_sense: plan.case_sense,
             name_rules: platform::fs::name_rules(),
+            // 执行期秘密（ADR-0074）：只在内存里活到这次执行；计划与快照都不含它。
+            password: secret.as_deref(),
             progress: Some(&sink),
             cancel: Some(control.as_ref()),
         };
@@ -2149,7 +2176,7 @@ mod tests {
             },
             Arc::new(|_, _| {}),
         );
-        let apply_id = queue.enqueue_apply(stored, ApplyOptions::default());
+        let apply_id = queue.enqueue_apply(stored, ApplyOptions::default(), None);
         let applied = wait_terminal(&queue, &apply_id);
         assert_eq!(applied.summary.state, TaskState::Completed);
         assert!(
@@ -2157,6 +2184,82 @@ mod tests {
             "预检放行的计划要真的执行完"
         );
         assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 2);
+    }
+
+    /// ADR-0074 的核心承诺：密码只在内存里走一趟，**不进任务快照**。
+    ///
+    /// 桌面路径上密码从 `planOperation` 的参数进 `AppState.plan_secrets`，`applyPlan`
+    /// 取走后随 `Job` 进执行线程；`StoredJob`／`PersistedQueue` 全程不含它。这条用例
+    /// 走完整条队列（执行成功、文件真的解出来），再回头检查落盘的快照文件里没有密码。
+    #[test]
+    fn the_archive_password_never_reaches_the_task_snapshot() {
+        use kernel::archive::ArchiveService;
+        let dir = TempDir::new();
+        let out = dir.0.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixtures/archive/password/zipcrypto.zip");
+        let service = platform::archive::ZipArchiveService;
+        let inspect = service
+            .inspect(fixture.to_str().unwrap())
+            .expect("inspect password fixture");
+        let plan = kernel::archive::plan_c10(kernel::archive::PlanC10Input {
+            plan_id: new_ulid("c10-password"),
+            archive: fixture.to_string_lossy().into_owned(),
+            archive_size: inspect.archive_size,
+            entries: inspect.entries,
+            output_dir: out.to_string_lossy().into_owned(),
+            max_total_bytes: 10_000,
+            max_ratio: 100.0,
+            existing_targets: Vec::new(),
+            protected_dirs: Vec::new(),
+            case_sense: CaseSense::Sensitive,
+            name_rules: platform::fs::name_rules(),
+            password_provided: true,
+        })
+        .expect("plan encrypted archive");
+        let plan_for_snapshot = plan.clone();
+        let queue_path = dir.0.join("tasks.json");
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: dir.0.join("quarantine"),
+                journal_path: dir.0.join("journal.jsonl"),
+                queue_path: queue_path.clone(),
+                oplog_path: dir.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_, _| {}),
+        );
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+            Some("secret123".to_string()),
+        );
+        let done = wait_terminal(&queue, &task_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        assert_eq!(fs::read(out.join("a.txt")).unwrap(), b"hello zip\n");
+
+        // 落盘的那一层（`PersistedTask`）根本没有密码的位置：`secret` 只活在
+        // 运行期的 `Job` 里。这里直接序列化一次快照 DTO，把"结构上没有这个字段"
+        // 钉成断言——比"跑完再看文件里有没有"可靠（终止态任务会从快照里剪掉，
+        // 那种断言会退化成永真）。
+        let persisted = PersistedTask {
+            summary: done.summary.clone(),
+            job: StoredJob::Apply {
+                plan: stored(plan_for_snapshot),
+                options: ApplyOptions::default(),
+            },
+            entries: Vec::new(),
+        };
+        let json = serde_json::to_string(&persisted).expect("serialize snapshot");
+        assert!(
+            !json.contains("\"secret\""),
+            "任务快照 DTO 不该有 secret 字段：{json}"
+        );
     }
 
     fn write_snapshot(paths: &TaskPaths, task_id: &str, plan: &PlanDocument, state: TaskState) {
@@ -2228,6 +2331,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let applied = wait_terminal(&queue, &apply_id);
         assert_eq!(applied.summary.state, TaskState::Completed);
@@ -2540,6 +2644,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &apply_id);
         assert_eq!(done.summary.state, TaskState::PartialFailed);
@@ -2598,6 +2703,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &apply_id);
         assert_eq!(done.summary.state, TaskState::Failed);
@@ -2641,6 +2747,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &apply_id);
         assert_eq!(done.summary.state, TaskState::Completed);
@@ -2685,6 +2792,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let applied = wait_terminal(&queue, &apply_id);
         assert_eq!(applied.summary.job, TaskJob::Apply);
@@ -2884,6 +2992,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &task_id);
         assert_eq!(done.summary.state, TaskState::Completed);
@@ -2945,6 +3054,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &task_id);
         assert_eq!(done.summary.state, TaskState::Completed);
@@ -3041,6 +3151,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &task_id);
         assert_eq!(done.summary.state, TaskState::Completed);
@@ -3102,6 +3213,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &task_id);
         assert_eq!(done.summary.state, TaskState::Completed);
@@ -3136,6 +3248,7 @@ mod tests {
                 protected_source: ProtectedSource::Params,
             },
             ApplyOptions::default(),
+            None,
         );
         let done = wait_terminal(&queue, &task_id);
         (queue, done)

@@ -102,6 +102,7 @@ const USAGE: &str = "usage:
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c10 --extract <zip> --output-dir <dir>
                 --max-total-bytes <bytes> --max-ratio <n>
+                [--expect-password]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c10 --compress <path>... --output <zip>
                 [--compression store|deflate]
@@ -209,7 +210,7 @@ const USAGE: &str = "usage:
                 [--scope full|stem|ext]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk apply --plan <plan.json> --quarantine-dir <dir> --journal <file>
-                  [--protected-dir <dir>]... [--json]
+                  [--protected-dir <dir>]... [--password-stdin] [--json]
   batchdesk undo --plan <planId> --journal <file> [--retention-days N] [--json]
   batchdesk cleanup --journal <file> --quarantine-dir <dir>
                     [--retention-days N] [--apply] [--json]
@@ -668,11 +669,33 @@ fn main() {
     }
 }
 
+/// 从 stdin 读一行密码（ADR-0074 §3.7）。
+///
+/// 只剥掉行尾的 CR/LF，其余字符原样保留——密码可以含空格，不能 trim。
+/// 空密码按"没给"处理：`by_index_decrypt(b"")` 在 zip 库里是另一个语义（会去解），
+/// 边界上统一成"未提供"，由执行期报 E3008。
+fn read_password_stdin() -> Result<String, String> {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|error| format!("E1004: cannot read the password from stdin: {error}"))?;
+    while line.ends_with('\n') || line.ends_with('\r') {
+        line.pop();
+    }
+    if line.is_empty() {
+        return Err("E1002: --password-stdin read an empty password".to_string());
+    }
+    Ok(line)
+}
+
 fn run_apply(args: &[String]) -> i32 {
     let mut plan_path = None;
     let mut quarantine_dir = None;
     let mut journal_path = None;
     let mut protected_dirs = Vec::new();
+    let mut password_from_stdin = false;
     let mut json = false;
     let mut index = 2;
     while index < args.len() {
@@ -705,6 +728,8 @@ fn run_apply(args: &[String]) -> i32 {
                 };
                 protected_dirs.push(PathBuf::from(value));
             }
+            // 密码只走 stdin（ADR-0074 §3.7）：命令行参数会进 shell 历史与进程列表。
+            "--password-stdin" => password_from_stdin = true,
             "--json" => json = true,
             other => return input_error(format!("E1002: unknown apply argument: {other}")),
         }
@@ -754,6 +779,13 @@ fn run_apply(args: &[String]) -> i32 {
         }
     };
     let license = AlwaysAllowLicense;
+    let password = match password_from_stdin {
+        true => match read_password_stdin() {
+            Ok(password) => Some(password),
+            Err(message) => return input_error(message),
+        },
+        false => None,
+    };
     if plan.kind == C10_KIND {
         let service = platform::archive::ZipArchiveService;
         let mut context = ArchiveApplyContext {
@@ -766,6 +798,7 @@ fn run_apply(args: &[String]) -> i32 {
             protected_dirs,
             case_sense: adapter.case_sensitivity(),
             name_rules: platform::fs::name_rules(),
+            password: password.as_deref(),
             progress: None,
             cancel: None,
         };
@@ -1546,6 +1579,7 @@ fn run_c10(args: &[String]) -> i32 {
     let mut compression = ArchiveCompression::Deflate;
     let mut plan_id = None;
     let mut protected_dirs = Vec::new();
+    let mut password_provided = false;
     let mut json = false;
     let mut index = 2;
     while index < args.len() {
@@ -1630,6 +1664,9 @@ fn run_c10(args: &[String]) -> i32 {
                 };
                 protected_dirs.push(PathBuf::from(value));
             }
+            // 只声明"执行时会提供密码"（ADR-0074 §3.7）；密码本身在 apply 时经
+            // --password-stdin 进入进程，计划里没有它。
+            "--expect-password" => password_provided = true,
             "--json" => json = true,
             other => return input_error(format!("E1002: unknown c10 argument: {other}")),
         }
@@ -1654,6 +1691,10 @@ fn run_c10(args: &[String]) -> i32 {
             return input_error(
                 "E1002: --compress cannot be combined with --extract/--output-dir/limits",
             );
+        }
+        if password_provided {
+            // 加密**创建**属 C36（P1），C10 压缩只产出明文 ZIP（ADR-0074 §3.8）。
+            return input_error("E1002: --expect-password only applies to c10 --extract");
         }
         let Some(output) = output else {
             return input_error("E1001: c10 --compress requires --output <zip>");
@@ -1739,6 +1780,7 @@ fn run_c10(args: &[String]) -> i32 {
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
         name_rules: platform::fs::name_rules(),
+        password_provided,
     });
     match planned {
         Ok(plan) => {

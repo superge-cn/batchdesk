@@ -92,11 +92,15 @@ pub struct ArchiveInspect {
 
 /// 解压端口：平台实现 ZIP 读取，kernel 负责路径/限额/Journal。
 pub trait ArchiveService: Send + Sync {
+    /// 只读中央目录元数据：**不需要密码**，加密包也能列出条目（ADR-0074 §3.1）。
     fn inspect(&self, archive: &str) -> Result<ArchiveInspect, KernelError>;
+    /// 解出一条条目。`password` 为 `None` 时按未加密处理；加密条目缺密码返回 `E3008`，
+    /// 密码不对返回 `E3009`。
     fn extract_entry(
         &self,
         archive: &str,
         index: u64,
+        password: Option<&str>,
         writer: &mut dyn Write,
     ) -> Result<(), KernelError>;
     /// 将输入的源文件/目录打包为 ZIP 字节（UTF-8 文件名）。
@@ -121,6 +125,12 @@ pub struct PlanC10Input {
     pub case_sense: CaseSense,
     /// 目标名合法性规则（平台能力；设计 04 §2.1）。
     pub name_rules: NameRules,
+    /// 执行期是否会提供密码（**不是密码本身**；ADR-0074）。
+    ///
+    /// 含加密条目且为 `false` 时整包 blocked `E3008`；为 `true` 时出计划并在
+    /// `params.passwordProvided` 记下这个事实。密码只经 `ArchiveApplyContext.password`
+    /// 进执行期，不落计划文件。
+    pub password_provided: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -189,7 +199,10 @@ fn select_entries(
 ) -> Selection {
     let mut selection = Selection::default();
     for entry in entries {
-        if entry.encrypted || !entry.supported {
+        // 加密条目照样参与选择：密码由执行期注入（ADR-0074）。此前这里把 encrypted
+        // 一起跳过，等于"就算给了密码也不会解"——三层判断（inspect／blocked／selection）
+        // 都假设"加密＝不支持"，一处漏改就整条链走不通。
+        if !entry.supported {
             continue;
         }
         if entry.gbk_fallback {
@@ -281,26 +294,31 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
         total as f64 / input.archive_size as f64
     };
 
-    let mut blocked = input
-        .entries
-        .iter()
-        .find(|entry| entry.encrypted)
-        .map(|_| PlanBlocked {
-            code: "E3003".to_string(),
-            reason: "encrypted archives are not supported in this slice".to_string(),
-            hint: Some("remove the password and retry".to_string()),
+    // 加密条目的处置（ADR-0074）：计划期只认"执行期会不会给密码"这个事实。
+    // 给不出密码 → 整包 blocked E3008（"需要密码"与"格式不支持"是两种处置动作）；
+    // 给得出 → 出计划，但不是已经能解：密码正确性只有执行期才知道（预览不试解）。
+    let has_encrypted = input.entries.iter().any(|entry| entry.encrypted);
+    let uses_password = has_encrypted && input.password_provided;
+    let mut blocked = if has_encrypted && !input.password_provided {
+        Some(PlanBlocked {
+            code: "E3008".to_string(),
+            reason: "archive is encrypted; a password is required".to_string(),
+            hint: Some(
+                "supply a password and preview again (the password is not stored in the plan)"
+                    .to_string(),
+            ),
         })
-        .or_else(|| {
-            input
-                .entries
-                .iter()
-                .find(|entry| !entry.supported)
-                .map(|_| PlanBlocked {
-                    code: "E3003".to_string(),
-                    reason: "archive entry uses an unsupported compression method".to_string(),
-                    hint: Some("only stored/deflated ZIP entries are supported".to_string()),
-                })
-        });
+    } else {
+        input
+            .entries
+            .iter()
+            .find(|entry| !entry.supported)
+            .map(|_| PlanBlocked {
+                code: "E3003".to_string(),
+                reason: "archive entry uses an unsupported compression method".to_string(),
+                hint: Some("only stored/deflated ZIP entries are supported".to_string()),
+            })
+    };
     if blocked.is_none() && (total > input.max_total_bytes || ratio > input.max_ratio) {
         blocked = Some(PlanBlocked {
             code: "E3007".to_string(),
@@ -329,10 +347,15 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
         Some(block) => block.reason.clone(),
         None if no_safe_entries => "no safe entries to extract".to_string(),
         None => format!(
-            "extract {files} files, {dirs} dirs, total {total} bytes; skipped unsafe={} existing={} protected={}",
+            "extract {files} files, {dirs} dirs, total {total} bytes; skipped unsafe={} existing={} protected={}{}",
             selection.unsafe_names.len(),
             selection.existing_names.len(),
-            selection.protected_names.len()
+            selection.protected_names.len(),
+            if uses_password {
+                "; encrypted entries are decrypted with the password supplied at apply"
+            } else {
+                ""
+            }
         ),
     };
 
@@ -374,6 +397,24 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
             risk_level: RiskLevel::Caution,
         });
     }
+    if uses_password {
+        warnings.push(PlanWarning {
+            kind: "encrypted-archive".to_string(),
+            suggestion: Some(
+                "encrypted entries are decrypted at execution; a wrong password fails the whole archive and preview cannot tell".to_string(),
+            ),
+            risk_level: RiskLevel::Caution,
+        });
+    }
+    if input.password_provided && !has_encrypted {
+        warnings.push(PlanWarning {
+            kind: "password-unused".to_string(),
+            suggestion: Some(
+                "the archive is not encrypted; the supplied password will not be used".to_string(),
+            ),
+            risk_level: RiskLevel::Caution,
+        });
+    }
     if no_safe_entries && blocked.is_none() {
         warnings.push(PlanWarning {
             kind: "no-safe-entries".to_string(),
@@ -399,6 +440,10 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
         "safeCount".to_string(),
         PlanParamValue::Number(selection.selected.len() as u64),
     );
+    // 只有"确实会用到密码"才记这个事实（ADR-0074 §3.2）：计划里没有密码本身。
+    if uses_password {
+        params.insert("passwordProvided".to_string(), PlanParamValue::Bool(true));
+    }
 
     let entries = vec![PlanEntry {
         entry_id: format!("{}-0001", input.plan_id),
@@ -586,6 +631,12 @@ pub struct ArchiveApplyContext<'a> {
     pub case_sense: CaseSense,
     /// 目标名合法性规则（平台能力；设计 04 §2.1）。与计划期同一套，见 `ApplyContext`。
     pub name_rules: NameRules,
+    /// 解密密码（**执行期秘密**，不来自计划文件；ADR-0074）。
+    ///
+    /// 计划里只记 `params.passwordProvided` 这个事实；密码由调用方在内存中持有、
+    /// 执行时注入。为 `None` 而计划要求密码时，执行器整单拒绝（`E3008`），
+    /// 不会"干到一半逐条报错"。空串按 `None` 处理。
+    pub password: Option<&'a str>,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
 }
@@ -616,6 +667,26 @@ pub fn apply_archive_plan(
     if options.on_conflict == OnConflict::Overwrite && !options.overwrite_confirmed {
         return Err(KernelError::invalid_params(
             "overwrite requires explicit confirmation (overwriteConfirmed)",
+        ));
+    }
+    // 秘密前置门（ADR-0074 §3.3）：计划说"执行期会提供密码"却没给，就整单拒绝。
+    // 这与 `case_sense`／`name_rules` 的"两期同源"是同一纪律的显式例外：秘密本身
+    // 不同源（计划里没有），但"必须有密码"这个事实同源（计划里有）。缺席时不进
+    // 条目循环——不消耗授权、不写 Journal、不留半截产物。
+    let password = context.password.filter(|value| !value.is_empty());
+    let password_required = matches!(
+        plan.params.get("passwordProvided"),
+        Some(PlanParamValue::Bool(true))
+    );
+    if password_required && password.is_none() {
+        return Err(KernelError::new(
+            "E3008",
+            "this plan decrypts encrypted entries but no password was supplied",
+            Some(
+                "preview again and pass the password when applying; passwords are never stored in plans or task snapshots"
+                    .to_string(),
+            ),
+            false,
         ));
     }
     let mut reports = Vec::with_capacity(plan.entries.len());
@@ -876,11 +947,10 @@ pub fn apply_archive_plan(
                 continue;
             }
         };
-        if inspect
-            .entries
-            .iter()
-            .any(|item| item.encrypted || !item.supported)
-        {
+        // 执行期只复核"压缩方法"这一条；加密条目不在这里拒绝——它在下面按"有没有
+        // 密码"分流（有密码就解，没密码报 E3008）。ADR-0074：这条与 `select_entries`
+        // 是同一处假设的两个副本，必须同时改。
+        if inspect.entries.iter().any(|item| !item.supported) {
             context.license.release(&plan.kind, 1);
             failed += 1;
             reports.push(ApplyEntryReport {
@@ -888,7 +958,7 @@ pub fn apply_archive_plan(
                 status: ApplyStatus::Failed,
                 error: Some(KernelError::new(
                     "E3003",
-                    "encrypted or unsupported archive entries cannot be extracted",
+                    "archive entry uses an unsupported compression method",
                     None,
                     false,
                 )),
@@ -965,6 +1035,30 @@ pub fn apply_archive_plan(
             });
             continue;
         }
+        // 逐条目兜底（旧计划文件或手改计划）：选中条目里只要有一条加密而没给密码，
+        // 整条 entry 报 E3008 失败——绝不"解一半"。
+        let encrypted_selected = selection.selected.iter().any(|item| {
+            usize::try_from(item.index)
+                .ok()
+                .and_then(|index| inspect.entries.get(index))
+                .is_some_and(|found| found.encrypted)
+        });
+        if encrypted_selected && password.is_none() {
+            context.license.release(&plan.kind, 1);
+            failed += 1;
+            reports.push(ApplyEntryReport {
+                entry_id: entry.entry_id.clone(),
+                status: ApplyStatus::Failed,
+                error: Some(KernelError::new(
+                    "E3008",
+                    "archive is encrypted; a password is required",
+                    Some("preview again and pass the password when applying".to_string()),
+                    false,
+                )),
+                detail: None,
+            });
+            continue;
+        }
         let mut first_error = None;
         let mut failures = 0usize;
         for item in &selection.selected {
@@ -1032,7 +1126,7 @@ pub fn apply_archive_plan(
             let write = context.fs.write_atomic_with(&target, &mut |writer| {
                 context
                     .archive
-                    .extract_entry(&entry.source, item.index, writer)
+                    .extract_entry(&entry.source, item.index, password, writer)
             });
             if let Err(error) = write {
                 first_error.get_or_insert(error);
@@ -1238,6 +1332,7 @@ mod tests {
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
             name_rules: crate::conflict::NameRules::windows(),
+            password_provided: false,
         }
     }
 
@@ -1268,11 +1363,42 @@ mod tests {
     }
 
     #[test]
-    fn plan_blocks_encrypted_entries() {
+    fn plan_blocks_encrypted_entries_until_a_password_is_promised() {
+        // 不给密码 → 需要密码（E3008），而不是"格式不支持"（E3003）。
         let mut item = entry(0, "a.txt", ArchiveEntryKind::File, 1);
         item.encrypted = true;
-        let plan = plan_c10(input(vec![item])).unwrap();
-        assert_eq!(plan.entries[0].blocked.as_ref().unwrap().code, "E3003");
+        let blocked = plan_c10(input(vec![item.clone()])).unwrap();
+        assert_eq!(blocked.entries[0].blocked.as_ref().unwrap().code, "E3008");
+
+        // 承诺执行期给密码 → 出计划，但只记事实，密码本身不进计划。
+        let mut ready = input(vec![item]);
+        ready.password_provided = true;
+        let plan = plan_c10(ready).unwrap();
+        assert!(plan.entries[0].blocked.is_none());
+        assert_eq!(
+            plan.params.get("passwordProvided"),
+            Some(&PlanParamValue::Bool(true))
+        );
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "encrypted-archive"));
+        assert!(plan.entries[0]
+            .reason
+            .contains("decrypted with the password"));
+    }
+
+    #[test]
+    fn plan_warns_but_does_not_record_a_password_for_a_plain_archive() {
+        // 包没加密却声明有密码：发警告，但计划不能把"要密码"记成事实。
+        let mut ready = input(vec![entry(0, "a.txt", ArchiveEntryKind::File, 1)]);
+        ready.password_provided = true;
+        let plan = plan_c10(ready).unwrap();
+        assert!(!plan.params.contains_key("passwordProvided"));
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "password-unused"));
     }
 
     #[test]

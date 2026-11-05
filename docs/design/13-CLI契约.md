@@ -1,6 +1,6 @@
 # 13 CLI 契约（C40，P1）
 
-> 状态：v0.25 草案·占位（不进入阶段 0；2026-10-29 追认 C09 实验切片；2026-10-31 扩展 C01/C02/C03/C10/C11/C12 与 F01–F13 实验命令；2026-11-01 追加 C04、C05 `c05`/`undo --dry-run`、C14 `c14` 与 C07 `c07`，OQ-30；2026-11-02 记录 `f11` 事实采集改为逐级前缀并区分文件/目录，命令面与旗标不变——ADR-0049） ｜ 日期：2026-10-31 ｜ 适用：crates/cli ｜ 权威：方案 §9.5（CLI 与 GUI 共用内核）、§7.1（plan/apply）、01/06
+> 状态：v0.26 草案·占位（不进入阶段 0；2026-11-05 追加 C10 加密包旗标 `--expect-password`／`--password-stdin`——ADR-0074；2026-10-29 追认 C09 实验切片；2026-10-31 扩展 C01/C02/C03/C10/C11/C12 与 F01–F13 实验命令；2026-11-01 追加 C04、C05 `c05`/`undo --dry-run`、C14 `c14` 与 C07 `c07`，OQ-30；2026-11-02 记录 `f11` 事实采集改为逐级前缀并区分文件/目录，命令面与旗标不变——ADR-0049） ｜ 日期：2026-10-31 ｜ 适用：crates/cli ｜ 权威：方案 §9.5（CLI 与 GUI 共用内核）、§7.1（plan/apply）、01/06
 >
 > C40 属 P1；本文件只锁定“CLI 不得另造一套逻辑”的边界与未来命令面的占位，**尚未评审冻结**。
 
@@ -78,3 +78,4 @@ batchdesk config get|set|reset [--scope <scope>] [--json]
 | v0.23 | 2026-11-01 | 台账同步修正：文首状态原停在 v0.18（修订表已至 v0.22），§2.1 追认清单漏登记 C08 `c08` 与 C13 `c13`（v0.19/v0.20 修订行声称已加入但正文未改）；本次补齐两处并使文首与修订表一致。 |
 | v0.24 | 2026-11-02 | `f11 --list --root` 的旗标与命令面不变，但计划期事实由「只探叶子路径」改为**探每一级前缀并区分文件/目录**（`existing_targets`＋`existing_files`）：清单分支的父级位置是文件时，该子树在预览里即标 `parent-is-file`＋skip 并进集中报告，不再拖到 apply 期失败。横切断言：`apply_flow::f11_skips_branches_whose_parent_position_is_an_existing_file`。决策见 [ADR-0049](../adr/0049-逐级前缀事实与集中报告的界面点名.md)。 |
 | v0.25 | 2026-11-02 | `apply` 的执行报告条目新增可选 `detail`（设计 01 v1.41）：C01 转码把非法序列计数写成条目级明细，JSON 输出为 `report.entries[].detail="invalid sequences replaced: N"`，人读输出在同一行尾显示 `— invalid sequences replaced: N`；`--json` 的机器可读结构只增可选字段，命令面与旗标不变。横切断言：`apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry`。决策见 [ADR-0050](../adr/0050-条目级detail的载体与替换计数口径.md)。 |
+| v0.26 | 2026-11-05 | C10 加密包新增两个旗标（ADR-0074）：`c10 --extract` 的 **`--expect-password`** 只声明"执行期会提供密码"这一事实（写成计划的 `params.passwordProvided=true`），`apply` 的 **`--password-stdin`** 才是密码本体的入口（从 stdin 读一行，只剥 CR/LF、不 `trim`，读到空串按未给处理并报 `E1002`）。**密码绝不接受命令行参数**——`argv` 会进 shell 历史与进程列表；也绝不接受写进计划文件。`--expect-password` 与 `--compress` 互斥（压缩侧加密属 C36），同给报 `E1002`。执行期缺密码 → `E3008`（整单前置，未触盘），密码错 → `E3009`；`E3003` 回归"格式/压缩方法不支持"。横切断言：`apply_flow::c10_encrypted_archive_is_blocked_until_the_plan_expects_a_password`、`apply_flow::c10_encrypted_archive_extracts_with_the_password_from_stdin`（内含 `!plan_file.contains("secret123")`）、`apply_flow::c10_encrypted_archive_with_a_wrong_password_reports_e3009`。决策见 [ADR-0074](../adr/0074-C10密码包的秘密注入面.md)。 |

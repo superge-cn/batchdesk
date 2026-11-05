@@ -132,6 +132,12 @@ impl DataPaths {
 
 struct AppState {
     plans: Mutex<HashMap<String, StoredPlan>>,
+    /// C10 解密密码（ADR-0074）：按 planId 暂存，`applyPlan` 取用后即删。
+    ///
+    /// 只活在内存里——`StoredPlan`／`StoredJob` 会被 `PersistedQueue` 序列化写盘，
+    /// 所以密码不进它们；进程重启或崩溃恢复后这张表是空的，加密包任务将以 E3008
+    /// 失败并提示重新预览。
+    plan_secrets: Mutex<HashMap<String, String>>,
     paths: DataPaths,
     tasks: TaskQueue,
 }
@@ -140,6 +146,7 @@ impl AppState {
     fn new(paths: DataPaths, tasks: TaskQueue) -> Self {
         Self {
             plans: Mutex::new(HashMap::new()),
+            plan_secrets: Mutex::new(HashMap::new()),
             paths,
             tasks,
         }
@@ -362,11 +369,13 @@ fn applyPlan(
         return Err(error);
     }
     state.plans.lock().unwrap().remove(&plan_id);
+    // 一次性秘密：取走即从内存表删除（ADR-0074 §3.6）。
+    let secret = state.plan_secrets.lock().unwrap().remove(&plan_id);
     // 方案 §7.7：桌面壳在取消后要问"已完成 N 项，是否一并撤销？"，
     // 因此执行期一律保留已应用条目（Journal 记账不动），答复为"撤销"时再走 undoPlan。
     let mut options = options.unwrap_or_default();
     options.cancel_policy = kernel::apply::CancelPolicy::KeepApplied;
-    let task_id = state.tasks.enqueue_apply(stored, options);
+    let task_id = state.tasks.enqueue_apply(stored, options, secret);
     Ok(TaskHandle { task_id })
 }
 

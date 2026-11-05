@@ -22,6 +22,9 @@ apply_flow::c07_move_plan_apply_and_undo_via_manifest	ok
 apply_flow::c08_rejects_unsafe_rules_and_reports_hit_statistics	ok
 apply_flow::c08_rule_archive_plan_apply_and_undo	ok
 apply_flow::c10_compress_extract_roundtrip_and_self_inclusion	ok
+apply_flow::c10_encrypted_archive_extracts_with_the_password_from_stdin	ok
+apply_flow::c10_encrypted_archive_is_blocked_until_the_plan_expects_a_password	ok
+apply_flow::c10_encrypted_archive_with_a_wrong_password_reports_e3009	ok
 apply_flow::c10_z01_gbk_name_extracts_and_undo_removes_the_product	ok
 apply_flow::c10_z02_rejects_traversal_entries_but_extracts_the_safe_one	ok
 apply_flow::c11_existing_target_is_skipped_and_missing_key_column_blocks	ok
@@ -74,6 +77,12 @@ apply_flow::read_only_rename_target_is_skipped_without_failing_the_task	ok
 apply_flow::temp_dirs_are_unique_for_parallel_tests	ok
 archive_cancel::cancel_before_the_first_entry_touches_nothing	ok
 archive_cancel::cancel_between_items_keeps_extracted_files_and_stays_undoable	ok
+archive_password::aes256_archive_extracts_with_the_right_password	ok
+archive_password::empty_password_counts_as_missing	ok
+archive_password::inspect_lists_encrypted_entries_without_a_password	ok
+archive_password::missing_password_refuses_the_whole_plan_before_touching_disk	ok
+archive_password::wrong_password_fails_the_entry_with_e3009_and_writes_nothing	ok
+archive_password::zipcrypto_archive_extracts_with_the_right_password	ok
 cli::tests::invalid_plan_id_is_rejected	ok
 cli::tests::keep_is_only_valid_with_plan	ok
 cli::tests::plan_defaults_to_earliest	ok
@@ -126,9 +135,10 @@ kernel::archive::tests::compression_plan_skips_existing_target	ok
 kernel::archive::tests::entry_names_reject_traversal_and_absolute_paths	ok
 kernel::archive::tests::existing_and_protected_targets_are_skipped	ok
 kernel::archive::tests::gbk_fallback_is_reported	ok
-kernel::archive::tests::plan_blocks_encrypted_entries	ok
+kernel::archive::tests::plan_blocks_encrypted_entries_until_a_password_is_promised	ok
 kernel::archive::tests::plan_blocks_when_limits_are_exceeded	ok
 kernel::archive::tests::plan_skips_unsafe_entries_and_extracts_safe_ones	ok
+kernel::archive::tests::plan_warns_but_does_not_record_a_password_for_a_plain_archive	ok
 kernel::archive::tests::target_join_stays_under_output_root	ok
 kernel::binary::tests::detects_common_binary_signatures	ok
 kernel::binary::tests::plain_text_and_short_samples_are_not_binary	ok
@@ -658,6 +668,7 @@ shell::tasks::tests::retry_after_orchestration_failure_requeues_all_entries	ok
 shell::tasks::tests::retry_rejects_undo_jobs_running_tasks_and_unknown_ids	ok
 shell::tasks::tests::retry_reruns_only_failed_entries_under_a_new_task_id	ok
 shell::tasks::tests::task_state_events_cover_pause_resume_and_queued_cancel	ok
+shell::tasks::tests::the_archive_password_never_reaches_the_task_snapshot	ok
 shell::tasks::tests::undo_tasks_report_job_undo_while_kind_stays_the_plan_code	ok
 shell::tasks::tests::zip_compress_plan_executes_through_the_desktop_queue_and_undoes	ok
 shell::tests::f11_facts_probe_every_parent_position_and_flag_files	ok
@@ -696,6 +707,8 @@ vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 撤
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 改参数后旧计划立即失效：提示出现且执行/撤销被禁用（T 配方 P4）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 保护目录命中：执行前必须二次确认，且初始焦点不在危险按钮（方案 §3.3/§7.11、U §3.5）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 计划失败时呈现 06 码位而非自由文本	ok
+vitest::FeaturePages.password.test.tsx::C10 解压密码（ADR-0074） 密码字段是 type=password，且只在填写后才进计划请求	ok
+vitest::FeaturePages.password.test.tsx::C10 解压密码（ADR-0074） 不填密码时请求里没有这个字段（后端据此不置 passwordProvided）	ok
 vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 用计划里实际出现的动作存模板，参数快照取 plan.params	ok
 vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 计划含多种动作时拒绝保存，不挑一个把另一部分语义丢掉	ok
 vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 空计划不给存：没有条目就没有动作可存	ok
@@ -732,7 +745,7 @@ vitest::VirtualList.test.tsx::VirtualList 的窗口化 行序号与集合大小�
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 已知码位给出本地化摘要与建议动作，不再把后端英文原文当主文案	ok
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 同一码位在英文下给英文文案	ok
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 未收录的码位退回后端原文而不是空白，并标记未本地化	ok
-vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 设计 06 §2 的码表已全量收口：53 个码位、每码两段	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 设计 06 §2 的码表已全量收口：55 个码位、每码两段	ok
 vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 每个收录码位在中英两个语言包里都有 summary 与 action，且文案不为空	ok
 vitest::errors.test.tsx::错误横幅 渲染码位、本地化摘要与建议动作，且关闭按钮可用	ok
 vitest::errors.test.tsx::错误横幅 未收录码位时仍显示码位与后端原文，不出现 raw key	ok

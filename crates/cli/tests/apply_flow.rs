@@ -49,6 +49,33 @@ fn batchdesk_str(args: &[String]) -> Output {
         .expect("run batchdesk")
 }
 
+/// 带 stdin 的调用（`apply --password-stdin` 用）：密码只走管道，不进 argv。
+fn batchdesk_with_stdin(args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_batchdesk"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batchdesk");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(input.as_bytes())
+        .expect("write password to stdin");
+    child.wait_with_output().expect("wait batchdesk")
+}
+
+/// 加密夹具（第三方工具产出，见 `fixtures/archive/README.md`）。
+fn password_zip(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/archive/password")
+        .join(name)
+}
+
 fn path_text(path: &Path) -> &str {
     path.to_str().expect("test paths are UTF-8")
 }
@@ -5887,4 +5914,176 @@ fn walk_source(root: &Path) -> Vec<(String, u64)> {
         }
     }
     files
+}
+
+// ── C10 密码包（ADR-0074）──────────────────────────────────────────────────
+//
+// 三条端到端断言：计划期只说"会不会给密码"、执行期密码走 stdin、错密码报 E3009。
+
+#[test]
+fn c10_encrypted_archive_is_blocked_until_the_plan_expects_a_password() {
+    let dir = TempDir::new();
+    let output = dir.0.join("out");
+    fs::create_dir_all(&output).unwrap();
+    let archive = password_zip("zipcrypto.zip");
+
+    let plan = batchdesk(&[
+        "c10",
+        "--extract",
+        path_text(&archive),
+        "--output-dir",
+        path_text(&output),
+        "--max-total-bytes",
+        "10000",
+        "--max-ratio",
+        "100",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "预览本身应当成功（blocked 是计划内容，不是命令失败）\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["entries"][0]["blocked"]["code"], "E3008");
+    assert!(
+        document["params"].get("passwordProvided").is_none(),
+        "没承诺密码就不该记这个事实：{}",
+        document["params"]
+    );
+}
+
+#[test]
+fn c10_encrypted_archive_extracts_with_the_password_from_stdin() {
+    let dir = TempDir::new();
+    let output = dir.0.join("out");
+    fs::create_dir_all(&output).unwrap();
+    let archive = password_zip("zipcrypto.zip");
+
+    let plan = batchdesk(&[
+        "c10",
+        "--extract",
+        path_text(&archive),
+        "--output-dir",
+        path_text(&output),
+        "--max-total-bytes",
+        "10000",
+        "--max-ratio",
+        "100",
+        "--expect-password",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c10 加密包预览失败\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let text = String::from_utf8_lossy(&plan.stdout).into_owned();
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(document["entries"][0]["blocked"].is_null());
+    assert_eq!(document["params"]["passwordProvided"], true);
+    assert!(document["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "encrypted-archive"));
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    // 计划文件里不能出现密码——连"承诺过密码"的包也只有那个布尔。
+    let plan_file = fs::read_to_string(dir.0.join("plan.json")).unwrap();
+    assert!(!plan_file.contains("secret123"), "计划文件里出现了密码");
+
+    let apply = batchdesk_with_stdin(
+        &[
+            "apply",
+            "--plan",
+            path_text(&dir.0.join("plan.json")),
+            "--quarantine-dir",
+            path_text(&dir.0.join("quarantine")),
+            "--journal",
+            path_text(&dir.0.join("journal.jsonl")),
+            "--password-stdin",
+            "--json",
+        ],
+        "secret123\n",
+    );
+    assert!(
+        apply.status.success(),
+        "加密包执行失败\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read(output.join("a.txt")).unwrap(),
+        b"hello zip\n",
+        "解出来的内容应当与夹具一致"
+    );
+    assert_eq!(
+        fs::read(output.join("sub").join("b.txt")).unwrap(),
+        b"second\n"
+    );
+}
+
+#[test]
+fn c10_encrypted_archive_with_a_wrong_password_reports_e3009() {
+    let dir = TempDir::new();
+    let output = dir.0.join("out");
+    fs::create_dir_all(&output).unwrap();
+    let archive = password_zip("aes256.zip");
+
+    let plan = batchdesk(&[
+        "c10",
+        "--extract",
+        path_text(&archive),
+        "--output-dir",
+        path_text(&output),
+        "--max-total-bytes",
+        "10000",
+        "--max-ratio",
+        "100",
+        "--expect-password",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    fs::write(dir.0.join("plan.json"), &plan.stdout).unwrap();
+
+    let apply = batchdesk_with_stdin(
+        &[
+            "apply",
+            "--plan",
+            path_text(&dir.0.join("plan.json")),
+            "--quarantine-dir",
+            path_text(&dir.0.join("quarantine")),
+            "--journal",
+            path_text(&dir.0.join("journal.jsonl")),
+            "--password-stdin",
+            "--json",
+        ],
+        "wrong-password\n",
+    );
+    assert!(
+        !apply.status.success(),
+        "错密码不该成功\nstdout:\n{}",
+        String::from_utf8_lossy(&apply.stdout)
+    );
+    // `--json` 下报告走 stdout（一条 failed 报告），错误码在条目级。
+    let outcome: serde_json::Value =
+        serde_json::from_slice(&apply.stdout).expect("apply --json prints an outcome");
+    assert_eq!(outcome["state"], "failed");
+    assert_eq!(
+        outcome["report"]["entries"][0]["error"]["code"], "E3009",
+        "错密码应报 E3009，实际 {}",
+        outcome["report"]["entries"][0]
+    );
+    assert!(!output.join("a.txt").exists(), "错密码不得留下任何产物");
 }

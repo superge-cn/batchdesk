@@ -19,7 +19,7 @@ use kernel::csv::Delimiter;
 use kernel::encoding::PlatformPrior;
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
-use kernel::plan::PlanDocument;
+use kernel::plan::{PlanDocument, PlanParamValue};
 use platform::archive::{existing_paths, inspect_sources, ZipArchiveService};
 use platform::csv_merge::{csv_dedup_inspect, CsvMergeScanOptions};
 use platform::ids::new_ulid;
@@ -363,6 +363,10 @@ pub struct ZipPlanParams {
     pub compression: Option<String>,
     #[serde(default)]
     pub plan_id: Option<String>,
+    /// 解压密码（ADR-0074）：只用于 c10 extract，随计划请求进壳层内存表，
+    /// **不进 PlanDocument**；计划里只留 `params.passwordProvided` 这个布尔。
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 pub fn plan_zip_shell(
@@ -417,7 +421,11 @@ pub fn plan_zip_shell(
                         false,
                     )
                 })?;
-            plan_c10(PlanC10Input {
+            let password_provided = params
+                .password
+                .as_deref()
+                .is_some_and(|value| !value.is_empty());
+            let plan = plan_c10(PlanC10Input {
                 plan_id,
                 archive: archive.to_string_lossy().into_owned(),
                 archive_size: inspect.archive_size,
@@ -429,7 +437,25 @@ pub fn plan_zip_shell(
                 protected_dirs: Vec::new(),
                 case_sense: CaseSense::Sensitive,
                 name_rules: platform::fs::name_rules(),
-            })?
+                password_provided,
+            })?;
+            // 秘密随计划暂存在内存里，`applyPlan` 取用后即删（ADR-0074 §3.6）。
+            // 包没加密时 `passwordProvided` 不会进计划，这里也就不必存秘密
+            // （`password-unused` 警告会提示用户）。
+            let uses_password = plan
+                .params
+                .get("passwordProvided")
+                .is_some_and(|value| matches!(value, PlanParamValue::Bool(true)));
+            if uses_password {
+                if let Some(secret) = params.password.as_ref().filter(|value| !value.is_empty()) {
+                    state
+                        .plan_secrets
+                        .lock()
+                        .unwrap()
+                        .insert(plan.plan_id.clone(), secret.clone());
+                }
+            }
+            plan
         }
         Some("compress") => {
             if params.sources.is_empty() {

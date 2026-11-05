@@ -161,7 +161,9 @@ function planOperationFor(
               archive: form.archive,
               outputDir: form.outputDir,
               maxTotalBytes: Number(form.maxTotalBytes || 0),
-              maxRatio: Number(form.maxRatio || 0)
+              maxRatio: Number(form.maxRatio || 0),
+              // 密码只随计划请求进壳层内存表，计划文档里没有它（ADR-0074）。
+              ...(form.password ? { password: form.password } : {})
             })
       },
       sourcePaths: []
@@ -385,7 +387,7 @@ interface FieldSpec {
   placeholder?: string;
   placeholderKey?: MessageKey;
   wide?: boolean;
-  kind?: "textarea";
+  kind?: "textarea" | "password";
   hintKey?: MessageKey;
 }
 
@@ -651,6 +653,13 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     },
     { name: "maxTotalBytes", labelKey: "feature.field.maxTotalBytes", placeholder: "104857600" },
     { name: "maxRatio", labelKey: "feature.field.maxRatio", placeholder: "100" },
+    {
+      name: "password",
+      labelKey: "feature.field.password",
+      kind: "password",
+      hintKey: "feature.field.passwordHint",
+      wide: true
+    },
     {
       name: "output",
       labelKey: "feature.field.compressOutput",
@@ -948,7 +957,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     label: string,
     name: string,
     placeholder: string,
-    wide = false
+    wide = false,
+    inputType: "text" | "password" = "text",
+    hint?: string
   ) => (
     // key 由调用方在列表里透传（字段网格按 spec 逐项渲染，缺 key 会触发 React 警告）。
     <div className={`field${wide ? " wide" : ""}`} key={name}>
@@ -956,11 +967,15 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
       <input
         id={`${view}-${name}`}
         className="input"
+        type={inputType}
+        // 密码不交给浏览器/密码管理器记住（ADR-0074 §5.4：一次任务一次输入）。
+        autoComplete={inputType === "password" ? "off" : undefined}
         value={form[name] ?? ""}
         onChange={(event) => setField(name, event.target.value)}
         placeholder={placeholder}
         spellCheck={false}
       />
+      {hint && <div className="hint">{hint}</div>}
     </div>
   );
 
@@ -1009,7 +1024,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                     t(spec.labelKey),
                     spec.name,
                     spec.placeholderKey ? t(spec.placeholderKey) : spec.placeholder ?? "",
-                    spec.wide
+                    spec.wide,
+                    spec.kind === "password" ? "password" : "text",
+                    spec.hintKey ? t(spec.hintKey) : undefined
                   )
                 )
               )}

@@ -54,10 +54,10 @@ describe("错误码文案（设计 06 §3／设计 09 §5）", () => {
     expect(isKnownErrorCode("E8999")).toBe(false);
   });
 
-  it("设计 06 §2 的码表已全量收口：53 个码位、每码两段", () => {
+  it("设计 06 §2 的码表已全量收口：55 个码位、每码两段", () => {
     // 收口前只有 21 个码有文案，其余冒到界面就直出壳层英文串（ADR-0061 的缺口）。
     // 这条断言把"码位总数"钉住：漏接一个码，这里就红。
-    expect(ERROR_CODES.length).toBe(53);
+    expect(ERROR_CODES.length).toBe(55);
     for (const segment of ["1", "2", "3", "4", "5", "6", "9"]) {
       expect(
         ERROR_CODES.filter((code) => code.startsWith(`E${segment}`)).length,
