@@ -482,6 +482,105 @@ def check_kind_routing(errors: list[str]) -> None:
         )
 
 
+ASSERTION_TSV = "crates/kernel/tests/assertions.tsv"
+# 只检查「当前陈述」文件；CHANGELOG、ADR 正文、DEVELOPMENT-PLAN §6.1 状态表、
+# manifest 落地记录、映射表批次留痕都是历史，按本文件头约定不检查。
+ASSERTION_CLAIM_FILES = (
+    "AGENTS.md",
+    "docs/README.md",
+    "fixtures/README.md",
+    "fixtures/corpus/manifest.md",
+    "fixtures/corpus/manual-results.md",
+    "docs/testing/README.md",
+    "docs/testing/测试用例库-TC-v0.4.md",
+    "docs/design/TRACEABILITY.md",
+    "docs/DEVELOPMENT-PLAN.md",
+    ".github/workflows/ci.yml",
+)
+ASSERTION_ANCHORS = {
+    # 这两个文件历史状态行极多，只取明确写「当前口径」的锚点行
+    "docs/DEVELOPMENT-PLAN.md": ("| 验证 |",),
+    "docs/testing/README.md": ("| 语料生成 |", "| 代码与测试总览 |", "> **CI 口径**"),
+}
+ASSERTION_SKIP_PREFIXES = ("> **落地记录",)
+# 不带分布数字、但同样已经失效的旧措辞（数字规则抓不到它们）。
+ASSERTION_STALE_PHRASES = (
+    "其余 pending 登记在",
+    "标 pending",
+    "E03/Z01/Z02 待接",
+    "E03 待实现",
+    "E03 仍只有生成与范围核对",
+    "逐条断言 harness 尚未实现",
+    "E03 一条自动化语料的逐条断言",
+    "E03 语料断言；",
+    "其余 16 条自动化语料",
+)
+# 数字前不得紧邻字母/数字，否则 `E03 pending` 会被读成「3 pending」。
+ASSERTION_STATE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s*条?\s*(asserted|partial|pending)")
+
+
+def check_assertion_claims(errors: list[str]) -> None:
+    """语料断言口径以 assertions.tsv 为单一来源，看住各文档里的「当前陈述」。
+
+    动因：2026-11-04 语料收口后，CI 注释、AGENTS、fixtures/README、manual-results、
+    docs/testing/README、TRACEABILITY 等仍写「16 条 pending」「20 asserted／4 partial」
+    「E03 待接」。既有门禁只核 tsv 与 corpus.rs，文档里手抄的第二份数字没人看。
+    """
+    tsv = ROOT / ASSERTION_TSV
+    if not tsv.exists():
+        errors.append(f"找不到 {ASSERTION_TSV}：语料断言口径核对无法进行")
+        return
+    counts = {"asserted": 0, "partial": 0, "pending": 0}
+    rows = 0
+    for raw in tsv.read_text(encoding="utf-8").splitlines():
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        cols = raw.split("\t")
+        if len(cols) < 2 or cols[1] not in counts:
+            errors.append(f"{ASSERTION_TSV}: 状态列无法识别：{raw[:80]}")
+            return
+        counts[cols[1]] += 1
+        rows += 1
+    if rows != 24 or sum(counts.values()) != 24:
+        errors.append(
+            f"语料断言口径自校失败：{ASSERTION_TSV} 解析出 {rows} 条（应为 24）"
+        )
+        return
+
+    positive_files: set[str] = set()
+    for rel in ASSERTION_CLAIM_FILES:
+        path = ROOT / rel
+        if not path.exists():
+            errors.append(f"找不到 {rel}：语料断言口径核对无法进行")
+            continue
+        anchors = ASSERTION_ANCHORS.get(rel)
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.startswith(ASSERTION_SKIP_PREFIXES):
+                continue
+            if anchors and not line.startswith(anchors):
+                continue
+            for match in ASSERTION_STATE_RE.finditer(line):
+                written, state = int(match.group(1)), match.group(2)
+                if written != counts[state]:
+                    errors.append(
+                        f"{rel}:{lineno}: 语料断言口径漂移——写 {written} {state}，"
+                        f"{ASSERTION_TSV} 实为 {counts[state]} {state}"
+                    )
+            for phrase in ASSERTION_STALE_PHRASES:
+                if phrase in line:
+                    errors.append(
+                        f"{rel}:{lineno}: 语料断言口径仍是过期表述「{phrase}」"
+                    )
+            if re.search(rf"(?<![A-Za-z0-9]){counts['asserted']}\s*条?\s*asserted", line):
+                positive_files.add(rel)
+    # 探测器自校：没有任何文件写出当前数字，说明锚点/写法变了，检查会静默永真
+    if len(positive_files) < 3:
+        errors.append(
+            f"语料断言口径自校失败：只有 {len(positive_files)} 个文件写出当前 asserted 数"
+            "——锚点或写法变了，探测器失效＝没有正例"
+        )
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -494,6 +593,7 @@ def main() -> int:
     check_case_ledger(errors)
     check_table_arity(errors)
     check_kind_routing(errors)
+    check_assertion_claims(errors)
 
     if errors:
         print("文档一致性检查失败：")
@@ -503,7 +603,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
+        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、语料断言口径以 assertions.tsv 为单一来源、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
     )
     return 0
 

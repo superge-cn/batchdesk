@@ -14,7 +14,7 @@
 | crates/platform | 共享壳层适配：扫描/哈希、原生 FsAdapter、FileJournal、保留期清理 | 设计 01/04、方案 4.7 |
 | src-tauri | 桌面壳：C09 任务队列/`task://*` 事件、S03 任务快照持久化与 `recoverTask`、S01 `preflightPlan`、IPC 命令、应用数据路径、计划暂存；授权注入待补 | 方案 4.4、设计 01 §4.3–§6、设计 12 |
 | web/ | 表现层：C09 参数/预览/执行/撤销/保留期 UI；事件驱动进度/暂停/取消；无业务与授权逻辑 | 方案 4.2、U v1.3、设计 12 |
-| fixtures/corpus | 28 条异常语料（24 条自动化脚本已就绪；断言 harness 已覆盖 K01–K08＋T01–T08＋R01–R04/R06（含 partial），其余 pending 登记在 `crates/kernel/tests/assertions.tsv`） | T 3.2 |
+| fixtures/corpus | 28 条异常语料（24 条自动化脚本已就绪；断言 harness 已覆盖全部 24 条自动化语料（23 asserted／1 partial（K08）／0 pending），状态以 `crates/kernel/tests/assertions.tsv` 为准） | T 3.2 |
 | fixtures/bench | 性能基准数据集 C-1…C-8 | T 附录 C |
 | fixtures/migrations | 配置 schema 历史样本（不属于 28 条语料） | 设计 03 §7 |
 | docs/design | 设计契约 01–13 | docs/design/README |
@@ -29,7 +29,7 @@
 ## 常用命令
 - 构建：cargo build --workspace
 - 语料生成前的准备（**必须先跑**，否则没有输入样本）：python fixtures/corpus/check_scope.py（范围门禁）→ 依次执行 fixtures/corpus/*/gen_*.py（幂等生成样本）
-- 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成 + `crates/kernel/tests/corpus.rs` 语料断言；**K01–K08＋T01–T08＋R01–R04/R06＋Z01/Z02 已接断言（含 partial）**）
+- 全量测试：`cargo test --workspace`（kernel/platform/CLI 单测 + CLI 集成 + `crates/kernel/tests/corpus.rs` 语料断言；**K01–K08＋T01–T08＋R01–R04/R06＋E03＋Z01/Z02 共 24 条全部已接断言（含 1 条 partial）**）
   - ⚠️ `cargo test` 不生成语料；生成脚本只准备输入，不代表回归已执行。
   - ⚠️ 语料现状：**24 条自动化脚本已就绪、0 条待补**；4 条标「人工」的语料不由 CI 跑（R05/E01/E02/E04，见 fixtures/corpus/manual-only.txt 与 manual-results.md）。**断言 harness 覆盖 K01–K08＋T01–T08＋R01–R04/R06＋Z01/Z02（24 条中 23 条 asserted／1 条 partial（K08）／0 条 pending；E03 与 K04/K05/K07 均于 2026-11-04 收口）**：CI 绿灯仍只代表"生成 + 范围核对 + 单元测试 + 已接入的语料断言通过"，不能表述为"自动化语料零失败"，更不能表述为"语料回归零失败"。
 - 单 crate 测试：`cargo test -p batchdesk-kernel` / `-p batchdesk-platform`（包名带 `batchdesk-` 前缀；`kernel`/`platform` 是 `[lib]` 名，`-p kernel` 会报 package ID 不匹配）

@@ -199,7 +199,7 @@
 | TC-XCT-B2-28 | Z02 | C10 | 自动化 |
 
 > 判定一律取 T §3.2 对应行的"预期行为"（本库不复制）；生成方式见 `fixtures/corpus/{编号}/expected.md`。人工 4 条的执行记录写入 [`fixtures/corpus/manual-results.md`](../../fixtures/corpus/manual-results.md)，**不进 CI 通过率但进阶段级验收**。
-> **自动化口径**：B2 的"自动化"指语料可脚本生成并可进 CI；**逐条断言 harness 尚未实现**，当前 CI 只做生成与范围核对，不能据此判定语料已通过。
+> **自动化口径**：B2 的"自动化"指语料可脚本生成并可进 CI；**逐条断言 harness 已覆盖全部自动化语料**（状态分布见 `crates/kernel/tests/assertions.tsv`），仍有 1 条 partial 未全量闭环，不能据此判定语料已通过。
 > 自动化明细可细化到功能级：如 `TC-F05-EXE-02@T01` 即"F05 的 E2 实例挂 T01"。B2 用例是语料维度的汇总判定，二者通过 `@语料编号` 互指。
 
 ### 4.3 B3 性能基准（方案 §9.1；T 附录 B B3、附录 C）
