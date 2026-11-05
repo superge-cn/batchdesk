@@ -678,7 +678,8 @@ vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 改
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 保护目录命中：执行前必须二次确认，且初始焦点不在危险按钮（方案 §3.3/§7.11、U §3.5）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 计划失败时呈现 06 码位而非自由文本	ok
 vitest::FeaturePages.virtual.test.tsx::功能页计划预览的窗口化（方案 6.2） 3000 条计划只渲染窗口内的行，DOM 行数不随条目数线性增长	ok
-vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 报告出类别、建议与风险级，而不是只有计数	ok
+vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 类别标题走设计 06 §2A 的界面文案，不露出内核 slug	ok
+vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 界面没跟上的类别显示成缺陷，而不是伪装成一条正常文案	ok
 vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 对照：计划没有 warnings 时不得凭空出现集中报告块	ok
 vitest::SettingsPage.test.tsx::设置页 按设计 03 的五组渲染，并逐项标出生效值来源	ok
 vitest::SettingsPage.test.tsx::设置页 改动字段即写 ConfigDocument 的对应 scope	ok
