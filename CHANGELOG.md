@@ -14,7 +14,7 @@
 
   验证：`cargo test --workspace` **621 → 623 项**、壳层 42 项、Vitest **73 → 81 项（16 文件）**、Playwright **16 → 17 项**，`tsc`／`vite build`／`check_locales`（2 × 626 key）／`check_docs`／`check_dist_csp` 全 0。**仍未做**：`loadRecipe` 与一键套用（OQ-36 裁决后才动）、Phase B 多步模板、模板扩展名匹配（`RecipeMatch` 只存不用）、Web/OPFS 适配。
 
-  顺带发现一处门禁缺口并补上：桌面壳是独立 workspace，根 workspace 的 `cargo fmt --all --check` 够不到它，于是 `src-tauri/src/tasks.rs` 里有一处不合 rustfmt 的代码随库多日、本地与 CI 全绿。现已格式化，并在 lint job 增加 `rustfmt（桌面壳独立 workspace）` 一步。
+  顺带发现一处门禁缺口并补上：桌面壳是独立 workspace，根 workspace 的 `cargo fmt --all --check` 够不到它，于是 `src-tauri/src/tasks.rs` 里有一处不合 rustfmt 的代码随库多日、本地与 CI 全绿。现已格式化，并在 lint job 增加 `rustfmt（桌面壳独立 workspace）` 一步（加之前先原样跑过一次：exit 1 且指名该文件行号；CI 首次运行 success）。**CI**：run 41991099699（run 163，head `24b475b`）七 job 全 success，逐 step 核对。
 
 - **「还剩 1 条 partial」这类数字，现在由门禁对着 CSV 核（[ADR-0071](docs/adr/0071-用例覆盖统计以两份CSV为单一来源.md)，2026-11-05）**。K08 收口当天，覆盖映射表重算成 **✅175／◐88／⛔33**、执行台账待人工 33，但有四处还在写旧值：开发计划 §3.3 写「语料断言只剩 1 条 partial（K08）」（它前一天已收口）、同一节写「34 条待人工用例」、FAQ 行写「✅174／◐89／⛔33」且**同一条里又写「34 条待人工行」**（自己跟自己打架）、追踪表测试行与映射表 md 的 §2 汇总写「✅174／◐89」——而那一节的标题恰好是「汇总（**由 CSV 计算，非手填**）」。
 
