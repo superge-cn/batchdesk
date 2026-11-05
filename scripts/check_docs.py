@@ -393,6 +393,95 @@ def check_table_arity(errors: list[str]) -> None:
                 index += 1
 
 
+def _one_line_block(text: str, anchor: str) -> str:
+    """取 anchor 起、到该行末的内容（用于 `export type X = "a" | "b";` 这类单行联合）。"""
+    i = text.find(anchor)
+    if i < 0:
+        return ""
+    j = text.find("\n", i)
+    return text[i : (j if j >= 0 else len(text))]
+
+
+def _paired_block(text: str, anchor: str, opener: str = "{") -> str | None:
+    """取 anchor 之后第一个配对完整的 `\u2026opener X closer\u2026` 块（含边界字符）。
+
+    注意：TS 的类型注解里也有 `{}`，所以数组要用 opener="["，别拿第一个花括号。
+    """
+    closer = {"{": "}", "[": "]"}[opener]
+    i = text.find(anchor)
+    if i < 0:
+        return None
+    open_at = text.find(opener, i)
+    if open_at < 0:
+        return None
+    depth, j = 0, open_at
+    while j < len(text):
+        if text[j] == opener:
+            depth += 1
+        elif text[j] == closer:
+            depth -= 1
+            if depth == 0:
+                return text[open_at : j + 1]
+        j += 1
+    return None
+
+
+def check_kind_routing(errors: list[str]) -> None:
+    """功能码三处清单必须相等：壳层 planOperation 路由 ↔ 导航表 ↔ FeatureView 联合。
+
+    动因：三处此前各抄一份，加一个功能漏一处不会有任何东西变红——
+    路由漏了则用户点页面得到 E1002，导航漏了则功能有路由却没有入口。
+    （c09 工作台不在功能视图里，单独排除；F13 只有内核与 CLI，两侧都不该出现。）
+    """
+    lib = ROOT / "src-tauri" / "src" / "lib.rs"
+    catalog = ROOT / "web" / "src" / "navCatalog.ts"
+    if not lib.exists() or not catalog.exists():
+        errors.append("找不到 src-tauri/src/lib.rs 或 web/src/navCatalog.ts：功能码路由核对无法进行")
+        return
+    lib_text = lib.read_text(encoding="utf-8")
+    cat_text = catalog.read_text(encoding="utf-8")
+
+    fn_start = lib_text.find("fn planOperation(")
+    block = _paired_block(lib_text[fn_start:], "match kind.as_str()") if fn_start >= 0 else None
+    routed = set(re.findall(r'"([fc]\d\d)"', block)) if block else set()
+
+    nav_block = _paired_block(cat_text, "export const NAV_ENTRIES", "[")
+    nav_ids = set(re.findall(r'\{ id: "([fc]\d\d)", label:', nav_block)) if nav_block else set()
+    top_level = _one_line_block(cat_text, "export type TopLevelView =")
+    # 顶层视图（c09 工作台等）不是"功能视图"，比对前先摘掉
+    nav_feature_ids = nav_ids - set(re.findall(r'"([fc]\d\d)"', top_level))
+
+    union_text = cat_text[cat_text.find("export type FeatureView =") : cat_text.find("export type TopLevelView")]
+    view_union = set(re.findall(r'"([fc]\d\d)"', union_text))
+
+    # 探测器自校：任一侧解析为空（或明显缩水）说明锚点/写法变了，检查会静默永真
+    if not (routed and nav_feature_ids and view_union) or len(view_union) < 20:
+        errors.append(
+            f"功能码路由核对自校失败：解析结果异常（路由 {len(routed)}／侧栏功能项 {len(nav_feature_ids)}"
+            f"／FeatureView 联合 {len(view_union)}）——锚点或写法变了，探测器失效＝没有正例"
+        )
+        return
+    routed -= {"c09"}
+    only_shell = sorted(routed - nav_feature_ids)
+    only_nav = sorted(nav_feature_ids - routed)
+    union_vs_nav = view_union ^ nav_feature_ids
+    if only_shell:
+        errors.append(
+            f"壳层 planOperation 路由了 {len(only_shell)} 个功能码但侧栏没有对应视图：{', '.join(only_shell)}"
+            "（有路由无入口＝用户点不到，或该补页面）"
+        )
+    if only_nav:
+        errors.append(
+            f"侧栏有 {len(only_nav)} 个功能视图但壳层未路由：{', '.join(only_nav)}"
+            "（有入口无路由＝用户一点就吃 E1002）"
+        )
+    if union_vs_nav:
+        errors.append(
+            f"FeatureView 联合与 NAV_ENTRIES 的功能项不一致：{', '.join(sorted(union_vs_nav))}"
+            "（同一件事的两份写法，必须同步）"
+        )
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -404,6 +493,7 @@ def main() -> int:
     check_case_map(errors)
     check_case_ledger(errors)
     check_table_arity(errors)
+    check_kind_routing(errors)
 
     if errors:
         print("文档一致性检查失败：")
@@ -413,7 +503,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
+        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
     )
     return 0
 
