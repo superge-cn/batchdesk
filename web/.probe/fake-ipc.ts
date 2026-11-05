@@ -38,6 +38,11 @@ export const state = {
   planCalls: 0,
   settledState: "cancelled" as string,
   planNull: false,
+  listOverride: null as { items: unknown[]; total: number } | null,
+  listReject: null as unknown,
+  cancelCalls: [] as string[],
+  retryCalls: [] as string[],
+  recoverCalls: Array<[string, string]>,
   planOverride: null as Record<string, unknown> | null,
   getTaskNull: false,
   undoCalls: [] as string[],
@@ -59,6 +64,11 @@ export function resetState(navigation?: UiNavigation) {
   state.undoCalls = [];
   state.settledState = "cancelled";
   state.planNull = false;
+  state.listOverride = null;
+  state.listReject = null;
+  state.cancelCalls = [];
+  state.retryCalls = [];
+  state.recoverCalls = [];
   state.planOverride = null;
   state.getTaskNull = false;
   state.calls = { getConfig: 0, setConfig: 0, resetScope: 0 };
@@ -73,6 +83,8 @@ export async function getIpcMeta() {
   return { contractVersion: 1, kernelVersion: "0.0.0", version: "test", commands: [], events: [] };
 }
 export async function listTasks() {
+  if (state.listReject) throw state.listReject;
+  if (state.listOverride) return state.listOverride;
   return { items: [], total: 0 };
 }
 export async function getTask(taskId: string) {
@@ -112,11 +124,13 @@ export async function undoPlan(planId: string) {
 export async function undoDryRun() {
   return { entries: [] };
 }
-export async function cancelTask() {
+export async function cancelTask(taskId: string) {
+  state.cancelCalls.push(taskId);
   return undefined;
 }
-export async function retryTask() {
-  return { taskId: "task-retry" };
+export async function retryTask(taskId: string) {
+  state.retryCalls.push(taskId);
+  return { taskId: taskId + "-RETRY" };
 }
 export async function pauseTask() {
   return undefined;
@@ -124,8 +138,9 @@ export async function pauseTask() {
 export async function resumeTask() {
   return undefined;
 }
-export async function recoverTask() {
-  return { taskId: "task-recover" };
+export async function recoverTask(taskId: string, action: string) {
+  state.recoverCalls.push([taskId, action]);
+  return { taskId: taskId + "-RECOVER" };
 }
 export async function cleanupRetention() {
   return { removedEntries: 0, removedLogRecords: 0 };

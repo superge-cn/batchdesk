@@ -18,7 +18,7 @@ const redirectIpc = {
 // 输出 CJS + 全部裸包外置：让 Node 自己解析 react/lucide（CJS 与 ESM 都能混用），
 // 避免把 CJS 包塞进 ESM bundle 后出现 "Dynamic require is not supported"。
 await build({
-  entryPoints: [path.join(here, "entry-settings.tsx"), path.join(here, "entry-app.tsx"), path.join(here, "entry-cancel.tsx"), path.join(here, "entry-errors.tsx"), path.join(here, "entry-nav.tsx"), path.join(here, "entry-warnings.tsx"), path.join(here, "entry-i18n.tsx")],
+  entryPoints: [path.join(here, "entry-settings.tsx"), path.join(here, "entry-app.tsx"), path.join(here, "entry-cancel.tsx"), path.join(here, "entry-errors.tsx"), path.join(here, "entry-nav.tsx"), path.join(here, "entry-warnings.tsx"), path.join(here, "entry-i18n.tsx"), path.join(here, "entry-tasks.tsx")],
   outdir: here,
   outExtension: { ".js": ".cjs" },
   bundle: true,

@@ -29,6 +29,7 @@ node --import ./globals.mjs entry-errors.cjs                     # 错误文案�
 node --import ./globals.mjs entry-nav.cjs                        # 23 视图导航可达 16 项（约 30–60 秒，逐视图打印进度）
 node --import ./globals.mjs entry-warnings.cjs                   # 功能页集中报告 7 项
 node --import ./globals.mjs entry-i18n.cjs                       # i18n 取词/插值/语言主题切换 18 项
+node --import ./globals.mjs entry-tasks.cjs                      # 任务与撤销视图 29 项
 ```
 
 `--import ./globals.mjs` 必须在入口之前跑：它先建 jsdom，再把 `window`/`document`/`navigator`
@@ -41,6 +42,7 @@ node --import ./globals.mjs entry-i18n.cjs                       # i18n 取词/�
 | `entry-settings.cjs` 7 项 | `SettingsPage.test.tsx`「本机界面状态」2 项 | 区块渲染；点击调用回调一次并给出提示；**`setConfig`/`resetScope` 零调用**；不传回调时按钮 disabled |
 | `entry-app.cjs` 11 项 | `App.uiState.test.tsx` 5 项 | 启动预填上次目录＋候选；生成预览后回写（去重置顶、`lastSection` 不被擦）；无记录不预填不渲染候选；启动回到上次功能页；切页写回 `lastSection` |
 | `entry-cancel.cjs` 12 项 | `App.cancel-review.test.tsx` 5 项 | 取消且有已完成项→询问（数量/已落盘文案/初始焦点在「保留」）；确认→`undoPlan(planId)` 且关框；保留→不撤销；零完成/undo 任务/正常完成三个对照都不打扰 |
+| `entry-tasks.cjs` 29 项 | `TaskHistory.test.tsx` 9 项 | 列表如实呈现（总数/状态/进度）；功能码给名字不露内部编码；在跑可取消、失败可重试、撤销按 `planId` 走 `undoPlan`；中断任务给续跑/回滚/放弃而非取消；**回滚任务不给二次撤销/重试（判据是 job 不是 kind）**；实时事件态覆盖静态快照；加载失败走本地化文案＋码位句柄、不渲染后端原文 |
 | `entry-i18n.cjs` 18 项 | `i18n.test.tsx` 7 项 | `interpolate` 插值（缺参数保留占位符）；两语言各自成文；占位符集合一致；切语言即时生效＋`document.lang`＋写 `general.language`；切主题落 `dataset.theme`＋写 `general.theme`；无 Provider 默认中文；界面无裸 key |
 | `entry-warnings.cjs` 7 项 | `FeaturePages.warnings.test.tsx` 3 项 | F11 集中报告逐项点名：类别走界面文案（不露内核 slug）＋`caution` 风险级＋建议行保留内核原文；未登记类别显示成缺陷（`未登记的预警类别（…）`）；对照——无 warnings 时不得凭空出现 `.warnings` 块 |
 | `entry-nav.cjs` 16 项 | `App.navigation.test.tsx` 6 项 | **23 个功能视图逐个可达**（标题＋生成计划预览＋撤销，防"import 了 FeaturePages 却不渲染"的历史缺陷回归）；默认 C09 且可经「返回 C09」返回；任务与撤销真视图（标题＋空队列指引）；设置五分组＋界面语言 zh-CN；处理模板真渲染＋列表非空＋OQ-36 写明＋不给假「应用」按钮 |
