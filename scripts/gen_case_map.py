@@ -309,7 +309,7 @@ add("F02",
             corpus_cell(["T06"])[1]),
         4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::estimate_lines`/`split_layout_by_lines` 流式",
-            "行数预扫描进度实测未跑；本轮 C-2 只测 F01（results.md R-04…R-06），F02 档未测"),
+            "C-2 全量档已实测（results.md R-07：2 GiB 源按 300 万行/片切成 27 片，行数预扫描含在 plan 内＝中位 6.368 秒，apply 中位 8.998 秒，峰值 RSS 4.2 MiB，逐片按名拼接 sha256＝源哈希）；Windows 实机重测未跑"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
@@ -334,7 +334,7 @@ add("F03",
             corpus_cell(["T06"])[1]),
         4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::split_layout_by_parts`（预扫描＋第二遍流式）",
-            "双遍读盘进度实测未跑；本轮 C-2 只测 F01（results.md R-04…R-06），F03 档未测"),
+            "C-2 全量档已实测（results.md R-08：2 GiB 源分 9 份，双遍读盘使 plan 中位 10.250 秒、apply 中位 7.428 秒，峰值 RSS 3.9 MiB，逐片按名拼接 sha256＝源哈希）；Windows 实机重测未跑"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
@@ -622,10 +622,11 @@ add("C01",
         2: (corpus_cell(["K01"])[0], CI, "corpus.rs::k01_gbk_sample_detects_as_gb18030_and_transcodes_clean", corpus_cell(["K01"])[1]),
         3: (corpus_cell(["K06"])[0], CI, "corpus.rs::k06_binary_magic_is_rejected_by_c02_plan", corpus_cell(["K06"])[1]),
         4: (corpus_cell(["K07"])[0], CI, "corpus.rs::k07_mixed_encoding_is_flagged_not_repaired", corpus_cell(["K07"])[1]),
-        5: ("⛔", MANUAL_CARRIER, "generic_apply edit-content 分支（整文件读入）＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm（edit-content 臂，覆盖本行「执行中取消」部分）"
+        5: ("⛔", MANUAL_CARRIER, "kernel `encoding::TranscodeRewriter`（源编码已知时 64 KiB 逐块流式，ADR-0055）"
+            "＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm（edit-content 臂，覆盖本行「执行中取消」部分）"
             "＋apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry"
             "＋generic_apply::tests::edit_content_carries_detail_per_entry_and_keeps_it_absent_when_not_produced",
-            "实现缺口：>10 MB 流式转码未做（整文件读入内存）；**替换计数上报已做**＝条目级 detail（`apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry` ＋kernel `generic_apply` 的 detail 用例）；C-2 级实测本轮只覆盖 F01"),
+            "实现已流式（ADR-0055：源编码已知时 64 KiB 逐块 `read`→`StreamTranscoder`→`write`；未知编码回退整段检测，而 `plan_c01` 对不确定编码本就 E3001 阻断）；**替换计数上报已做**＝条目级 detail；缺口只剩 C-2 档实测未跑（夹具 `--split` 已支持，见 `docs/testing/Windows实机日检查清单-v0.1.md` §3）"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply（E2010）", "本功能部分失败注入未测"),
@@ -675,7 +676,7 @@ add("C03",
         3: (corpus_cell(["K06"])[0], CI, "corpus.rs::K06（C02 接入的魔数管道）", corpus_cell(["K06"])[1]),
         4: ("◐", CI, "apply_flow::c03_csv_cell_mode_preserves_quoted_newlines（T01 台账＝asserted）",
             "CSV 单元格模式会把记录终止符规范化为 LF，源 CRLF 未保留"),
-        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 流式（plain/cell 按 ADR-0057、可界定正则按 ADR-0064）＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂取消）", "大输入内存实测归 C-1／C-2 的 Windows 重测；界定不出的正则（无界量词/锚点/\\b/分组量化/零宽）仍整段"),
+        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 流式（plain/cell 按 ADR-0057、可界定正则按 ADR-0064）＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂取消）", "实现边界已明确：plain 与 CSV 单元格路已流式（ADR-0057），regex 路仅在静态可算窗口内流式（ADR-0064），无界量词/锚点/`\\b`/分组量化/零宽仍整段；缺口＝C-2 档实测未跑（须按模式分别记录，见 `docs/testing/Windows实机日检查清单-v0.1.md` §3）"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply", "本功能部分失败注入未测"),

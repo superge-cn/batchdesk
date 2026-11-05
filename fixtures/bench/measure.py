@@ -11,7 +11,9 @@ docs/testing/性能基准执行手册.md §3–§4。本脚本只测量与记录
 前置：cargo build --release；数据集先生成（fixtures/bench/C-1…/gen_c1.py、C-2…/gen_c2.py）。
 用法：
     python3 fixtures/bench/measure.py c1
-    python3 fixtures/bench/measure.py c2 --rss-limit-mib 1024
+    python3 fixtures/bench/measure.py c2 --rss-limit-mib 1024              # F01 按字节
+    python3 fixtures/bench/measure.py c2 --split lines --lines 3000000     # F02 按行数
+    python3 fixtures/bench/measure.py c2 --split parts --parts 9           # F03 按份数
 """
 
 from __future__ import annotations
@@ -109,12 +111,21 @@ def measure_c1(tag: str, rss_limit_mib: int) -> dict:
             "total_wall_s": round(plan["wall_s"] + apply_["wall_s"], 3)}
 
 
-def measure_c2(tag: str, target_bytes: int, rss_limit_mib: int) -> dict:
-    d = workdir(tag)
+def measure_c2(tag: str, split: str, target_bytes: int, target_lines: int, n_parts: int,
+               rss_limit_mib: int) -> dict:
+    d = workdir(f"c2-{split}-{tag}")
     (d / "parts").mkdir()
     plan_path = d / "plan.json"
     src_bytes = C2_SRC.stat().st_size
-    plan = run([str(BIN), "f01", "--file", str(C2_SRC), "--target-bytes", str(target_bytes),
+    # 三种分片策略的构造参数互不相同：F01 按字节、F02 按行数（需先预扫描行数）、
+    # F03 按份数（行数预扫描后均分）。参数只影响数据集构造，不是产品阈值。
+    if split == "bytes":
+        plan_args = ["f01", "--target-bytes", str(target_bytes)]
+    elif split == "lines":
+        plan_args = ["f02", "--lines", str(target_lines)]
+    else:
+        plan_args = ["f03", "--parts", str(n_parts)]
+    plan = run([str(BIN), *plan_args, "--file", str(C2_SRC),
                 "--output-dir", str(d / "parts"), "--json"], plan_path, rss_limit_mib)
     apply_ = run([str(BIN), "apply", "--plan", str(plan_path), "--quarantine-dir", str(d / "q"),
                   "--journal", str(d / "j.json"), "--json"], d / "apply.out", rss_limit_mib)
@@ -128,7 +139,8 @@ def measure_c2(tag: str, target_bytes: int, rss_limit_mib: int) -> dict:
         with part.open("rb") as fh:
             for block in iter(lambda: fh.read(8 * 1024 * 1024), b""):
                 digest.update(block)
-    return {"tag": tag, "src_bytes": src_bytes, "n_parts": len(parts), "part_bytes": part_bytes,
+    return {"tag": tag, "split": split, "src_bytes": src_bytes, "n_parts": len(parts),
+            "part_bytes": part_bytes,
             "part_sizes": [p.stat().st_size for p in parts], "parts_sha256": digest.hexdigest(),
             "plan": plan, "apply": apply_,
             "total_wall_s": round(plan["wall_s"] + apply_["wall_s"], 3),
@@ -157,20 +169,30 @@ def summarise(rows: list[dict]) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description="C-1／C-2 基准测量（预热 1＋正式 3）")
     p.add_argument("scenario", choices=["c1", "c2"])
+    p.add_argument("--split", choices=["bytes", "lines", "parts"], default="bytes",
+                   help="C-2 的分片策略：bytes=F01、lines=F02（行数预扫描）、parts=F03（双遍读盘）")
     p.add_argument("--target-bytes", type=int, default=256 * 1024 * 1024,
                    help="C-2 分片目标字节（构造参数，非产品阈值；默认 256 MiB）")
+    p.add_argument("--lines", type=int, default=3_000_000,
+                   help="C-2 每片行数（构造参数；默认 300 万行 ≈ 9 片）")
+    p.add_argument("--parts", type=int, default=9,
+                   help="C-2 份数（构造参数；默认 9 份）")
     p.add_argument("--rss-limit-mib", type=int, default=1024,
                    help="RSS 保险丝上限（MiB，0=关闭）：超过即终止子进程并停测")
     a = p.parse_args()
     for path in (BIN, C1_ROOT if a.scenario == "c1" else C2_SRC):
         if not path.exists():
             raise SystemExit(f"前置缺失：{path}（先 cargo build --release 并生成数据集）")
-    measure = (lambda t: measure_c1(t, a.rss_limit_mib)) if a.scenario == "c1" else \
-        (lambda t: measure_c2(t, a.target_bytes, a.rss_limit_mib))
+    if a.scenario == "c1":
+        measure = lambda t: measure_c1(t, a.rss_limit_mib)  # noqa: E731
+    else:
+        measure = lambda t: measure_c2(t, a.split, a.target_bytes, a.lines, a.parts,  # noqa: E731
+                                       a.rss_limit_mib)
     rows = [measure("warm")] + [measure(f"run{i}") for i in (1, 2, 3)]
     for r in rows:
         print(json.dumps(r, ensure_ascii=False), flush=True)
-    print(json.dumps({"scenario": a.scenario, **summarise(rows[1:])}, ensure_ascii=False), flush=True)
+    print(json.dumps({"scenario": a.scenario, "split": a.split, **summarise(rows[1:])},
+                     ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":
