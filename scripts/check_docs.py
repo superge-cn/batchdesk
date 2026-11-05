@@ -52,6 +52,9 @@ CANCEL_ANCHOR_KEYS = (
     "task_state_events_cover_pause_resume_and_queued_cancel",
     "e2e-tauri",
 )
+# 设计索引行（`| [01](./01-….md) | 标题 | 状态… |`）与版本号 token（允许 `v1` 这种主版本写法）。
+DESIGN_ROW_RE = re.compile(r"^\|\s*\[(\d\d)\]\(\./([^)]+)\)\s*\|")
+DESIGN_VERSION_RE = re.compile(r"v(\d+(?:\.\d+)?)")
 
 
 def md_files() -> list[Path]:
@@ -581,6 +584,80 @@ def check_assertion_claims(errors: list[str]) -> None:
         )
 
 
+def _version_tuple(raw: str) -> tuple[int, int]:
+    major, _, minor = raw.partition(".")
+    return int(major), int(minor or 0)
+
+
+def check_design_index_versions(errors: list[str]) -> None:
+    """设计索引每行写的版本，必须是该契约正文的「当前版本」。
+
+    动因：设计 01/06/09/12 在最近几批里都升过版，索引那行却停在旧号——读者第一站
+    （docs/design/README.md）看到 v1.48／v1.4／v0.3／v0.19，正文已是 v1.49／v1.5／
+    v0.7／v0.21。索引是「这个仓库现在按哪一版契约做事」的第一个答案，它错了比正文
+    错更贵：没人会去正文对一遍。既有门禁核过基线版本，但设计契约的索引版本没人看。
+
+    口径：当前版本＝max（状态行版本，修订表中最大版本号）；索引行、状态行都必须等于它。
+    """
+    index_path = ROOT / "docs/design/README.md"
+    if not index_path.is_file():
+        errors.append("docs/design/README.md: 不存在——设计索引版本核对无法进行")
+        return
+    checked = 0
+    for lineno, line in enumerate(index_path.read_text(encoding="utf-8").splitlines(), 1):
+        row = DESIGN_ROW_RE.match(line)
+        if not row:
+            continue
+        number, file_name = row.group(1), row.group(2)
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 3:
+            errors.append(f"docs/design/README.md:{lineno}: 第 {number} 号行不足三列")
+            continue
+        index_match = DESIGN_VERSION_RE.search(cells[2])
+        doc_path = Path("docs/design") / file_name
+        if not (ROOT / doc_path).is_file():
+            errors.append(f"docs/design/README.md:{lineno}: 契约文件不存在 -> {file_name}")
+            continue
+        doc_lines = (ROOT / doc_path).read_text(encoding="utf-8").splitlines()
+        status_line = next(
+            (item for item in doc_lines[:6] if item.lstrip().startswith("> 状态")), None
+        )
+        status_match = DESIGN_VERSION_RE.search(status_line) if status_line else None
+        revision = max(
+            (
+                _version_tuple(match.group(1))
+                for item in doc_lines
+                if re.match(r"^\|\s*v\d", item)
+                if (match := DESIGN_VERSION_RE.search(item))
+            ),
+            default=None,
+        )
+        if index_match is None or status_match is None:
+            errors.append(
+                f"docs/design/README.md:{lineno}: 第 {number} 号版本核对失效"
+                f"（索引{'有' if index_match else '无'}版本、"
+                f"状态行{'有' if status_match else '无'}版本）——锚点变了，不静默通过"
+            )
+            continue
+        current = max(_version_tuple(status_match.group(1)), revision or (0, 0))
+        if _version_tuple(index_match.group(1)) != current:
+            errors.append(
+                f"docs/design/README.md:{lineno}: 第 {number} 号索引写 v{index_match.group(1)}，"
+                f"正文当前 v{current[0]}.{current[1]}"
+            )
+        elif _version_tuple(status_match.group(1)) != current:
+            errors.append(
+                f"{doc_path}: 状态行写 v{status_match.group(1)}，修订表已到 "
+                f"v{current[0]}.{current[1]}——升版时漏改状态行"
+            )
+        checked += 1
+    if checked < 14:
+        errors.append(
+            f"设计索引版本核对自校失败：只解析到 {checked} 行（应为 14）"
+            "——行格式变了，核对会静默永真"
+        )
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -594,6 +671,7 @@ def main() -> int:
     check_table_arity(errors)
     check_kind_routing(errors)
     check_assertion_claims(errors)
+    check_design_index_versions(errors)
 
     if errors:
         print("文档一致性检查失败：")
@@ -603,7 +681,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、语料断言口径以 assertions.tsv 为单一来源、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
+        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、语料断言口径以 assertions.tsv 为单一来源、设计索引版本＝正文当前版本、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
     )
     return 0
 
