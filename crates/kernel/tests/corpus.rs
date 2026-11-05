@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use kernel::conflict::{scan_conflicts, ConflictKind};
 use kernel::csv::{
-    plan_f05, CsvRecord, CsvRecordScanner, CsvSplitAccumulator, CsvSplitBasis, CsvSplitLayout,
-    Delimiter, PlanF05File, PlanF05Input,
+    plan_f05, validate_layout, CsvRecord, CsvRecordScanner, CsvSplitAccumulator, CsvSplitBasis,
+    CsvSplitLayout, Delimiter, PlanF05File, PlanF05Input, Utf16Order,
 };
 use kernel::csv_merge::{
     build_union, column_keys, normalized_columns, parse_records, plan_f06, union_names,
@@ -212,6 +212,7 @@ fn csv_layout(
         true,
         tail.unclosed_quote,
         Some(SourceEncoding::Utf8),
+        None,
     );
     (layout, records, tail.tail, tail.unclosed_quote)
 }
@@ -683,7 +684,7 @@ fn k05_short_ascii_sample_defaults_to_utf8_and_prompts_in_the_plan() {
 }
 
 #[test]
-fn k08_utf16_bom_sample_detects_and_transcodes_clean() {
+fn k08_utf16_bom_sample_detects_transcodes_and_splits_with_a_bom_per_part() {
     let data = sample("K08", "K08.csv");
     let detection = detect(&data, PlatformPrior::Other);
     assert_eq!(detection.encoding, Some(SourceEncoding::Utf16Le));
@@ -701,6 +702,69 @@ fn k08_utf16_bom_sample_detects_and_transcodes_clean() {
     assert!(output.had_bom_input);
     let text = String::from_utf8(output.bytes).expect("输出必须是合法 UTF-8");
     assert_utf8_lines(&text, 6, 4);
+
+    // T v1.12 §3.2 K08 的预期行为：分片后**每片均写 BOM**（方案 §5.2 判定、§5.3 输出编码）。
+    // 表头 + 5 条数据行按每片 2 行切 → 3 片。
+    let mut scanner = CsvRecordScanner::new_utf16(b',', Utf16Order::LittleEndian);
+    let mut accumulator = CsvSplitAccumulator::new_rows(2, true).expect("row split basis");
+    scanner.feed(&data, |record| accumulator.push_record(record));
+    let tail = scanner.finish();
+    if let Some(record) = tail.tail {
+        accumulator.push_record(record);
+    }
+    let layout = accumulator.finish(
+        data.len() as u64,
+        Delimiter::Comma,
+        true,
+        tail.unclosed_quote,
+        Some(SourceEncoding::Utf16Le),
+        Some(Bom::Utf16Le),
+    );
+    validate_layout(&layout).expect("K08 分片布局必须连续覆盖整个文件");
+    assert_eq!(layout.records, 6, "表头 + 5 条数据行");
+    assert_eq!(layout.shards.len(), 3);
+    assert_eq!(layout.header.expect("识别出表头").start, 0);
+
+    let plan = plan_f05(PlanF05Input {
+        plan_id: PLAN_ID.to_string(),
+        basis: CsvSplitBasis::Rows(2),
+        keep_header: true,
+        delimiter: None,
+        output_dir: "parts".to_string(),
+        protected_dirs: Vec::new(),
+        case_sense: CaseSense::Sensitive,
+        existing_targets: Vec::new(),
+        files: vec![PlanF05File {
+            path: "K08.csv".to_string(),
+            canonical_path: None,
+            group_id: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8".to_string(),
+            layout: layout.clone(),
+        }],
+    })
+    .expect("plan_f05 生成计划");
+    assert_eq!(plan.entries.len(), 3, "6 条记录按 2 行/片 → 3 片");
+    assert!(
+        data.starts_with(&[0xFF, 0xFE]),
+        "K08 样本本身以 UTF-16LE BOM 开头"
+    );
+    for entry in &plan.entries {
+        assert!(
+            entry.blocked.is_none(),
+            "带 BOM 的 UTF-16 应可直通分片：{:?}",
+            entry.blocked
+        );
+        let csv = entry.csv.as_ref().expect("F05 载荷");
+        // 表头区间从 0 起且含 BOM：每片复制出的首段字节已带 BOM，不能再补一个。
+        assert_eq!(csv.header.expect("保留表头").start, 0);
+        assert_eq!(csv.shard_bom, None, "不得重复写 BOM");
+        assert_eq!(
+            entry.expected.as_ref().expect("期望字节数").size,
+            csv.header.expect("表头").end - csv.header.expect("表头").start
+                + entry.range.expect("记录区间").end
+                - entry.range.expect("记录区间").start,
+            "期望字节数＝表头区间＋记录区间（首片已含 BOM，不另加前缀）"
+        );
+    }
 }
 
 #[test]

@@ -8,7 +8,7 @@ K04	asserted	走统计判定（②严格 UTF-8 不通过→③ chardetng 给候�
 K05	asserted	默认 UTF-8（encoding=Utf8、needs_manual=false）＋note 说明「纯 ASCII/过短」；并断言提示已进入条目 reason（界面可见），且无需转换的 skip 分支同样带 note	—
 K06	asserted	魔数探测：plan_c02 对 PNG 样本产出 blocked E3001（binary file signature）；plan_c01 仍以控制字符/解码错误兜底	—
 K07	asserted	needs_manual=true（不自动采用）；plan_c01 blocked E3001；note 写明「疑似混合编码／不承诺修复／建议人工处理」（结构判据：整段非法 UTF-8，但可切成「legacy 半段＋合法多字节 UTF-8 半段」各自无损）	只做标注不做定位报告（哪一段是什么编码）；混合文件的自动修复本就不在契约内
-K08	partial	detect 判定 UTF-16LE+BOM；转码 UTF-8 替换计数 0、6 行	分片后每片写 BOM 属 F05 输出策略，未实现
+K08	asserted	detect 判定 UTF-16LE+BOM；转码 UTF-8 替换计数 0、6 行；F05 按码元投影扫描分片（表头+5 行→每片 2 行的 3 片），每片均写 BOM：保留表头时表头区间自带、不保留表头时第 2 片起由 `PlanCsvSplit.shardBom` 补写前缀；CLI 实测三片产物逐片以 FF FE 开头且可解出表头/记录	—
 T01	asserted	未闭合引号：扫描器 tail 保留为末条记录且 unclosed_quote=true；plan_f05 产出 unclosed-quote 警告；物理行数多于解析记录数（吞行按末条记录处理）	—
 T02	asserted	引号内换行不切记录：扫描记录=9（表头+8 数据）、至少一条 multiline；parse_records 9 行且字段含换行；plan_f05 每记录一片 8 片、区间覆盖表头后全文件；F09 platform 选中含引号换行记录仍为一条（csv_range）	—
 T03	asserted	plan_f01 产出 overlong-line-single-part 警告；超长行独占一片（part 2，size > target）	—

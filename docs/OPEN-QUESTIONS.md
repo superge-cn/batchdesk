@@ -16,7 +16,7 @@
 | OQ-05 | 云端身份、登录/匿名、配额账本与服务端 SLA | 产品/后端 | **已确认（2026-10-28，用户按推荐）**：v1 匿名＋登录、付费档后置、服务端账本 | 02 §7、05 §7、设计 07 草案 | 设计 07 评审后实现；SLA/限流由运维配置 |
 | OQ-06 | 更新检查的防降级实现与更新源/签名密钥管理 | 工程/运维 | **已确认（2026-10-28，用户按推荐）**：独立密钥＋签名清单＋`minVersion`；不做自动回滚 | ADR-0007、设计 11 草案、方案 §9.7 | 设计 11 评审后实现；更新源/密钥托管待定 |
 | OQ-07 | R05/C-5 的“有限重试”次数与退避参数 | 产品/工程 | **已确认并收编（2026-10-28，用户）**：3 次重试，退避 2/4/8 秒 | 产品方案 v1.18 §4.9、§11.6-25 | 已收编；C-5 按此执行 |
-| OQ-08 | 24 条自动化语料的逐条断言 harness | 工程/测试 | **切片（2026-11-04 复跑核对）**：`crates/kernel/tests/corpus.rs`＋`assertions.tsv` 已落地，24 条中 **23 asserted／1 partial（K08）／0 pending**；K04/K05/K07 与 E03 同日收口。剩 K08 一条等 **F05 的输出编码/BOM 策略**（另一件功能，不是断言没写）；CI 跑生成＋范围＋哈希幂等＋已接入断言 | `fixtures/README.md`、`docs/testing/README.md` | `crates/kernel/tests/corpus.rs` + `assertions.tsv`；先 K01/T01/E03/Z02 |
+| OQ-08 | 24 条自动化语料的逐条断言 harness | 工程/测试 | **已收口（2026-11-05 复跑核对）**：`crates/kernel/tests/corpus.rs`＋`assertions.tsv` 已落地，24 条 **24 asserted／0 partial／0 pending**；K08 由 F05 每片写 BOM（ADR-0070）收口，K04/K05/K07 与 E03 于 2026-11-04 收口；CI 跑生成＋范围＋哈希幂等＋全部 24 条断言 | `fixtures/README.md`、`docs/testing/README.md` | `crates/kernel/tests/corpus.rs` + `assertions.tsv`；先 K01/T01/E03/Z02 |
 | OQ-09 | SBOM 工具选型 | 工程 | **已闭环（2026-10-28 用户确认；2026-10-29 CI 验证）**：cargo-cyclonedx | ADR-0008、CI deny job | CI deny job 已全绿（run 40872864062：根 + src-tauri 的 deny/SBOM 产出与 4 份 artifact 上传）；工具仅构建期，不进运行时依赖 |
 | OQ-10 | 英文界面的排版/文案长度/U token 覆盖 | 视觉/产品 | **已确认并收编（2026-10-28，用户按推荐）**：U v1.2 补英文 fallback 规则；T v1.11 B8 补 UI 用例 | U v1.2 §2.2.3；T v1.11 B8；设计 09 | 已收编 |
 | OQ-11 | 项目源代码许可证与 `Cargo.toml` 的 `license` 字段 | 法务/产品 | **已确认并落地（2026-10-28，用户）**：专有/All rights reserved | `LICENSE`、`Cargo.toml` license | 已添加 `LICENSE` 与 `LicenseRef-Proprietary`；后续变更走法务 |

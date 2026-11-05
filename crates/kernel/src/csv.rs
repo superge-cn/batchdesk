@@ -9,13 +9,15 @@
 //! - 默认**每片都保留表头**，v1 仅支持单行表头（多行表头阻断，不猜测）；
 //! - 列数与表头不一致的记录只**计数上报**，不静默修正；
 //! - 引号不闭合至文件尾 → 剩余内容按末条记录保留并告警（T01）；
-//! - UTF-16 源需先经 C01 转码（字节级解析无法处理双字节字符），计划条目阻断。
+//! - UTF-16 源按**码元投影**扫描（结构字符只可能是 ASCII），带 BOM 的源可直通分片：
+//!   每片都必须自带 BOM，否则分片无法被识别（方案 §5.1 BOM 策略、§5.3 输出编码）；
+//!   无 BOM 的 UTF-16 无法确定重写形态，仍要求先经 C01 转码，计划条目阻断（E3001）。
 //!
 //! 本切片只做**源字节直通**（不转码）；产物编码跟随源文件。
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::encoding::SourceEncoding;
+use crate::encoding::{Bom, SourceEncoding};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::path::{normalize, protected_by, try_normalize, ProtectedDir};
@@ -82,6 +84,56 @@ pub struct CsvRecord {
     pub multiline: bool,
 }
 
+/// UTF-16 码元顺序（由 BOM 判定给出；分片按源字节直通，扫描需按码元投影）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Utf16Order {
+    LittleEndian,
+    BigEndian,
+}
+
+impl Utf16Order {
+    /// 由源编码取码元顺序；非 UTF-16 返回 `None`。
+    pub const fn from_encoding(encoding: SourceEncoding) -> Option<Self> {
+        match encoding {
+            SourceEncoding::Utf16Le => Some(Self::LittleEndian),
+            SourceEncoding::Utf16Be => Some(Self::BigEndian),
+            _ => None,
+        }
+    }
+
+    /// 把两个字节合成一个码元。
+    const fn combine(self, first: u8, second: u8) -> u16 {
+        match self {
+            Self::LittleEndian => u16::from_le_bytes([first, second]),
+            Self::BigEndian => u16::from_be_bytes([first, second]),
+        }
+    }
+}
+
+/// 把 UTF-16 字节序列投影成「每个码元一字节」的骨架：ASCII 码元保留原字节，
+/// 非 ASCII 码元置 `0x00`。
+///
+/// RFC 4180 的结构字符（分隔符、引号、CR、LF）只可能是 ASCII（方案 §5.3），
+/// 因此投影足以定位记录边界；非 ASCII 码元一律视为不透明内容。样本嗅探
+/// （[`sniff_delimiter`]）对它同样适用。
+pub fn utf16_projection(bytes: &[u8], order: Utf16Order) -> Vec<u8> {
+    let mut projected = Vec::with_capacity(bytes.len() / 2);
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        let unit = order.combine(bytes[index], bytes[index + 1]);
+        projected.push(if unit < 0x80 { unit as u8 } else { 0x00 });
+        index += 2;
+    }
+    projected
+}
+
+/// 扫描单位：单字节编码逐字节，UTF-16 逐码元（记录长度仍按源字节计）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScanCodec {
+    SingleByte,
+    Utf16(Utf16Order),
+}
+
 /// RFC 4180 记录扫描器（纯状态机：按块喂字节，跨块保持引号状态）。
 #[derive(Clone, Debug)]
 pub struct CsvRecordScanner {
@@ -93,10 +145,25 @@ pub struct CsvRecordScanner {
     record_len: u64,
     columns: u64,
     multiline: bool,
+    codec: ScanCodec,
+    /// UTF-16 模式下跨块留下的半个码元。
+    pending: Option<u8>,
+    /// UTF-16 模式下首码元可能是 BOM，需要识别并跳过结构判定。
+    bom_pending: bool,
 }
 
 impl CsvRecordScanner {
     pub fn new(delimiter: u8) -> Self {
+        Self::with_codec(delimiter, ScanCodec::SingleByte)
+    }
+
+    /// UTF-16 源的扫描器：按码元投影后仍走同一状态机，记录长度按源字节计
+    /// （每码元 2 字节，含 BOM——分片的字节区间必须覆盖源文件全体）。
+    pub fn new_utf16(delimiter: u8, order: Utf16Order) -> Self {
+        Self::with_codec(delimiter, ScanCodec::Utf16(order))
+    }
+
+    fn with_codec(delimiter: u8, codec: ScanCodec) -> Self {
         Self {
             delimiter,
             in_quotes: false,
@@ -105,6 +172,9 @@ impl CsvRecordScanner {
             record_len: 0,
             columns: 1,
             multiline: false,
+            codec,
+            pending: None,
+            bom_pending: matches!(codec, ScanCodec::Utf16(_)),
         }
     }
 
@@ -113,54 +183,112 @@ impl CsvRecordScanner {
     where
         F: FnMut(CsvRecord),
     {
-        for &byte in bytes {
-            if self.in_quotes {
-                if self.after_quote {
-                    if byte == b'"' {
-                        // `""`：引号转义，仍在引号内。
-                        self.after_quote = false;
-                        self.record_len += 1;
-                        continue;
-                    }
-                    // 闭合引号后的普通字节：退出引号，按引号外规则处理本字节。
-                    self.in_quotes = false;
-                    self.after_quote = false;
-                } else {
-                    if byte == b'"' {
-                        self.after_quote = true;
-                    } else if byte == b'\n' {
-                        self.multiline = true;
-                    }
-                    self.record_len += 1;
-                    continue;
+        match self.codec {
+            ScanCodec::SingleByte => {
+                for &byte in bytes {
+                    self.step(byte, 1, &mut on_record);
                 }
             }
+            ScanCodec::Utf16(order) => self.feed_utf16(bytes, order, &mut on_record),
+        }
+    }
 
-            self.record_len += 1;
-            if self.field_start && byte == b'"' {
-                self.in_quotes = true;
-                self.field_start = false;
-            } else if byte == self.delimiter {
-                self.columns += 1;
-                self.field_start = true;
-            } else if byte == b'\n' {
-                on_record(CsvRecord {
-                    len: self.record_len,
-                    columns: self.columns,
-                    multiline: self.multiline,
-                });
-                self.record_len = 0;
-                self.columns = 1;
-                self.field_start = true;
-                self.multiline = false;
-            } else {
-                self.field_start = false;
+    fn feed_utf16<F>(&mut self, bytes: &[u8], order: Utf16Order, on_record: &mut F)
+    where
+        F: FnMut(CsvRecord),
+    {
+        let mut index = 0;
+        if let Some(first) = self.pending.take() {
+            let Some(&second) = bytes.first() else {
+                self.pending = Some(first);
+                return;
+            };
+            self.push_unit(order.combine(first, second), on_record);
+            index = 1;
+        }
+        while index + 1 < bytes.len() {
+            let unit = order.combine(bytes[index], bytes[index + 1]);
+            self.push_unit(unit, on_record);
+            index += 2;
+        }
+        if index < bytes.len() {
+            self.pending = Some(bytes[index]);
+        }
+    }
+
+    fn push_unit<F>(&mut self, unit: u16, on_record: &mut F)
+    where
+        F: FnMut(CsvRecord),
+    {
+        if self.bom_pending {
+            self.bom_pending = false;
+            if unit == 0xFEFF {
+                // BOM 只计长度、不参与结构判定：源字节直通时分片的区间要覆盖它，
+                // 但它不是字段内容的起点（首字段以引号开头时仍须识别为引号）。
+                self.record_len += 2;
+                return;
             }
+        }
+        let projected = if unit < 0x80 { unit as u8 } else { 0x00 };
+        self.step(projected, 2, on_record);
+    }
+
+    /// 单个"结构字符"推进状态机；`len` 是该字符在源文件里占的字节数。
+    fn step<F>(&mut self, byte: u8, len: u64, on_record: &mut F)
+    where
+        F: FnMut(CsvRecord),
+    {
+        if self.in_quotes {
+            if self.after_quote {
+                if byte == b'"' {
+                    // `""`：引号转义，仍在引号内。
+                    self.after_quote = false;
+                    self.record_len += len;
+                    return;
+                }
+                // 闭合引号后的普通字节：退出引号，按引号外规则处理本字节。
+                self.in_quotes = false;
+                self.after_quote = false;
+            } else {
+                if byte == b'"' {
+                    self.after_quote = true;
+                } else if byte == b'\n' {
+                    self.multiline = true;
+                }
+                self.record_len += len;
+                return;
+            }
+        }
+
+        self.record_len += len;
+        if self.field_start && byte == b'"' {
+            self.in_quotes = true;
+            self.field_start = false;
+        } else if byte == self.delimiter {
+            self.columns += 1;
+            self.field_start = true;
+        } else if byte == b'\n' {
+            on_record(CsvRecord {
+                len: self.record_len,
+                columns: self.columns,
+                multiline: self.multiline,
+            });
+            self.record_len = 0;
+            self.columns = 1;
+            self.field_start = true;
+            self.multiline = false;
+        } else {
+            self.field_start = false;
         }
     }
 
     /// 扫描结束：返回未以换行结束的末条记录与"引号未闭合"信号。
-    pub fn finish(self) -> CsvScanTail {
+    pub fn finish(mut self) -> CsvScanTail {
+        if self.pending.take().is_some() {
+            // UTF-16 源长度非偶数（数据损坏）：残余字节仍属最后一条记录，
+            // 计入长度以保证分片区间连续覆盖文件，内容按源字节原样带出。
+            self.record_len += 1;
+        }
         let tail = (self.record_len > 0).then_some(CsvRecord {
             len: self.record_len,
             columns: self.columns,
@@ -285,8 +413,11 @@ pub struct CsvSplitLayout {
     pub dirty_rows: u64,
     pub multi_line_header: bool,
     pub unclosed_quote: bool,
-    /// 源编码（仅用于阻断 UTF-16：字节级解析无法正确处理双字节字符）。
+    /// 源编码（UTF-16 已按码元投影扫描；无 BOM 的 UTF-16 仍在计划层阻断）。
     pub source_encoding: Option<SourceEncoding>,
+    /// 源文件开头的 BOM。UTF-16/UTF-32 分片**每片都必须写 BOM**，否则分片无法被
+    /// 识别（方案 §5.1 BOM 策略）；UTF-8/GBK 等单字节编码为 `None`（不需要补写）。
+    pub shard_bom: Option<Bom>,
 }
 
 /// 逐记录累积分片边界（纯计算，内存 O(分片数)）。
@@ -398,6 +529,7 @@ impl CsvSplitAccumulator {
         delimiter_detected: bool,
         unclosed_quote: bool,
         source_encoding: Option<SourceEncoding>,
+        shard_bom: Option<Bom>,
     ) -> CsvSplitLayout {
         self.close_current();
         CsvSplitLayout {
@@ -412,6 +544,7 @@ impl CsvSplitAccumulator {
             multi_line_header: self.multi_line_header,
             unclosed_quote,
             source_encoding,
+            shard_bom,
         }
     }
 
@@ -571,6 +704,14 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
                 &input.output_dir,
                 &crate::split::shard_name(file_name, shard.index, total),
             );
+            // 每片都必须自带 BOM。表头区间从 0 起时（保留表头、或首片不含表头），
+            // 复制出的字节本身已含 BOM，不能再补一个；其余分片补写前缀。
+            let first_range_start = file
+                .layout
+                .header
+                .map_or(shard.start, |header| header.start);
+            let shard_bom = file.layout.shard_bom.filter(|_| first_range_start > 0);
+            let prefix_bytes = shard_bom.map_or(0, |bom| bom.bytes().len() as u64);
             let target_block = target_block(&target, &input.protected_dirs, input.case_sense);
             let key = conflict_key(&target, input.case_sense);
             let duplicate_in_batch = !batch.insert(key.clone());
@@ -602,6 +743,9 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
             if file.layout.header.is_some() {
                 reason.push_str("; header repeated");
             }
+            if shard_bom.is_some() {
+                reason.push_str("; BOM re-emitted for this part");
+            }
             if shard.dirty_rows > 0 {
                 reason.push_str(&format!(
                     "; {} row(s) drifted from header",
@@ -625,7 +769,7 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
                 resolution: conflict.as_ref().map(|_| PlanResolution::Sequence),
                 blocked: source_block.clone().or(blocked.clone()).or(target_block),
                 expected: Some(PlanExpected {
-                    size: header_size + shard.len(),
+                    size: prefix_bytes + header_size + shard.len(),
                     algorithm: "csv-byte-range".to_string(),
                     hash: None,
                 }),
@@ -638,6 +782,7 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
                         start: header.start,
                         end: header.end,
                     }),
+                    shard_bom,
                     delimiter: delimiter.as_str().to_string(),
                     rows: shard.rows,
                     dirty_rows: shard.dirty_rows,
@@ -678,13 +823,16 @@ pub fn plan_f05(input: PlanF05Input) -> Result<PlanDocument, KernelError> {
 }
 
 fn file_block(layout: &CsvSplitLayout) -> Option<PlanBlocked> {
+    // 带 BOM 的 UTF-16 可以直通：每片补写同一个 BOM 即可被识别（方案 §5.1）。
+    // 无 BOM 的 UTF-16 没有可复用的 BOM 形态，重写会改变源字节语义，仍要求先转码。
     if matches!(
         layout.source_encoding,
         Some(SourceEncoding::Utf16Le | SourceEncoding::Utf16Be)
-    ) {
+    ) && layout.shard_bom.is_none()
+    {
         return Some(PlanBlocked {
             code: "E3001".to_string(),
-            reason: "UTF-16 CSV must be transcoded before splitting".to_string(),
+            reason: "UTF-16 CSV without a BOM must be transcoded before splitting".to_string(),
             hint: Some(
                 "run C01 (transcode to UTF-8/GB18030) first, then split the CSV".to_string(),
             ),
@@ -875,6 +1023,36 @@ mod tests {
             true,
             tail.unclosed_quote,
             Some(SourceEncoding::Utf8),
+            None,
+        )
+    }
+
+    fn utf16le(text: &str) -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// 按块喂入（含**奇数长度块**）：UTF-16 模式下半个码元必须跨块接续。
+    fn scan_utf16_chunks(bytes: &[u8], chunk: usize, keep_header: bool) -> CsvSplitLayout {
+        let mut scanner = CsvRecordScanner::new_utf16(b',', Utf16Order::LittleEndian);
+        let mut accumulator = CsvSplitAccumulator::new_rows(1, keep_header).unwrap();
+        for piece in bytes.chunks(chunk) {
+            scanner.feed(piece, |record| accumulator.push_record(record));
+        }
+        let tail = scanner.finish();
+        if let Some(record) = tail.tail {
+            accumulator.push_record(record);
+        }
+        accumulator.finish(
+            bytes.len() as u64,
+            Delimiter::Comma,
+            true,
+            tail.unclosed_quote,
+            Some(SourceEncoding::Utf16Le),
+            Some(Bom::Utf16Le),
         )
     }
 
@@ -949,6 +1127,120 @@ mod tests {
             split.feed(chunk, |record| split_records.push(record));
         }
         assert_eq!(whole_records, split_records);
+    }
+
+    /// K08 / 方案 §5.1：UTF-16 的换行与分隔符在字节层被 NUL 隔开，必须按码元投影扫描；
+    /// 记录长度仍按源字节计（每码元 2 字节），否则分片区间会切错位置。
+    #[test]
+    fn utf16_scanner_projects_code_units_and_counts_source_bytes() {
+        let bytes = utf16le("h1,h2\r\n1,2\r\n3,4\r\n");
+        let layout = scan_utf16_chunks(&bytes, bytes.len(), true);
+        assert_eq!(layout.records, 3);
+        assert_eq!(layout.header.expect("表头").end, 16);
+        assert_eq!(layout.shards.len(), 2);
+        assert_eq!((layout.shards[0].start, layout.shards[0].end), (16, 26));
+        assert_eq!((layout.shards[1].start, layout.shards[1].end), (26, 36));
+        assert_eq!(layout.file_size, 36);
+        validate_layout(&layout).expect("UTF-16 布局必须连续覆盖文件");
+    }
+
+    /// 奇数长度块会把一个码元劈成两半：跨块接续不能丢字节，也不能错判结构字符。
+    #[test]
+    fn utf16_scanner_survives_odd_chunk_boundaries() {
+        let bytes = utf16le("姓名,部门\r\n张伟,行政部\r\n");
+        let whole = scan_utf16_chunks(&bytes, bytes.len(), true);
+        for chunk in [1usize, 3, 5, 7] {
+            let split = scan_utf16_chunks(&bytes, chunk, true);
+            assert_eq!(split.header, whole.header, "chunk={chunk}");
+            assert_eq!(split.shards, whole.shards, "chunk={chunk}");
+            assert_eq!(split.records, whole.records, "chunk={chunk}");
+        }
+    }
+
+    /// 中文码元的高位字节可能恰好是 0x0A/0x2C 之类的 ASCII 结构字符（如「上」= U+4E0A
+    /// 在 UTF-16LE 下是 `4E 0A`）；按字节扫描会把记录从中间切断。
+    #[test]
+    fn utf16_scanner_ignores_structural_bytes_inside_wide_characters() {
+        // 「上,下」的 LE 字节：4E 0A 2C 00 4E 0B
+        let mut bytes = utf16le("");
+        bytes.extend_from_slice(&[0x4E, 0x0A, 0x2C, 0x00, 0x4E, 0x0B, 0x0D, 0x00, 0x0A, 0x00]);
+        let mut scanner = CsvRecordScanner::new_utf16(b',', Utf16Order::LittleEndian);
+        let mut records = Vec::new();
+        scanner.feed(&bytes, |record| records.push(record));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].columns, 2);
+        assert_eq!(records[0].len, 12, "BOM 2 + 五个码元（各 2 字节）");
+    }
+
+    /// 方案 §5.1：UTF-16 分片**每片**都要 BOM。保留表头时表头区间含 BOM（首片自带），
+    /// 不保留表头时第 2 片起必须补写前缀，且期望字节数要把它算进去。
+    #[test]
+    fn plan_f05_writes_a_bom_on_every_utf16_part() {
+        let bytes = utf16le("h1,h2\r\n1,2\r\n3,4\r\n");
+        let keep = scan_utf16_chunks(&bytes, bytes.len(), true);
+        let plan = plan_f05(input(vec![file("a.csv", keep)], CsvSplitBasis::Rows(1)))
+            .expect("UTF-16 带 BOM 可直通分片");
+        assert_eq!(plan.entries.len(), 2);
+        for entry in &plan.entries {
+            assert!(entry.blocked.is_none(), "带 BOM 的 UTF-16 不该阻断");
+            let csv = entry.csv.as_ref().unwrap();
+            assert_eq!(csv.shard_bom, None, "表头区间已含 BOM，不能重复写");
+            assert_eq!(csv.header.unwrap().start, 0);
+            assert_eq!(entry.expected.as_ref().unwrap().size, 16 + 10);
+        }
+
+        let without_header = scan_utf16_chunks(&bytes, bytes.len(), false);
+        let mut plan_input = input(vec![file("a.csv", without_header)], CsvSplitBasis::Rows(1));
+        plan_input.keep_header = false;
+        let plan = plan_f05(plan_input).expect("不保留表头同样可直通");
+        // 不保留表头时首条记录也是数据行，三条记录各成一片。
+        assert_eq!(plan.entries.len(), 3);
+        let first = plan.entries[0].csv.as_ref().unwrap();
+        assert_eq!(first.shard_bom, None, "首片区间从 0 起，源字节已含 BOM");
+        assert_eq!(plan.entries[0].expected.as_ref().unwrap().size, 16);
+        let second = plan.entries[1].csv.as_ref().unwrap();
+        assert_eq!(
+            second.shard_bom,
+            Some(Bom::Utf16Le),
+            "第 2 片起必须补写 BOM"
+        );
+        assert_eq!(
+            plan.entries[1].expected.as_ref().unwrap().size,
+            2 + 10,
+            "前缀要计入期望字节数"
+        );
+        assert!(plan.entries[1]
+            .reason
+            .contains("BOM re-emitted for this part"));
+    }
+
+    /// 无 BOM 的 UTF-16 没有可复用的前缀形态：仍按 E3001 阻断，提示先走 C01。
+    #[test]
+    fn plan_f05_blocks_utf16_without_a_bom() {
+        let layout = CsvSplitLayout {
+            file_size: 8,
+            delimiter: Delimiter::Comma,
+            delimiter_detected: true,
+            header: None,
+            header_columns: 0,
+            shards: vec![CsvShard {
+                index: 1,
+                start: 0,
+                end: 8,
+                rows: 1,
+                dirty_rows: 0,
+            }],
+            records: 1,
+            dirty_rows: 0,
+            multi_line_header: false,
+            unclosed_quote: false,
+            source_encoding: Some(SourceEncoding::Utf16Le),
+            shard_bom: None,
+        };
+        let plan = plan_f05(input(vec![file("a.csv", layout)], CsvSplitBasis::Rows(1))).unwrap();
+        let blocked = plan.entries[0].blocked.as_ref().expect("无 BOM 必须阻断");
+        assert_eq!(blocked.code, "E3001");
+        assert!(blocked.reason.contains("without a BOM"));
     }
 
     #[test]
@@ -1110,14 +1402,17 @@ mod tests {
     }
 
     #[test]
-    fn plan_blocks_utf16_source_and_multi_line_header() {
+    fn plan_blocks_utf16_without_bom_and_multi_line_header() {
         let mut utf16 = scan(
             b"h1,h2\n1,2\n",
             Delimiter::Comma,
             true,
             CsvSplitBasis::Rows(1),
         );
+        // 带 BOM 的 UTF-16 已可直通分片（每片补写 BOM，见 utf16_scanner_* 与
+        // plan_f05_writes_a_bom_on_every_utf16_part）；这里只钉无 BOM 的形态仍阻断。
         utf16.source_encoding = Some(SourceEncoding::Utf16Le);
+        assert_eq!(utf16.shard_bom, None);
         let plan = plan_f05(input(vec![file("u.csv", utf16)], CsvSplitBasis::Rows(1))).unwrap();
         assert_eq!(plan.entries[0].blocked.as_ref().unwrap().code, "E3001");
 
@@ -1194,6 +1489,7 @@ mod tests {
             multi_line_header: false,
             unclosed_quote: false,
             source_encoding: Some(SourceEncoding::Utf8),
+            shard_bom: None,
         };
         assert!(plan_f05(input(vec![file("b.csv", broken)], CsvSplitBasis::Rows(1))).is_err());
     }

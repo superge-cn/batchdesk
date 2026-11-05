@@ -8,7 +8,7 @@
 >
 > 补充说明：T v1.12 §3.2 的"特征"列未逐条复制到本表（本表以"构造方式摘要"定位语料）；如需按特征检索，请直接查 §3.2 对应行。
 >
-> **范围口径（已确认）**：CI 的语料步骤**只处理"自动化"子集**，`人工` 的 4 条**显式排除**并单列跟踪。**当前 CI 已执行 K01–K08、T01–T08、R01–R04/R06、Z01/Z02、E03 的断言（23 asserted／1 partial）**；因此 CI 绿灯仍不能表述为"自动化语料零失败"，更不能表述为 T v1.12 §1.3 字面的"语料回归零失败"——后者由**自动化 + 人工两栏共同构成**，两栏都过才计入阶段级验收（T v1.12 §4.2 的"回归通过"）。
+> **范围口径（已确认）**：CI 的语料步骤**只处理"自动化"子集**，`人工` 的 4 条**显式排除**并单列跟踪。**当前 CI 已执行 K01–K08、T01–T08、R01–R04/R06、Z01/Z02、E03 的断言（24 asserted／0 partial）**；因此 CI 绿灯仍不能表述为"自动化语料零失败"，更不能表述为 T v1.12 §1.3 字面的"语料回归零失败"——后者由**自动化 + 人工两栏共同构成**，两栏都过才计入阶段级验收（T v1.12 §4.2 的"回归通过"）。
 
 | 编号 | 类别 | 构造方式摘要 | 脚本状态 | 备注 |
 |---|---|---|---|---|
@@ -45,11 +45,12 @@
 
 | 状态 | 条数 | 说明 |
 |---|---|---|
-| 就绪（脚本进 CI） | **24**（K01 示范 + 本轮 23） | 已有脚本，CI 生成 + 范围核对；**逐条断言 harness**：23 asserted（K01–K07、T01–T08、R01–R04、R06、Z01、Z02、E03）／1 partial（K08）／0 pending，见 `crates/kernel/tests/assertions.tsv` |
+| 就绪（脚本进 CI） | **24**（K01 示范 + 本轮 23） | 已有脚本，CI 生成 + 范围核对；**逐条断言 harness**：24 asserted（K01–K08、T01–T08、R01–R04、R06、Z01、Z02、E03）／0 partial／0 pending，见 `crates/kernel/tests/assertions.tsv` |
 | 待补 | **0** | — |
 | **人工**（CI 显式排除） | 4（R05、E01、E02、E04） | 单列跟踪，见下 |
 | **合计** | **28** | |
 
+> **落地记录（2026-11-05，K08 收口）**：K08 由 partial 升 **asserted**——F05 支持 UTF-16 带 BOM 源直通分片：`CsvRecordScanner::new_utf16` 按码元投影扫描（结构字符只可能是 ASCII，宽字符高位字节恰为 `0A`/`2C` 时按字节扫会切断记录），表头区间含 BOM 故首片自带；不保留表头时第 2 片起由 `PlanCsvSplit.shardBom` 标前缀、`copy_ranges_atomic(prefix)` 一次原子写出，`expected.size` 计入前缀。断言：`corpus::k08_utf16_bom_sample_detects_transcodes_and_splits_with_a_bom_per_part`、`apply_flow::k08_utf16_csv_parts_each_start_with_a_bom`（真实 FS 读回三片，逐片 FF FE 开头且能解出表头）、`apply_flow::k08_utf16_csv_parts_without_header_still_start_with_a_bom`（第 2 片起走补写路径）。无 BOM 的 UTF-16 仍 E3001（不猜测重写形态），ADR-0070。
 > **落地记录（2026-11-04，E03 收口）**：执行期语义按 OQ-37 裁决①落地——改名族（f12/f13/c04）与 C03 遇 `E2002`/`E2003` 记 **Skipped 并报告**（可重试的 `E2003` 先重打一次；`E2002` 按设计 06 不可重试），任务终态 `completed`、Journal 零记录；其余写臂仍 `Failed`。E03 因此升 **asserted**。真实文件系统那条断言限 `#[cfg(unix)]`：Windows 的只读是文件属性位而非目录权限，首版没门控时被 Windows job 判红（`left: "ok" right: "skipped"`），已如实改为平台限定并把 Windows 属性表现归入实机日。
 > **落地记录（2026-11-04，E03 标记半程）**：E03 由 pending 升 **partial**——`corpus::e03_readonly_target_is_marked_by_preflight_and_named_in_preview` 先自证样本确为只读（否则断言退化为空转），再断言 ① S01 预检发 `readonly` Warn 项携 `E2002` 且 `task_blocked=false`（任务不整体失败）；② F12 与 C03 的计划告警点名该只读路径（事实由 `platform::preflight::path_check_light`/`is_read_only` 采集，见 [ADR-0063](../../docs/adr/0063-只读与占用事实的分档采集.md)）；③ 真实 CLI 出口 `apply_flow::f12_and_c03_name_read_only_files_in_plan_warnings`。**仍缺**：方案 §5.13 的「执行时重试一次后按策略跳过」——把 `E2002/E2003` 由 `Failed` 改判 `Skipped` 连带影响 C16 重试失败项集合与「部分失败」统计，属产品可见语义，登记 OQ-37 等人类裁决，裁决前不改执行器。
 > **落地记录（2026-10-31，C10）**：Z01/Z02 转 asserted——platform `ZipArchiveService` 按通用标志位 bit 11 判定 UTF-8，未设置且非 ASCII 时回退 GB18030（Z01 解码「中文资料.txt」）；kernel `plan_c10` 跳过 `../` 越界条目（Z02），CLI c10 仅解压 `safe/ok.txt` 并可用 undo 清理；台账 **19 asserted／4 partial／1 pending**（仅 E03）。
@@ -75,7 +76,7 @@
 | E02 | M2 或 M7（OneDrive 占位） | 占位文件被判为按需下载 |
 | E04 | M1 或 M8（题述容量受限环境） | 目标盘剩余空间不足 |
 
-**与验收的关系**：人工项**不进 CI 通过率**，但**进阶段级验收**——T v1.12 §4.2 的"回归通过"要求自动化与人工两栏都通过。当前自动化栏为 23 asserted／1 partial（K08）／0 pending（见 `crates/kernel/tests/assertions.tsv`），CI 绿灯仍不能代表"自动化语料零失败"。
+**与验收的关系**：人工项**不进 CI 通过率**，但**进阶段级验收**——T v1.12 §4.2 的"回归通过"要求自动化与人工两栏都通过。当前自动化栏为 24 asserted／0 partial／0 pending（见 `crates/kernel/tests/assertions.tsv`），CI 绿灯仍不能代表"自动化语料零失败"。
 
 ## 待补脚本的实施顺序建议
 

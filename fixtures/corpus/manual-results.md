@@ -4,7 +4,7 @@
 >
 > **为什么不进 CI**：其构造方式依赖人工操作或特定环境（任务中断线、Excel 占用、OneDrive 释放空间、配额受限卷），CI runner 无法复现。
 >
-> **与验收的关系**：本台账与自动化语料两栏都过才满足 T v1.12 §4.2 的"回归通过"；自动化栏已由 `crates/kernel/tests/corpus.rs` 逐条断言（现状见 `crates/kernel/tests/assertions.tsv`，仍有 1 条 partial），但**本台账四行仍无执行记录与签署**。**CI 绿灯 ≠ 语料回归零失败**。
+> **与验收的关系**：本台账与自动化语料两栏都过才满足 T v1.12 §4.2 的"回归通过"；自动化栏已由 `crates/kernel/tests/corpus.rs` 逐条断言（现状见 `crates/kernel/tests/assertions.tsv`，0 条 partial），但**本台账四行仍无执行记录与签署**。**CI 绿灯 ≠ 语料回归零失败**。
 
 ---
 

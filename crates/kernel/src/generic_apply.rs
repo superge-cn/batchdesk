@@ -1434,21 +1434,30 @@ fn perform(
                 } else {
                     None
                 };
-                let outcome = match entry.csv.as_ref().and_then(|csv| csv.header) {
-                    // F05：表头区间 + 记录区间一次写成同一分片（CSV 记录边界已在计划期确定）。
-                    Some(header) => view.fs.copy_ranges_atomic(
-                        &entry.source,
-                        &[(header.start, header.end), (range.start, range.end)],
-                        target,
-                        policy,
-                    )?,
-                    None => view.fs.copy_range_atomic(
+                // 每片都必须以 BOM 开头（UTF-16 源，方案 §5.1）：该片不含源文件开头时补写前缀。
+                let prefix: &[u8] = entry
+                    .csv
+                    .as_ref()
+                    .and_then(|csv| csv.shard_bom)
+                    .map_or(&[], crate::encoding::Bom::bytes);
+                let header = entry.csv.as_ref().and_then(|csv| csv.header);
+                let outcome = if prefix.is_empty() && header.is_none() {
+                    view.fs.copy_range_atomic(
                         &entry.source,
                         range.start,
                         range.end,
                         target,
                         policy,
-                    )?,
+                    )?
+                } else {
+                    // F05：表头区间 + 记录区间一次写成同一分片（CSV 记录边界已在计划期确定）。
+                    let mut ranges = Vec::with_capacity(2);
+                    if let Some(header) = header {
+                        ranges.push((header.start, header.end));
+                    }
+                    ranges.push((range.start, range.end));
+                    view.fs
+                        .copy_ranges_atomic(&entry.source, &ranges, prefix, target, policy)?
                 };
                 let final_path = outcome.final_path.clone();
                 let reverse = match backup {
@@ -3834,6 +3843,7 @@ mod tests {
             &self,
             source: &str,
             ranges: &[(u64, u64)],
+            prefix: &[u8],
             target: &str,
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
@@ -3842,7 +3852,7 @@ mod tests {
                 .get(source)
                 .cloned()
                 .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
-            let mut joined = Vec::new();
+            let mut joined = prefix.to_vec();
             for (start, end) in ranges {
                 if start >= end || *end > data.len() as u64 {
                     return Err(KernelError::new(

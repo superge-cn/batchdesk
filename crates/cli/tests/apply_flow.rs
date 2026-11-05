@@ -982,6 +982,195 @@ fn f05_plan_apply_and_undo_repeats_the_csv_header() {
 }
 
 #[test]
+fn k08_utf16_csv_parts_each_start_with_a_bom() {
+    let dir = TempDir::new();
+    let source = dir.0.join("k08.csv");
+    let parts = dir.0.join("parts");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    let sample = fs::read(corpus_file("K08", "K08.csv")).expect("先运行语料生成脚本");
+    assert!(
+        sample.starts_with(&[0xFF, 0xFE]),
+        "K08 样本是 UTF-16LE + BOM"
+    );
+    fs::write(&source, &sample).unwrap();
+
+    let plan = batchdesk(&[
+        "f05",
+        "--file",
+        path_text(&source),
+        "--rows",
+        "2",
+        "--output-dir",
+        path_text(&parts),
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "k08 f05 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(document["kind"], "f05");
+    let entries = document["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 3, "表头 + 5 条数据行按每片 2 行切 → 3 片");
+    for entry in entries {
+        assert!(entry["blocked"].is_null(), "带 BOM 的 UTF-16 不该被阻断");
+        assert_eq!(
+            entry["csv"]["header"]["start"], 0,
+            "表头区间从 0 起、含 BOM"
+        );
+    }
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "k08 f05 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+
+    // T v1.12 §3.2 K08：每片均写 BOM（方案 §5.1）。缺一片就无法被解码器识别。
+    let first = fs::read(parts.join("k08.1.csv")).unwrap();
+    let second = fs::read(parts.join("k08.2.csv")).unwrap();
+    let third = fs::read(parts.join("k08.3.csv")).unwrap();
+    for (name, bytes) in [
+        ("k08.1.csv", &first),
+        ("k08.2.csv", &second),
+        ("k08.3.csv", &third),
+    ] {
+        assert!(
+            bytes.starts_with(&[0xFF, 0xFE]),
+            "{name} 必须以 UTF-16LE BOM 开头，实际前两字节 {:?}",
+            &bytes[..2.min(bytes.len())]
+        );
+    }
+    let first_text = decode_utf16le(&first);
+    assert!(
+        first_text.starts_with("姓名,部门,金额,备注"),
+        "每片都保留表头"
+    );
+    assert_eq!(first_text.lines().count(), 3, "表头 + 2 条记录");
+    let third_text = decode_utf16le(&third);
+    assert!(third_text.starts_with("姓名,部门,金额,备注"));
+    assert_eq!(third_text.lines().count(), 2, "表头 + 1 条记录");
+}
+
+/// 不保留表头时，第 2 片起的区间不再包含源文件开头的 BOM：
+/// 必须由执行层补写前缀，否则这些分片是无 BOM 的 UTF-16（无法识别）。
+#[test]
+fn k08_utf16_csv_parts_without_header_still_start_with_a_bom() {
+    let dir = TempDir::new();
+    let source = dir.0.join("k08-noheader.csv");
+    let parts = dir.0.join("parts");
+    let quarantine = dir.0.join("quarantine");
+    let plan_path = dir.0.join("plan.json");
+    let journal_path = dir.0.join("journal.jsonl");
+    fs::write(&source, fs::read(corpus_file("K08", "K08.csv")).unwrap()).unwrap();
+
+    let plan = batchdesk(&[
+        "f05",
+        "--file",
+        path_text(&source),
+        "--rows",
+        "2",
+        "--no-keep-header",
+        "--output-dir",
+        path_text(&parts),
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "k08 f05 plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let entries = document["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 3, "6 条记录按每片 2 行切 → 3 片");
+    assert!(
+        entries[0]["csv"]["shardBom"].is_null(),
+        "首片区间从 0 起，源字节已含 BOM"
+    );
+    for entry in &entries[1..] {
+        assert_eq!(entry["csv"]["shardBom"], "utf16-le", "第 2 片起补写 BOM");
+        let start = entry["range"]["start"].as_u64().unwrap();
+        let end = entry["range"]["end"].as_u64().unwrap();
+        assert_eq!(
+            entry["expected"]["size"].as_u64().unwrap(),
+            2 + (end - start),
+            "期望字节数必须把补写的 BOM 算进去"
+        );
+    }
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal_path),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "k08 f05 apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+
+    for index in 1..=3 {
+        let bytes = fs::read(parts.join(format!("k08-noheader.{index}.csv"))).unwrap();
+        assert!(
+            bytes.starts_with(&[0xFF, 0xFE]),
+            "第 {index} 片缺少 BOM，Excel 打开会乱码"
+        );
+        let text = decode_utf16le(&bytes);
+        assert_eq!(text.lines().count(), 2, "每片两条记录（不保留表头）");
+    }
+    // 第 2 片的内容必须正好是「BOM + 源文件里那两条记录」，不能多也不能少。
+    let second = fs::read(parts.join("k08-noheader.2.csv")).unwrap();
+    let range = &entries[1]["range"];
+    let start = range["start"].as_u64().unwrap() as usize;
+    let end = range["end"].as_u64().unwrap() as usize;
+    let sample = fs::read(corpus_file("K08", "K08.csv")).unwrap();
+    assert_eq!(&second[2..], &sample[start..end]);
+}
+
+fn decode_utf16le(bytes: &[u8]) -> String {
+    assert!(bytes.starts_with(&[0xFF, 0xFE]), "缺少 UTF-16LE BOM");
+    let units: Vec<u16> = bytes[2..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
+        .collect();
+    String::from_utf16(&units).expect("分片内容是合法 UTF-16")
+}
+
+#[test]
 fn f06_plan_apply_and_undo_aligns_columns_and_adds_source_column() {
     let dir = TempDir::new();
     let first = dir.0.join("a.csv");
@@ -3132,12 +3321,16 @@ fn c03_blocks_binary_and_unclosed_csv() {
     assert_eq!(document["entries"][1]["blocked"]["code"], "E3004");
 }
 
-fn corpus_zip(fid: &str, file: &str) -> PathBuf {
+fn corpus_file(fid: &str, file: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/corpus")
         .join(fid)
         .join("out")
         .join(file)
+}
+
+fn corpus_zip(fid: &str, file: &str) -> PathBuf {
+    corpus_file(fid, file)
 }
 
 #[test]

@@ -322,6 +322,10 @@ pub struct PlanCsvSplit {
     /// 表头在源文件中的字节区间；每片先写该区间再写 `range` 的记录。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header: Option<PlanRange>,
+    /// 本片写入前需补写的 BOM（UTF-16 源：非首片也要 BOM，方案 §5.1）；
+    /// 省略＝该片通过表头/首片区间已自带 BOM，或源编码不需要 BOM。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shard_bom: Option<crate::encoding::Bom>,
     /// 分隔符的稳定字符串（`,` `;` `\t` `|`）。
     pub delimiter: String,
     /// 本片记录数（不含表头）。

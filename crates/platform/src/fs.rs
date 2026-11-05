@@ -474,6 +474,7 @@ impl FsAdapter for CliFsAdapter {
         &self,
         source: &str,
         ranges: &[(u64, u64)],
+        prefix: &[u8],
         target: &str,
         policy: ConflictPolicy,
     ) -> Result<PathOutcome, KernelError> {
@@ -532,7 +533,7 @@ impl FsAdapter for CliFsAdapter {
             std::process::id(),
             self.next_id()
         ));
-        if let Err(error) = copy_ranges_stream(&from, ranges, &temp) {
+        if let Err(error) = copy_ranges_stream(&from, ranges, prefix, &temp) {
             let _ = fs::remove_file(&temp);
             return Err(io_error(&error, &destination));
         }
@@ -795,11 +796,19 @@ fn copy_range_stream(source: &Path, start: u64, end: u64, temp: &Path) -> io::Re
 }
 
 /// 按顺序把多个源字节区间写入同一临时文件（F05：表头 + 记录）。
-fn copy_ranges_stream(source: &Path, ranges: &[(u64, u64)], temp: &Path) -> io::Result<()> {
+fn copy_ranges_stream(
+    source: &Path,
+    ranges: &[(u64, u64)],
+    prefix: &[u8],
+    temp: &Path,
+) -> io::Result<()> {
     const COPY_CHUNK: usize = 64 * 1024;
     let mut input = fs::File::open(source)?;
     let mut output = fs::File::create(temp)?;
     let mut buffer = vec![0u8; COPY_CHUNK];
+    if !prefix.is_empty() {
+        output.write_all(prefix)?;
+    }
     for (start, end) in ranges {
         input.seek(SeekFrom::Start(*start))?;
         let mut remaining = end.saturating_sub(*start);
@@ -1307,6 +1316,33 @@ mod tests {
             fs::read(&source).unwrap(),
             b"aaa\nbbb\nccc\n",
             "range copy keeps the source"
+        );
+    }
+
+    /// 方案 §5.1：UTF-16 分片每片都要 BOM——执行层在全部区间之前**只写一次**前缀，
+    /// 且不能因为补写而改动区间内容（K08 / ADR-0070）。
+    #[test]
+    fn copy_ranges_atomic_writes_the_prefix_once_before_all_ranges() {
+        let dir = TempDir::new();
+        let source = dir.0.join("utf16.csv");
+        let target = dir.0.join("part.csv");
+        fs::write(&source, [0xFF, 0xFE, b'h', 0, b'\n', 0, b'1', 0, b'\n', 0]).unwrap();
+        let adapter = CliFsAdapter::new(Some(dir.0.join("quarantine")));
+
+        let outcome = adapter
+            .copy_ranges_atomic(
+                &source.to_string_lossy(),
+                &[(6, 10)],
+                &[0xFF, 0xFE],
+                &target.to_string_lossy(),
+                ConflictPolicy::Skip,
+            )
+            .unwrap();
+        assert_eq!(outcome.outcome, PathOutcomeKind::Applied);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            vec![0xFF, 0xFE, b'1', 0, b'\n', 0],
+            "前缀只写一次，区间内容原样带出"
         );
     }
 

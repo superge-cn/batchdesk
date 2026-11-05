@@ -17,7 +17,7 @@ OUT = ROOT / "docs/testing/用例覆盖映射表-v0.2.csv"
 # 语料台账状态（crates/kernel/tests/assertions.tsv 实测）
 CORPUS = {
     "K01": "asserted", "K02": "asserted", "K03": "asserted", "K04": "asserted",
-    "K05": "asserted", "K06": "asserted", "K07": "asserted", "K08": "partial",
+    "K05": "asserted", "K06": "asserted", "K07": "asserted", "K08": "asserted",
     "T01": "asserted", "T02": "asserted", "T03": "asserted", "T04": "asserted",
     "T05": "asserted", "T06": "asserted", "T07": "asserted", "T08": "asserted",
     "R01": "asserted", "R02": "asserted", "R03": "asserted", "R04": "asserted",
@@ -356,8 +356,8 @@ add("F04",
         ("generic_apply::tests::merge_skips_when_a_source_size_changed_since_plan＋FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
     exe_slots={
         2: (corpus_cell(["K03", "K08"])[0], CI,
-            "crates/kernel/tests/corpus.rs::k03_bom_wins_and_target_bom_follows_caller；k08_utf16_bom_sample_detects_and_transcodes_clean",
-            corpus_cell(["K03", "K08"])[1] + "；F04 每片/产物 BOM 策略在 F05 侧仍 partial"),
+            "crates/kernel/tests/corpus.rs::k03_bom_wins_and_target_bom_follows_caller；k08_utf16_bom_sample_detects_transcodes_and_splits_with_a_bom_per_part；apply_flow::k08_utf16_csv_parts_each_start_with_a_bom",
+            corpus_cell(["K03", "K08"])[1]),
         4: ("✅", SHELL, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         # ↑ merge／csv-range 臂的条目级取消回滚由 generic_apply 两测试钉住（配方列已标 E4）
         5: ("◐", CI,
@@ -371,7 +371,7 @@ add("F04",
 
 add("F05",
     name="CSV 分割", stage="阶段 0", prio="P0★", src="方案 §5.3；T §3.2 F05",
-    plan_tests="kernel `csv` 18 项（CsvRecordScanner/CsvSplitAccumulator/sniff_delimiter）＋platform `csv` 6 项",
+    plan_tests="kernel `csv` 23 项（CsvRecordScanner〔含 UTF-16 码元投影〕/CsvSplitAccumulator/sniff_delimiter）＋platform `csv` 7 项",
     exe1="apply_flow::f05_plan_apply_and_undo_repeats_the_csv_header",
     rbk1="同上（copy_ranges_atomic 一次原子写，撤销进隔离目录）",
     pre=["正常 CSV 预览", "分片值/行数典型与临界", "@T02 引号内换行与 @K08 BOM 标注（多行表头不支持）", "改参数后旧预览失效"],
@@ -379,9 +379,9 @@ add("F05",
          "@T02 引号内换行不切记录", "执行中暂停/取消"],
     rbk=["撤销分片产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        True, "kernel `csv` 18 项",
-        ("kernel::csv::tests::overlong_record_occupies_its_own_part＋platform `csv` 6 项", ""),
-        ("kernel::csv::tests::plan_blocks_utf16_source_and_multi_line_header", "UI 标注与阻断待 WebDriver"),
+        True, "kernel `csv` 23 项",
+        ("kernel::csv::tests::overlong_record_occupies_its_own_part＋platform `csv` 7 项", ""),
+        ("kernel::csv::tests::plan_blocks_utf16_without_bom_and_multi_line_header＋plan_f05_writes_a_bom_on_every_utf16_part", "UI 标注与阻断待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
     exe_slots={
         2: (corpus_cell(["T01"])[0], CI, "corpus.rs::t01_unclosed_quote_is_kept_as_last_record_with_warning", corpus_cell(["T01"])[1]),

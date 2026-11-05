@@ -108,7 +108,7 @@ pub enum Bom {
 }
 
 impl Bom {
-    fn bytes(self) -> &'static [u8] {
+    pub(crate) const fn bytes(self) -> &'static [u8] {
         match self {
             Self::Utf8 => &[0xEF, 0xBB, 0xBF],
             Self::Utf32Le => &[0xFF, 0xFE, 0x00, 0x00],

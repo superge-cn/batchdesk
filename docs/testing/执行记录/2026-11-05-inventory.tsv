@@ -68,6 +68,8 @@ apply_flow::f12_reports_existing_conflicts_and_invalid_targets	ok
 apply_flow::f13_no_match_creates_no_entries_and_writes_nothing	ok
 apply_flow::f13_regex_capture_plan_apply_and_undo	ok
 apply_flow::f13_rejects_invalid_regex_and_missing_capture_references	ok
+apply_flow::k08_utf16_csv_parts_each_start_with_a_bom	ok
+apply_flow::k08_utf16_csv_parts_without_header_still_start_with_a_bom	ok
 apply_flow::read_only_rename_target_is_skipped_without_failing_the_task	ok
 apply_flow::temp_dirs_are_unique_for_parallel_tests	ok
 archive_cancel::cancel_before_the_first_entry_touches_nothing	ok
@@ -89,7 +91,7 @@ corpus::k05_ascii_sample_defaults_to_utf8_with_hint	ok
 corpus::k05_short_ascii_sample_defaults_to_utf8_and_prompts_in_the_plan	ok
 corpus::k06_binary_magic_is_rejected_by_c02_plan	ok
 corpus::k07_mixed_encoding_is_flagged_not_repaired	ok
-corpus::k08_utf16_bom_sample_detects_and_transcodes_clean	ok
+corpus::k08_utf16_bom_sample_detects_transcodes_and_splits_with_a_bom_per_part	ok
 corpus::r01_long_path_samples_follow_path_length_tiers	ok
 corpus::r02_case_only_targets_conflict_only_on_case_insensitive_hosts	ok
 corpus::r03_reserved_names_are_blocked_in_preview	ok
@@ -177,8 +179,10 @@ kernel::csv::tests::accumulator_splits_by_row_count	ok
 kernel::csv::tests::header_can_be_disabled	ok
 kernel::csv::tests::header_only_file_has_no_shards	ok
 kernel::csv::tests::overlong_record_occupies_its_own_part	ok
-kernel::csv::tests::plan_blocks_utf16_source_and_multi_line_header	ok
+kernel::csv::tests::plan_blocks_utf16_without_bom_and_multi_line_header	ok
 kernel::csv::tests::plan_builds_csv_split_entries_with_repeated_header	ok
+kernel::csv::tests::plan_f05_blocks_utf16_without_a_bom	ok
+kernel::csv::tests::plan_f05_writes_a_bom_on_every_utf16_part	ok
 kernel::csv::tests::plan_rejects_bad_parameter_and_layout	ok
 kernel::csv::tests::plan_skips_empty_and_header_only_files	ok
 kernel::csv::tests::plan_warns_on_column_drift_and_unclosed_quote	ok
@@ -189,6 +193,9 @@ kernel::csv::tests::scanner_reports_unclosed_quote_tail	ok
 kernel::csv::tests::scanner_state_survives_chunk_boundaries	ok
 kernel::csv::tests::sniff_picks_the_delimiter_with_stable_columns	ok
 kernel::csv::tests::sniff_returns_none_for_single_column_data	ok
+kernel::csv::tests::utf16_scanner_ignores_structural_bytes_inside_wide_characters	ok
+kernel::csv::tests::utf16_scanner_projects_code_units_and_counts_source_bytes	ok
+kernel::csv::tests::utf16_scanner_survives_odd_chunk_boundaries	ok
 kernel::csv_columns::tests::merge_plan_appends_a_target_column_and_defaults_its_name	ok
 kernel::csv_columns::tests::merge_rejects_single_or_repeated_columns_with_e1002	ok
 kernel::csv_columns::tests::name_selection_without_header_is_blocked_with_e3004	ok
@@ -530,7 +537,8 @@ platform::csv::tests::explicit_delimiter_overrides_sniffing	ok
 platform::csv::tests::records_do_not_break_on_quoted_newlines	ok
 platform::csv::tests::scans_records_and_repeats_header	ok
 platform::csv::tests::sniffs_semicolon_delimiter	ok
-platform::csv::tests::utf16_source_is_short_circuited_for_blocking	ok
+platform::csv::tests::utf16_with_bom_splits_on_record_boundaries_and_flags_per_part_bom	ok
+platform::csv::tests::utf16_without_bom_is_short_circuited_for_blocking	ok
 platform::csv_merge::tests::dedup_inspect_returns_all_records_including_header	ok
 platform::csv_merge::tests::inspects_header_rows_and_drift	ok
 platform::csv_merge::tests::no_header_uses_the_max_column_count	ok

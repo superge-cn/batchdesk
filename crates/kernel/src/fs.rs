@@ -209,11 +209,15 @@ pub trait FsAdapter: Send + Sync {
     /// F05 CSV 分片专用：每片 = 表头区间 + 记录区间，必须一次成文件，
     /// 不得分两次写目标（否则中途失败会留下半成品）。区间顺序即写入顺序，
     /// 全部区间必须非空且落在源文件范围内。目标冲突按 `policy` 处理。
+    ///
+    /// `prefix` 在全部区间之前写入，且只写一次——UTF-16 源的分片每片都要带 BOM，
+    /// 而除首片外的区间都不包含源文件开头的 BOM（方案 §5.1）。单字节编码传空切片。
     /// 适配层不支持时返回 E5001，调用方按契约拒绝该动作，不静默降级。
     fn copy_ranges_atomic(
         &self,
         _source: &str,
         _ranges: &[(u64, u64)],
+        _prefix: &[u8],
         _target: &str,
         _policy: ConflictPolicy,
     ) -> Result<PathOutcome, KernelError> {
