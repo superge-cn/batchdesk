@@ -362,6 +362,118 @@ def check_case_ledger(errors: list[str]) -> None:
                 )
 
 
+# 用例覆盖统计的第二份数字：源只认映射表与执行台账两份 CSV。
+# 日期表行（`| 2026-.. |` 开头的修订记录）是历史，按文件头约定不检查。
+CASE_STATS_FILES = (
+    "docs/DEVELOPMENT-PLAN.md",
+    "docs/design/TRACEABILITY.md",
+    "docs/testing/README.md",
+    "docs/README.md",
+    "AGENTS.md",
+)
+CASE_STATS_MAP_CSV = "docs/testing/用例覆盖映射表-v0.2.csv"
+CASE_STATS_MAP_MD = "docs/testing/用例覆盖映射表-v0.2.md"
+CASE_STATS_LEDGER_CSV = "docs/testing/用例执行台账-v0.1.csv"
+CASE_STATS_DIST_RE = re.compile(r"✅\s*(\d+)\s*／\s*◐\s*(\d+)\s*／\s*⛔\s*(\d+)")
+CASE_STATS_RATE_RE = re.compile(r"自动化可达（✅＋◐）\*\*(\d+) 条＝([\d.]+)%\*\*")
+CASE_STATS_MANUAL_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s*条待人工")
+CASE_STATS_TOTAL = 296
+
+
+def check_case_stats(errors: list[str]) -> None:
+    """用例覆盖统计（✅／◐／⛔ 分布、自动化可达率、待人工条数）必须等于两份 CSV 的实测值。
+
+    动因（2026-11-05，K08 收口当天）：`assertions.tsv` 翻成 24 asserted／0 partial、
+    映射表重算成 ✅175／◐88／⛔33 之后，四份"活口径"文档仍写着旧值——
+    `DEVELOPMENT-PLAN` §3.3 写「只剩 1 条 partial（K08）」、FAQ 行写「✅174／◐89／
+    ⛔33」与「34 条待人工」、`TRACEABILITY` 测试行同款、映射表 md 的 §2 汇总
+    自称「由 CSV 计算，非手填」而实际是手填。既有门禁核了语料断言分布（⑫，但只扫
+    §3.1 的「验证」行）、设计索引版本（⑬）、映射表与台账的逐行自校，唯独没人核
+    "文档正文里手抄的那份统计"——于是过期数字可以一直挂着，而它正是排期依据。
+
+    口径：
+    - 分布与可达率以映射表 CSV 的状态列为准（✅／◐／⛔／🔶 四个计数，合计须为 296）；
+    - 待人工条数以执行台账 CSV「判定＝待人工执行」的行数为准，不用 ⛔ 反推
+      （⛔ 含"功能未实现／待裁决"，与"要人上机"不是一回事，现在恰好相等是巧合）；
+    - 映射表 md §2 四行、可达率行必须与 CSV 同源（该节标题已声明"由 CSV 计算，非手填"）；
+    - 其余文档只核"写出来的分布／待人工数"，历史修订行跳过。
+    """
+    map_path = ROOT / CASE_STATS_MAP_CSV
+    ledger_path = ROOT / CASE_STATS_LEDGER_CSV
+    if not map_path.is_file() or not ledger_path.is_file():
+        errors.append("用例覆盖统计核对无法进行：缺少映射表或执行台账 CSV")
+        return
+    states: dict[str, int] = {}
+    for row in csv.DictReader(map_path.open(encoding="utf-8")):
+        states[row["状态"]] = states.get(row["状态"], 0) + 1
+    if sum(states.values()) != CASE_STATS_TOTAL:
+        errors.append(
+            f"用例覆盖统计自校失败：映射表状态分布合计 {sum(states.values())}≠{CASE_STATS_TOTAL}"
+        )
+        return
+    verdicts: dict[str, int] = {}
+    for row in csv.DictReader(ledger_path.open(encoding="utf-8")):
+        verdicts[row["判定"]] = verdicts.get(row["判定"], 0) + 1
+    manual = verdicts.get("待人工执行", 0)
+    automated = states.get("✅", 0) + states.get("◐", 0)
+    rate = f"{automated * 100 / CASE_STATS_TOTAL:.1f}"
+
+    md = ROOT / CASE_STATS_MAP_MD
+    if not md.is_file():
+        errors.append(f"找不到 {CASE_STATS_MAP_MD}：用例覆盖统计核对无法进行")
+    else:
+        text = md.read_text(encoding="utf-8")
+        for glyph in ("✅", "◐", "⛔", "🔶"):
+            found = re.findall(rf"^\| {re.escape(glyph)}[^|]*\| (\d+) \|", text, flags=re.MULTILINE)
+            if not found:
+                errors.append(f"{CASE_STATS_MAP_MD} §2 汇总缺少「{glyph}」的统计表行")
+            elif int(found[0]) != states.get(glyph, 0):
+                errors.append(
+                    f"{CASE_STATS_MAP_MD} §2 汇总的「{glyph}」写作 {found[0]}，"
+                    f"CSV 实为 {states.get(glyph, 0)}——该节声明由 CSV 计算，须同步重算"
+                )
+        matched = CASE_STATS_RATE_RE.search(text)
+        if not matched:
+            errors.append(f"{CASE_STATS_MAP_MD} §2 汇总结论行写法变了（找不到「自动化可达（✅＋◐）…」）")
+        elif (int(matched.group(1)), matched.group(2)) != (automated, rate):
+            errors.append(
+                f"{CASE_STATS_MAP_MD} §2 汇总结论写作 {matched.group(1)} 条＝{matched.group(2)}%，"
+                f"CSV 实为 {automated} 条＝{rate}%"
+            )
+
+    seen_dist = seen_manual = 0
+    want = (states.get("✅", 0), states.get("◐", 0), states.get("⛔", 0))
+    for rel in CASE_STATS_FILES:
+        path = ROOT / rel
+        if not path.is_file():
+            errors.append(f"找不到 {rel}：用例覆盖统计核对无法进行")
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.startswith("| 20"):
+                continue
+            for matched in CASE_STATS_DIST_RE.finditer(line):
+                seen_dist += 1
+                got = tuple(int(matched.group(i)) for i in (1, 2, 3))
+                if got != want:
+                    errors.append(
+                        f"{rel}:{lineno}: 用例覆盖统计漂移——写 ✅{got[0]}／◐{got[1]}／⛔{got[2]}，"
+                        f"CSV 实为 ✅{want[0]}／◐{want[1]}／⛔{want[2]}"
+                    )
+            for matched in CASE_STATS_MANUAL_RE.finditer(line):
+                seen_manual += 1
+                if int(matched.group(1)) != manual:
+                    errors.append(
+                        f"{rel}:{lineno}: 待人工条数漂移——写 {matched.group(1)} 条，"
+                        f"执行台账实为 {manual} 条（判定＝待人工执行）"
+                    )
+    # 探测器自校：正例太少说明锚点或写法变了，检查会静默永真
+    if seen_dist < 3 or seen_manual < 2:
+        errors.append(
+            f"用例覆盖统计核对自校失败：只核到 {seen_dist} 处分布、{seen_manual} 处待人工"
+            "——锚点或写法变了，探测器失效＝没有正例"
+        )
+
+
 def check_table_arity(errors: list[str]) -> None:
     """Markdown 表格的列数必须与分隔行一致：代码段里的裸竖线会串列（渲染时列会整体错位）。
 
@@ -501,8 +613,10 @@ ASSERTION_CLAIM_FILES = (
     ".github/workflows/ci.yml",
 )
 ASSERTION_ANCHORS = {
-    # 这两个文件历史状态行极多，只取明确写「当前口径」的锚点行
-    "docs/DEVELOPMENT-PLAN.md": ("| 验证 |",),
+    # 这两个文件历史状态行极多，只取明确写「当前口径」的锚点行。
+    # §3.3 与 FAQ 行是 2026-11-05 补的：K08 收口时这两处仍写「只剩 1 条 partial（K08）」，
+    # 而锚点只扫 `| 验证 |` 一行，过期陈述整段漏检。
+    "docs/DEVELOPMENT-PLAN.md": ("| 验证 |", "- **阶段 0 功能面**", "| 现在最该做什么？ |"),
     "docs/testing/README.md": ("| 语料生成 |", "| 代码与测试总览 |", "> **CI 口径**"),
 }
 ASSERTION_SKIP_PREFIXES = ("> **落地记录",)
@@ -668,6 +782,7 @@ def main() -> int:
     check_baseline_hashes(errors)
     check_case_map(errors)
     check_case_ledger(errors)
+    check_case_stats(errors)
     check_table_arity(errors)
     check_kind_routing(errors)
     check_assertion_claims(errors)
@@ -681,7 +796,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、语料断言口径以 assertions.tsv 为单一来源、设计索引版本＝正文当前版本、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、Markdown 表格列数。"
+        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、语料断言口径以 assertions.tsv 为单一来源、设计索引版本＝正文当前版本、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、用例覆盖统计≡两份 CSV 实测、Markdown 表格列数。"
     )
     return 0
 
