@@ -45,6 +45,14 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { FeaturePages } from "./FeaturePages";
+import {
+  NAV_ENTRIES,
+  NAV_LABEL_BY_ID,
+  FEATURE_VIEWS,
+  TOP_LEVEL_VIEWS,
+  isFeatureView,
+  type View
+} from "./navCatalog";
 import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
 import { describeError } from "./errors";
@@ -77,33 +85,6 @@ import type {
   TaskSummary
 } from "./lib/ipc/types";
 
-type View =
-  | "c09"
-  | "tasks"
-  | "settings"
-  | "f01"
-  | "f02"
-  | "f03"
-  | "f04"
-  | "c01"
-  | "c02"
-  | "c03"
-  | "f05"
-  | "f06"
-  | "f07"
-  | "f08"
-  | "f09"
-  | "f10"
-  | "f11"
-  | "f12"
-  | "c04"
-  | "c07"
-  | "c08"
-  | "c10"
-  | "c11"
-  | "c12"
-  | "c13"
-  | "c14";
 
 type Busy = "plan" | "cleanup" | null;
 
@@ -125,69 +106,41 @@ const TERMINAL_STATES: TaskState[] = [
 ];
 
 /** 侧栏导航：可见名走资源包，右侧短码是功能标识（不翻译）。 */
-const NAV_ITEMS: Array<{ id: View; label: MessageKey; tag: string; Icon: LucideIcon }> = [
-  { id: "c09", label: "nav.c09", tag: "C09", Icon: FolderSearch },
-  { id: "f05", label: "nav.f05", tag: "F05", Icon: Files },
-  { id: "f06", label: "nav.f06", tag: "F06", Icon: Files },
-  { id: "f07", label: "nav.f07", tag: "F07", Icon: Files },
-  { id: "f08", label: "nav.f08", tag: "F08", Icon: Files },
-  { id: "f09", label: "nav.f09", tag: "F09", Icon: Files },
-  { id: "f10", label: "nav.f10", tag: "F10", Icon: Files },
-  { id: "c04", label: "nav.c04", tag: "C04", Icon: Files },
-  { id: "c11", label: "nav.c11", tag: "C11", Icon: Files },
-  { id: "c12", label: "nav.c12", tag: "C12", Icon: Files },
-  { id: "c13", label: "nav.c13", tag: "C13", Icon: Files },
-  { id: "c14", label: "nav.c14", tag: "C14", Icon: Files },
-  { id: "c07", label: "nav.c07", tag: "C07", Icon: Files },
-  { id: "c08", label: "nav.c08", tag: "C08", Icon: Files },
-  { id: "c10", label: "nav.c10", tag: "C10", Icon: Files },
-  { id: "f11", label: "nav.f11", tag: "F11", Icon: Files },
-  { id: "f12", label: "nav.f12", tag: "F12", Icon: Files },
-  { id: "f01", label: "nav.f01", tag: "F01", Icon: Files },
-  { id: "f02", label: "nav.f02", tag: "F02", Icon: Files },
-  { id: "f03", label: "nav.f03", tag: "F03", Icon: Files },
-  { id: "f04", label: "nav.f04", tag: "F04", Icon: Files },
-  { id: "c01", label: "nav.c01", tag: "C01", Icon: Files },
-  { id: "c02", label: "nav.c02", tag: "C02", Icon: Files },
-  { id: "c03", label: "nav.c03", tag: "C03", Icon: Files },
-  { id: "tasks", label: "nav.tasks", tag: "QUEUE", Icon: History },
-  { id: "settings", label: "nav.settings", tag: "SET", Icon: Settings }
-];
-
-/** 顶层视图（与功能页区分）：`lastSection` 直接记它们的 id。 */
-const TOP_LEVEL_VIEWS: View[] = ["c09", "tasks", "settings"];
-const FEATURE_VIEWS: View[] = NAV_ITEMS.map((item) => item.id).filter(
-  (id) => !TOP_LEVEL_VIEWS.includes(id)
-);
-
-/** 顶栏标题：C09 用页面自己的两行说明，其余视图用导航名（卡片内另有区块标题）。 */
-const VIEW_TITLES: Partial<Record<View, MessageKey>> = {
-  tasks: "nav.tasks",
-  settings: "nav.settings",
-  f01: "nav.f01",
-  f02: "nav.f02",
-  f03: "nav.f03",
-  f04: "nav.f04",
-  c01: "nav.c01",
-  c02: "nav.c02",
-  c03: "nav.c03",
-  f05: "nav.f05",
-  f06: "nav.f06",
-  f07: "nav.f07",
-  f08: "nav.f08",
-  f09: "nav.f09",
-  f10: "nav.f10",
-  c04: "nav.c04",
-  c07: "nav.c07",
-  c08: "nav.c08",
-  c10: "nav.c10",
-  c11: "nav.c11",
-  c12: "nav.c12",
-  c13: "nav.c13",
-  c14: "nav.c14",
-  f11: "nav.f11",
-  f12: "nav.f12"
+/** 图标是渲染层资源，留在界面侧；逐个列而不是兜底默认，是为了让「加了导航项忘了配图」在编译期就失败（Record<View, …> 穷尽）。 */
+const NAV_ICONS: Record<View, LucideIcon> = {
+  c09: FolderSearch,
+  f05: Files,
+  f06: Files,
+  f07: Files,
+  f08: Files,
+  f09: Files,
+  f10: Files,
+  c04: Files,
+  c11: Files,
+  c12: Files,
+  c13: Files,
+  c14: Files,
+  c07: Files,
+  c08: Files,
+  c10: Files,
+  f11: Files,
+  f12: Files,
+  f01: Files,
+  f02: Files,
+  f03: Files,
+  f04: Files,
+  c01: Files,
+  c02: Files,
+  c03: Files,
+  tasks: History,
+  settings: Settings,
 };
+
+/** 侧栏导航：名称与顺序来自 navCatalog（唯一来源），图标按 id 在此绑定。 */
+const NAV_ITEMS = NAV_ENTRIES.map((entry) => ({ ...entry, Icon: NAV_ICONS[entry.id] }));
+
+
+
 
 function isActive(task: TaskView | null): boolean {
   return Boolean(task && !TERMINAL_STATES.includes(task.state));
@@ -502,7 +455,7 @@ function AppShell() {
   /** 切换视图并记住它（设计 03 §11.2 的 `lastSection`/`lastFeature`）。写失败静默，同 rememberRoot。 */
   const selectView = useCallback((next: View) => {
     setActiveView(next);
-    const isFeature = FEATURE_VIEWS.includes(next);
+    const isFeature = isFeatureView(next);
     const navigation = rememberView(
       navigationRef.current,
       isFeature ? FEATURE_SECTION : next,
@@ -865,7 +818,7 @@ function AppShell() {
                 {activeView === "c09" ? t("c09.eyebrow") : "BatchDesk"}
               </div>
               <h1 className="title">
-                {activeView === "c09" ? t("c09.title") : t(VIEW_TITLES[activeView] ?? "nav.c09")}
+                {activeView === "c09" ? t("c09.title") : t(NAV_LABEL_BY_ID[activeView] ?? "nav.c09")}
               </h1>
               {activeView === "c09" && <p className="subtitle">{t("c09.subtitle")}</p>}
             </div>

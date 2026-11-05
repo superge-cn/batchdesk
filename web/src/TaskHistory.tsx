@@ -10,7 +10,7 @@ import {
 } from "./lib/ipc";
 import { VirtualList } from "./VirtualList";
 import { ErrorBanner } from "./ErrorBanner";
-import { isActiveState, phaseLabel, stateBadge, type Translate } from "./labels";
+import { isActiveState, phaseLabel, stateBadge, taskKindLabel, type Translate } from "./labels";
 import { useI18n } from "./i18n";
 import type { IpcError, TaskState, TaskSummary } from "./lib/ipc/types";
 
@@ -262,7 +262,7 @@ export function TaskHistory({
               renderRow={(task) => (
                 <div className="row row-tasks">
                   <span className="path" title={task.taskId}>
-                    {task.kind} · {shortId(task.taskId)}
+                    {taskKindLabel(t, task.kind)} · {shortId(task.taskId)}
                   </span>
                   <span className="reason" title={task.message}>
                     {progressText(t, task)}

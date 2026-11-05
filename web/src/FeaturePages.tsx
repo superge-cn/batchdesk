@@ -19,6 +19,7 @@ import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
 import { warningKindTitle } from "./warnings";
 import { VirtualList } from "./VirtualList";
+import type { FeatureView as View } from "./navCatalog";
 import { useI18n, type MessageKey } from "./i18n";
 import type { Translate } from "./labels";
 import { dryRunStatusLabel, phaseLabel, stateBadge } from "./labels";
@@ -32,30 +33,6 @@ import type {
   UndoDryRun
 } from "./lib/ipc/types";
 
-type View =
-  | "f01"
-  | "f02"
-  | "f03"
-  | "f04"
-  | "c01"
-  | "c02"
-  | "c03"
-  | "f05"
-  | "f06"
-  | "f07"
-  | "f08"
-  | "f09"
-  | "f10"
-  | "f11"
-  | "f12"
-  | "c04"
-  | "c11"
-  | "c12"
-  | "c13"
-  | "c14"
-  | "c07"
-  | "c08"
-  | "c10";
 type Busy = "plan" | "apply" | "undo" | null;
 
 interface TaskView {

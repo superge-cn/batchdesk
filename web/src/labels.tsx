@@ -1,5 +1,6 @@
 import type { MessageKey } from "./i18n";
 import type { ApplyStatus, ProgressPhase, TaskState, UndoDryRunStatus } from "./lib/ipc/types";
+import { NAV_LABEL_BY_ID } from "./navCatalog";
 
 /**
  * 任务状态与阶段的用户可见文案。
@@ -85,6 +86,20 @@ export function applyStatusBadge(t: Translate, status: ApplyStatus) {
 
 export function dryRunStatusLabel(t: Translate, status: UndoDryRunStatus): string {
   return t(DRY_RUN_STATUS_KEYS[status]);
+}
+
+/**
+ * 任务列表里的功能码可读化。`TaskSummary.kind` 是"被处理计划的功能码"（设计 01 §2.1），
+ * 列表原来把它原样印出来（`f12`）——那是内部编码不是文案（09 §2）。
+ * 名字取侧栏那份表（`navCatalog` 唯一来源，不另立清单），**码位仍保留在括号里**：
+ * 同 06 §3 对错误码位的处理口径，报障时"我在 F12"比"我在批量改名"更好对。
+ * 查不到的编码（例如 F13 这类没有页面的功能）就只显示码位，不编名字。
+ */
+export function taskKindLabel(t: Translate, kind: string): string {
+  const code = kind.toUpperCase();
+  const key = NAV_LABEL_BY_ID[kind];
+  // 名字本体来自资源包；全角括号只是排版（U+FF08/FF09），不是措辞。
+  return key ? `${t(key)}（${code}）` : code; // i18n-exempt
 }
 
 /** 任务是否仍在推进（非终态）。 */

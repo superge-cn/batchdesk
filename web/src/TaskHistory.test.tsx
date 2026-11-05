@@ -72,6 +72,14 @@ describe("任务与撤销视图", () => {
     expect(screen.getByText(/2\/3/)).toBeInTheDocument();
   });
 
+  it("功能码在列表里给名字，码位仍然保留（09 §2／06 §3 的支持句柄口径）", async () => {
+    renderView();
+    // 此前这里印的是 `c03`／`c09`——对使用者是内部编码；名字来自侧栏那份表（navCatalog 唯一来源）。
+    expect(await screen.findByText(/编码转换（C01）|查找替换（C03）/)).toBeInTheDocument();
+    const row = (await screen.findByText(/01TASK-APPLY-0002/)).closest(".row") as HTMLElement;
+    expect(row.textContent).not.toMatch(/\bc03\b/);
+  });
+
   it("执行中的任务可取消，调用 cancelTask", async () => {
     const user = userEvent.setup();
     renderView();
