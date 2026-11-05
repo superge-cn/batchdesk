@@ -18,6 +18,23 @@
 | [用例覆盖映射表-v0.1.md](./用例覆盖映射表-v0.1.md) | 历史版本（仅 C05/C06/S01/S02/C09/C17a 的 68 条），已被 v0.2 取代、不再更新 | v0.1 | — |
 | [`fixtures/corpus/manual-results.md`](../../fixtures/corpus/manual-results.md) | 4 条人工语料台账 | 待执行 | R05/E01/E02/E04；阶段末/闭门前执行 |
 
+## 宿主无法分配 WASM 时（临时通道）
+
+`vitest` / `vite build` / `playwright` 都依赖 V8 的 WASM（Vite 的 `es-module-lexer`、Node 的 `undici`）。
+宿主内存严重超卖时（`Committed_AS` ≫ `CommitLimit`），内核会拒绝 V8 的 WASM 保护段预留，
+三者一律死于 `RangeError: WebAssembly.instantiate(): Out of memory`——**与代码无关**，
+`ulimit -v`、`--max-old-space-size`、`--jitless`、禁用 sandbox 都绕不过。
+
+判定（10 秒）：`node -e "try{new WebAssembly.Memory({initial:1});console.log('WASM_OK')}catch(e){console.log('WASM_FAIL')}"`。
+
+`WASM_FAIL` 时的替代通道：`web/.probe/`（esbuild 原生打包 ＋ jsdom，直接渲染真实组件）。
+它复刻 `SettingsPage.test.tsx` 与 `App.uiState.test.tsx` 的**用户可见行为**，共 18 条断言；
+用法与边界见 [`web/.probe/README.md`](../../web/.probe/README.md)。
+
+**口径**：这是弱证据，不是测试套件的替代。CI 的 web job（Vitest＋Playwright）仍是权威；
+本地跑不了时也可用 API 取 CI 结论（公开仓库免 token）：
+`curl -s api.github.com/repos/superge-cn/batchdesk/actions/runs/<id>/jobs | ...` 读 `steps[].conclusion`。
+
 ## 2. 自动化现状（2026-11-01）
 
 | 对象 | 已实现 | 未实现 |

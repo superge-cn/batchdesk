@@ -6,6 +6,8 @@
 node_modules/
 dist/
 *.local
+# 无 WASM 环境下的界面行为探针产物（源码在 web/.probe，见其 README）
+web/.probe/*.cjs
 
 # ── Tauri ──────────────────────────────────────────────
 src-tauri/gen/
