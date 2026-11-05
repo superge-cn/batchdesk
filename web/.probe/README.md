@@ -24,6 +24,8 @@ cd web/.probe
 node build.mjs                                                   # esbuild 打包两个入口（原生二进制，不碰 WASM）
 node --import ./globals.mjs entry-settings.cjs                   # 设置页「重置界面状态」7 项
 node --import ./globals.mjs entry-app.cjs                        # App 的上次目录/上次页面 11 项
+node --import ./globals.mjs entry-cancel.cjs                     # 取消后的撤销询问 12 项
+node --import ./globals.mjs entry-errors.cjs                     # 错误文案分层 24 项
 ```
 
 `--import ./globals.mjs` 必须在入口之前跑：它先建 jsdom，再把 `window`/`document`/`navigator`
@@ -35,6 +37,8 @@ node --import ./globals.mjs entry-app.cjs                        # App 的上次
 |---|---|---|
 | `entry-settings.cjs` 7 项 | `SettingsPage.test.tsx`「本机界面状态」2 项 | 区块渲染；点击调用回调一次并给出提示；**`setConfig`/`resetScope` 零调用**；不传回调时按钮 disabled |
 | `entry-app.cjs` 11 项 | `App.uiState.test.tsx` 5 项 | 启动预填上次目录＋候选；生成预览后回写（去重置顶、`lastSection` 不被擦）；无记录不预填不渲染候选；启动回到上次功能页；切页写回 `lastSection` |
+| `entry-cancel.cjs` 12 项 | `App.cancel-review.test.tsx` 5 项 | 取消且有已完成项→询问（数量/已落盘文案/初始焦点在「保留」）；确认→`undoPlan(planId)` 且关框；保留→不撤销；零完成/undo 任务/正常完成三个对照都不打扰 |
+| `entry-errors.cjs` 24 项 | `errors.test.tsx` 7 项 | 已知码位走本地化摘要＋动作（后端原文不当主行）；英文切换；未知码位回退并标 `localized=false`；**码表全量 55**、七分段非空、两语言两段齐全无占位符；横幅语义（alert/码位/摘要/动作/关闭）与未知码位不出现 raw key |
 
 ## 它是怎么搭起来的（三个坑）
 

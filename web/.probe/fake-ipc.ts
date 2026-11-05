@@ -36,6 +36,9 @@ export const state = {
   setUiStateCalls: [] as Array<Record<string, unknown>>,
   resetUiStateCalls: 0,
   planCalls: 0,
+  settledState: "cancelled" as string,
+  planNull: false,
+  undoCalls: [] as string[],
   calls: { getConfig: 0, setConfig: 0, resetScope: 0 }
 };
 
@@ -51,22 +54,29 @@ export function resetState(navigation?: UiNavigation) {
   state.setUiStateCalls = [];
   state.resetUiStateCalls = 0;
   state.planCalls = 0;
+  state.undoCalls = [];
+  state.settledState = "cancelled";
+  state.planNull = false;
   state.calls = { getConfig: 0, setConfig: 0, resetScope: 0 };
 }
 
 export const isTauri = () => true;
 
 export async function getStorageInfo() {
-  return { quarantineDir: "/q", journalFile: "/j" };
+  return { quarantineDir: "/q", journalFile: "/j", quarantineBytes: 0, journalBytes: 0, logBytes: 0 };
 }
 export async function getIpcMeta() {
-  return { contractVersion: 1, kernelVersion: "0.0.0" };
+  return { contractVersion: 1, kernelVersion: "0.0.0", version: "test", commands: [], events: [] };
 }
 export async function listTasks() {
   return { items: [], total: 0 };
 }
 export async function getTask(taskId: string) {
-  return { taskId, state: "completed" };
+  return {
+    taskId,
+    summary: { state: state.settledState, phase: "finalizing", done: 2, total: 3, message: "" },
+    entries: []
+  };
 }
 export async function listenTaskProgress() {
   return () => undefined;
@@ -74,12 +84,14 @@ export async function listenTaskProgress() {
 export async function listenTaskState() {
   return () => undefined;
 }
-export async function listenTaskDone() {
-  return () => undefined;
+export const doneListeners: Array<(event: unknown) => void> = [];
+export function listenTaskDone(callback: (event: unknown) => void) {
+  doneListeners.push(callback);
+  return Promise.resolve(() => undefined);
 }
 export async function planOperation() {
   state.planCalls += 1;
-  return PLAN;
+  return state.planNull ? null : PLAN;
 }
 export async function preflightPlan() {
   return PASS_REPORT;
@@ -87,7 +99,8 @@ export async function preflightPlan() {
 export async function applyPlan() {
   return { taskId: "task-apply" };
 }
-export async function undoPlan() {
+export async function undoPlan(planId: string) {
+  state.undoCalls.push(planId);
   return { taskId: "task-undo" };
 }
 export async function undoDryRun() {
@@ -109,7 +122,7 @@ export async function recoverTask() {
   return { taskId: "task-recover" };
 }
 export async function cleanupRetention() {
-  return { removed: 0 };
+  return { removedEntries: 0, removedLogRecords: 0 };
 }
 export async function renamePreview() {
   return { rows: [], counts: {} };
