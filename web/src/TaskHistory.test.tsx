@@ -10,6 +10,7 @@ const listed: TaskSummary[] = [
   {
     taskId: "01TASK-APPLY-0001",
     kind: "c09",
+    job: "apply",
     state: "partial-failed",
     phase: "finalizing",
     done: 2,
@@ -21,6 +22,7 @@ const listed: TaskSummary[] = [
   {
     taskId: "01TASK-APPLY-0002",
     kind: "c03",
+    job: "apply",
     state: "running",
     phase: "executing",
     done: 1,
@@ -30,7 +32,8 @@ const listed: TaskSummary[] = [
   },
   {
     taskId: "01TASK-UNDO-0003",
-    kind: "undo",
+    kind: "c09",
+    job: "undo",
     state: "completed",
     phase: "finalizing",
     done: 3,
@@ -102,6 +105,7 @@ describe("任务与撤销视图", () => {
         {
           taskId: "01TASK-INTERRUPTED",
           kind: "c09",
+          job: "apply",
           state: "interrupted",
           phase: "executing",
           done: 1,
@@ -118,6 +122,34 @@ describe("任务与撤销视图", () => {
     expect(within(row).queryByRole("button", { name: /取消任务/ })).toBeNull();
     await user.click(within(row).getByRole("button", { name: /续跑/ }));
     await waitFor(() => expect(recoverTask).toHaveBeenCalledWith("01TASK-INTERRUPTED", "resume"));
+  });
+
+  it("回滚任务不给二次撤销，回滚失败也不给重试（壳层会拒，判据是 job 不是 kind）", async () => {
+    // 真实可达形态：撤销任务的部分条目回滚失败 → 状态 partial-failed，kind 仍是"被回滚
+    // 计划的功能码"（壳层从不发 kind:"undo"）。旧实现按 kind !== "undo" 判别，于是给出
+    // 「重试失败项」，而 retryTask 对撤销任务必然 E1002；「撤销」同理造成二次回滚。
+    vi.mocked(listTasks).mockResolvedValueOnce({
+      items: [
+        {
+          taskId: "01TASK-UNDO-FAILED",
+          kind: "f12",
+          job: "undo",
+          state: "partial-failed",
+          phase: "finalizing",
+          done: 1,
+          total: 2,
+          planId: "01PLAN-D"
+        }
+      ],
+      total: 1
+    });
+    renderView();
+    await waitFor(() => expect(listTasks).toHaveBeenCalled());
+    const row = (await screen.findByText(/01TASK-UNDO-FAILED/)).closest(".row") as HTMLElement;
+    expect(within(row).queryByRole("button", { name: /重试失败项/ })).toBeNull();
+    expect(within(row).queryByRole("button", { name: /撤销计划/ })).toBeNull();
+    // 回滚为终态：只留取消/恢复类入口，不给再次回滚的通道
+    expect(within(row).getByText(/部分失败/)).toBeInTheDocument();
   });
 
   it("实时事件态覆盖静态快照：跑完的任务立刻显示已完成、取消按钮消失", async () => {

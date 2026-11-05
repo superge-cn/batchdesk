@@ -169,7 +169,9 @@ export function TaskHistory({
       );
     }
 
-    if ((task.state === "failed" || task.state === "partial-failed") && task.kind !== "undo") {
+    // 回滚任务的重试没有意义：壳层只接受 apply 任务重试（否则必然 E1002）。判别用 job，
+    // 因为 kind 装的是被处理计划的功能码，壳层从不把它写成 "undo"。
+    if ((task.state === "failed" || task.state === "partial-failed") && task.job !== "undo") {
       buttons.push(
         <button
           key="retry"
@@ -186,7 +188,8 @@ export function TaskHistory({
 
     const planId = task.planId;
     // undo 任务本身就消耗掉了那次撤销：它没有可再撤销的条目，不给入口（回滚为终态）。
-    if (planId && task.kind !== "undo" && !isActiveState(task.state)) {
+    // 回滚为终态，不可二次回滚（设计 01 §7、feature.execute.done 的措辞同源）。
+    if (planId && task.job !== "undo" && !isActiveState(task.state)) {
       buttons.push(
         <button
           key="undo"

@@ -23,6 +23,7 @@ import type {
   TaskDetail,
   TaskHandle,
   TaskPage,
+  TaskJob,
   TaskState,
   TaskSummary,
   UiState
@@ -183,7 +184,10 @@ export async function mockPlan(input: PlanOperationInput): Promise<PlanDocument>
 
 interface MockTask {
   taskId: string;
-  kind: "apply" | "undo";
+  /** 任务类别（执行/回滚）。列表与 done 事件都用它判别，不再借用计划功能码。 */
+  kind: TaskJob;
+  /** 被处理计划的功能码：与壳层一致，`summary.kind` 取这个值。 */
+  planKind: string;
   state: TaskState;
   phase: ProgressPhase;
   done: number;
@@ -226,7 +230,8 @@ function emitProgress(task: MockTask, message?: string) {
 function summary(task: MockTask): TaskSummary {
   return {
     taskId: task.taskId,
-    kind: "c09",
+    kind: task.planKind,
+    job: task.kind,
     state: task.state,
     phase: task.phase,
     done: task.done,
@@ -322,6 +327,7 @@ function createTask(
   const task: MockTask = {
     taskId: nextTaskId(kind),
     kind,
+    planKind: lastPlan?.kind ?? "c09",
     planId,
     state: "queued",
     phase: "queued",

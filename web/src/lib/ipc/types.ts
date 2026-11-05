@@ -19,6 +19,9 @@ export type ProgressPhase =
   | "executing"
   | "journaling"
   | "finalizing";
+/** 任务类别：apply＝执行计划，undo＝按 Journal 回滚。kind 是"被处理计划的功能码"，不承担这个判别（设计 01 §2.1 v1.49）。 */
+export type TaskJob = "apply" | "undo";
+
 export type TaskState =
   | "queued"
   | "running"
@@ -125,7 +128,11 @@ export interface TaskStateEvent {
 
 export interface TaskSummary {
   taskId: string;
+  /** 被处理计划的功能码（`f12`／`c09`…）。**不**用于区分执行与回滚——那用 `job`。 */
   kind: string;
+  /** 任务类别：执行还是回滚。壳层过去只在 done 事件里带这个判别，列表拿不到，
+   * 于是「撤销任务不再提供重试/二次撤销」在界面上是死分支（设计 01 §2.1 v1.49）。 */
+  job: TaskJob;
   state: TaskState;
   phase: ProgressPhase;
   done: number;

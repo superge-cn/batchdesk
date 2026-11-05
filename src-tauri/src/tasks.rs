@@ -70,7 +70,11 @@ impl TaskState {
 #[serde(rename_all = "camelCase")]
 pub struct TaskSummary {
     pub task_id: String,
+    /// 被处理计划的功能码（`f12`／`c09`…），不承担执行/回滚判别。
     pub kind: String,
+    /// 任务类别。旧 S03 快照没有该字段，按 `Apply` 处理，不能因此拒绝加载队列。
+    #[serde(default)]
+    pub job: TaskJob,
     pub state: TaskState,
     pub phase: ProgressPhase,
     pub done: u64,
@@ -120,6 +124,19 @@ pub enum ProtectedSource {
     /// protectedDirs 来自 ConfigDocument.security.protectedDirs；
     /// apply 前若配置变化则旧预览失效（S02 名单变更重算）。
     Config,
+}
+
+/// 任务类别：执行还是按 Journal 回滚。`TaskSummary.kind` 装的是**被处理计划的功能码**
+/// （设计 01 §2.1），不能用来判别——界面曾长期按 `kind === "undo"` 判别，而壳层从不
+/// 发出那个值，于是回滚任务照样提供「重试失败项」与二次「撤销」，两者都被壳层拒。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskJob {
+    /// 执行计划（含 retryTask 派生的重跑任务）。
+    #[default]
+    Apply,
+    /// 按共享 Journal 回滚（终态，不可二次回滚）。
+    Undo,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -310,6 +327,12 @@ impl TaskQueue {
             let mut summary = persisted.summary;
             // 旧快照没有 planId：从 job 补回，任务列表才能走到撤销。
             summary.plan_id = Some(plan_id.clone());
+            // 同理，升级前的快照没有 `job` 字段：以 StoredJob 为准重算，
+            // 否则中断的**回滚**任务会被当成执行任务，界面又给出重试与二次撤销。
+            summary.job = match &persisted.job {
+                StoredJob::Apply { .. } => TaskJob::Apply,
+                StoredJob::Undo { .. } => TaskJob::Undo,
+            };
             let interrupted_from = summary.state;
             summary.state = TaskState::Interrupted;
             summary.finished_at = None;
@@ -484,13 +507,14 @@ impl TaskQueue {
 
     fn insert(&self, task_id: &str, job: StoredJob, total: u64, message: Option<String>) -> String {
         let plan_id = job.plan_id();
-        let kind = match &job {
-            StoredJob::Apply { plan, .. } => plan.plan.kind.clone(),
-            StoredJob::Undo { plan_id } => journal_plan_kind(&self.inner.paths, plan_id),
+        let (kind, job_kind) = match &job {
+            StoredJob::Apply { plan, .. } => (plan.plan.kind.clone(), TaskJob::Apply),
+            StoredJob::Undo { plan_id } => (journal_plan_kind(&self.inner.paths, plan_id), TaskJob::Undo),
         };
         let summary = TaskSummary {
             task_id: task_id.to_string(),
             kind,
+            job: job_kind,
             state: TaskState::Queued,
             phase: ProgressPhase::Queued,
             done: 0,
@@ -2135,6 +2159,7 @@ mod tests {
         let summary = TaskSummary {
             task_id: task_id.to_string(),
             kind: plan.kind.clone(),
+            job: TaskJob::Apply,
             state,
             phase: ProgressPhase::Queued,
             done: 0,
@@ -2620,6 +2645,66 @@ mod tests {
             Err(error) => assert_eq!(error.code, "E1007"),
             Ok(_) => panic!("the degraded operation log stays unusable"),
         }
+    }
+
+    #[test]
+    fn undo_tasks_report_job_undo_while_kind_stays_the_plan_code() {
+        // 判别执行/回滚靠 `job`：`kind` 是被处理计划的功能码，撤销任务也照样是它。
+        // 界面曾按 `kind === "undo"` 判别，而壳层从不发出那个值，于是回滚任务
+        // 提供「重试失败项」（retryTask 必拒）与二次「撤销」（回滚是终态）。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("a.txt");
+        let second = root.join("b.txt");
+        fs::write(&first, b"same").unwrap();
+        fs::write(&second, b"same").unwrap();
+        let plan = plan_for(&new_ulid("job-plan"), &[first.clone(), second.clone()]);
+        let plan_id = plan.plan_id.clone();
+        let plan_kind = plan.kind.clone();
+
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: temp.0.join("quarantine"),
+                journal_path: temp.0.join("journal.jsonl"),
+                queue_path: temp.0.join("tasks.json"),
+                oplog_path: temp.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_event, _payload| {}),
+        );
+
+        let apply_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+        );
+        let applied = wait_terminal(&queue, &apply_id);
+        assert_eq!(applied.summary.job, TaskJob::Apply);
+        assert_eq!(applied.summary.kind, plan_kind);
+
+        let undo_id = queue.enqueue_undo(plan_id.clone());
+        let undone = wait_terminal(&queue, &undo_id);
+        assert_eq!(undone.summary.job, TaskJob::Undo);
+        assert_eq!(
+            undone.summary.kind, plan_kind,
+            "undo tasks carry the reverted plan's code, never the literal \"undo\""
+        );
+
+        // 列表与 wire 形状：界面拿到的每条 summary 都带 job（TS 侧按它判别）。
+        let page = queue.list(0, 10);
+        let by_id: std::collections::HashMap<String, TaskJob> = page
+            .items
+            .iter()
+            .map(|item| (item.task_id.clone(), item.job))
+            .collect();
+        assert_eq!(by_id.get(&apply_id), Some(&TaskJob::Apply));
+        assert_eq!(by_id.get(&undo_id), Some(&TaskJob::Undo));
+        let wire = serde_json::to_value(&undone.summary).unwrap();
+        assert_eq!(wire["job"], Value::String("undo".to_string()));
     }
 
     #[test]
@@ -3244,12 +3329,46 @@ mod tests {
             r#"{"taskId":"t1","kind":"c09","state":"running","phase":"queued","done":0,"total":0}"#;
         let summary: TaskSummary = serde_json::from_str(json).unwrap();
         assert!(summary.plan_id.is_none());
+        // `job` 也是后加的：旧快照缺该字段按 Apply 处理，不能拒绝加载队列。
+        assert_eq!(summary.job, TaskJob::Apply);
+    }
+
+    #[test]
+    fn legacy_snapshots_recover_job_from_the_stored_job() {
+        // 升级前的 S03 快照没有 `job` 字段。若只按反序列化缺省当执行任务，
+        // 一个中断的**回滚**任务会在恢复后被给出「重试失败项」与二次「撤销」——
+        // 两者都被壳层拒（retryTask 只接受 apply；回滚是终态）。以 StoredJob 为准重算。
+        let temp = TempDir::new();
+        let queue_path = temp.0.join("tasks.json");
+        fs::write(
+            &queue_path,
+            r#"{"tasks":[{"summary":{"taskId":"t-undo","kind":"f12","state":"running","phase":"executing","done":1,"total":2},"job":{"job":"undo","plan_id":"01PLANJ"},"entries":[]}]}"#,
+        )
+        .unwrap();
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: temp.0.join("quarantine"),
+                journal_path: temp.0.join("journal.jsonl"),
+                queue_path: queue_path.clone(),
+                oplog_path: temp.0.join("oplog.sqlite3"),
+            },
+            Arc::new(|_event, _payload| {}),
+        );
+        let detail = queue.get("t-undo").expect("legacy undo task recovered");
+        assert_eq!(detail.summary.job, TaskJob::Undo);
+        assert_eq!(detail.summary.kind, "f12", "kind 仍是计划功能码");
+        assert_eq!(detail.summary.state, TaskState::Interrupted);
+        // 重算后仍会写回快照：下一次加载不再依赖 StoredJob 推导。
+        let rewritten = queue.get("t-undo").unwrap().summary;
+        let wire = serde_json::to_value(&rewritten).unwrap();
+        assert_eq!(wire["job"], Value::String("undo".to_string()));
     }
 
     fn insert_control_task(queue: &TaskQueue, task_id: &str) {
         let summary = TaskSummary {
             task_id: task_id.to_string(),
             kind: "c09".to_string(),
+            job: TaskJob::Apply,
             state: TaskState::Queued,
             phase: ProgressPhase::Queued,
             done: 0,
