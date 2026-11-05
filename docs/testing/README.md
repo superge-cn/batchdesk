@@ -28,7 +28,7 @@
 判定（10 秒）：`node -e "try{new WebAssembly.Memory({initial:1});console.log('WASM_OK')}catch(e){console.log('WASM_FAIL')}"`。
 
 `WASM_FAIL` 时的替代通道：`web/.probe/`（esbuild 原生打包 ＋ jsdom，直接渲染真实组件）。
-它复刻 `SettingsPage.test.tsx`／`App.uiState.test.tsx`／`App.cancel-review.test.tsx`／`errors.test.tsx` 的**用户可见行为**，五个入口共 **70 条断言**（设置页 7／App·UiState 11／取消回顾 12／错误文案 24／导航可达 16）；
+它复刻 `SettingsPage.test.tsx`／`App.uiState.test.tsx`／`App.cancel-review.test.tsx`／`errors.test.tsx` 的**用户可见行为**，六个入口共 **77 条断言**（设置页 7／App·UiState 11／取消回顾 12／错误文案 24／导航可达 16／集中报告 7）；
 用法与边界见 [`web/.probe/README.md`](../../web/.probe/README.md)。
 
 **口径**：这是弱证据，不是测试套件的替代。CI 的 web job（Vitest＋Playwright）仍是权威；
