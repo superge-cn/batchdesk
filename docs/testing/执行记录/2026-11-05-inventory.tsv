@@ -689,6 +689,7 @@ vitest::SettingsPage.test.tsx::设置页 只读档（E1007）给出可读提示�
 vitest::SettingsPage.test.tsx::本机界面状态（设计 03 §11.3） 重置界面状态调用回调并给出提示，且不碰任何 ConfigDocument 命令	ok
 vitest::SettingsPage.test.tsx::本机界面状态（设计 03 §11.3） 不传回调时按钮保持禁用（独立渲染不假装能重置）	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 列出任务并把状态、进度如实呈现（不是只显示 id）	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 功能码在列表里给名字，码位仍然保留（09 §2／06 §3 的支持句柄口径）	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 执行中的任务可取消，调用 cancelTask	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 失败任务可重试，调用 retryTask（只重跑失败条目）	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 撤销按 planId 走 undoPlan，且 undo 任务自己不提供重试	ok
