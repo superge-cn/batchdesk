@@ -3980,6 +3980,11 @@ mod tests {
         fn case_sensitivity(&self) -> CaseSense {
             CaseSense::Sensitive
         }
+
+        // 测试替身模拟 POSIX 临时目录：与 `Sensitive` 同一个前提，不是"随便填"。
+        fn name_rules(&self) -> crate::conflict::NameRules {
+            crate::conflict::NameRules::posix()
+        }
     }
 
     #[derive(Default)]

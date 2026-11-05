@@ -178,6 +178,9 @@ pub struct ApplyContext<'a> {
     pub now_rfc3339: String,
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。apply 期的名称复核
+    /// 必须与计划期同一套规则，否则会重演"计划选中、执行判不安全"的分叉。
+    pub name_rules: crate::conflict::NameRules,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
 }
@@ -1096,6 +1099,11 @@ mod tests {
             CaseSense::Sensitive
         }
 
+        // 测试替身模拟 POSIX 临时目录：与 `Sensitive` 同一个前提，不是"随便填"。
+        fn name_rules(&self) -> crate::conflict::NameRules {
+            crate::conflict::NameRules::posix()
+        }
+
         fn content_hash(&self, path: &str, algorithm: &str) -> Result<Option<String>, KernelError> {
             if algorithm != "blake3" {
                 return Ok(None);
@@ -1228,6 +1236,7 @@ mod tests {
             now_rfc3339: "2026-10-29T00:00:00Z".to_string(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
+            name_rules: crate::conflict::NameRules::windows(),
             progress: None,
             cancel: None,
         }

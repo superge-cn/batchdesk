@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use regex::Regex;
 
+use crate::conflict::NameRules;
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::path::ProtectedDir;
@@ -38,6 +39,8 @@ pub struct PlanF13Input {
     pub long_path_supported: bool,
     /// 壳层采集的写入权限事实（S01 的 `PathCheck` 同型）；只用于预览期点名。
     pub access_facts: Vec<crate::preflight::PathCheck>,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。
+    pub name_rules: NameRules,
     pub rule: PlanF13Rule,
 }
 
@@ -53,6 +56,7 @@ pub fn plan_f13(input: PlanF13Input) -> Result<PlanDocument, KernelError> {
         case_sense,
         long_path_supported,
         access_facts,
+        name_rules,
         rule,
     } = input;
     let mut params = BTreeMap::new();
@@ -77,6 +81,7 @@ pub fn plan_f13(input: PlanF13Input) -> Result<PlanDocument, KernelError> {
             case_sense,
             long_path_supported,
             access_facts,
+            name_rules,
         },
         F13_KIND,
         params,
@@ -200,6 +205,7 @@ mod tests {
             existing_targets: Vec::new(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
+            name_rules: crate::conflict::NameRules::windows(),
             long_path_supported: true,
             access_facts: Vec::new(),
             rule: PlanF13Rule {

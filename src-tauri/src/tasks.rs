@@ -1151,6 +1151,7 @@ fn run_apply(
             now_rfc3339: now_rfc3339(),
             protected_dirs: plan.protected_dirs.clone(),
             case_sense: plan.case_sense,
+            name_rules: platform::fs::name_rules(),
             progress: Some(&sink),
             cancel: Some(control.as_ref()),
         };
@@ -1222,6 +1223,7 @@ fn run_apply(
         now_rfc3339: now_rfc3339(),
         protected_dirs: plan.protected_dirs,
         case_sense: plan.case_sense,
+        name_rules: platform::fs::name_rules(),
         progress: Some(&sink),
         cancel: Some(control.as_ref()),
     };

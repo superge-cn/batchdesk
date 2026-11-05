@@ -1003,6 +1003,7 @@ fn plan_f11_shell(
         existing_files,
         protected_dirs: Vec::new(),
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
     })
     .map_err(IpcError::from)?;
     state.plans.lock().unwrap().insert(
@@ -1026,7 +1027,9 @@ fn f11_existing_facts(
     let mut existing: Vec<String> = Vec::new();
     let mut existing_files: Vec<String> = Vec::new();
     for row in rows {
-        let Ok(normalized) = kernel::create_dirs::normalize_list_path(&row.path) else {
+        let Ok(normalized) =
+            kernel::create_dirs::normalize_list_path(&row.path, platform::fs::name_rules())
+        else {
             continue;
         };
         let mut prefix = String::new();
@@ -1115,6 +1118,7 @@ fn plan_f12_shell(
         existing_targets: existing,
         protected_dirs: Vec::new(),
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
         long_path_supported,
         access_facts,
         rule: kernel::rename::PlanF12Rule {

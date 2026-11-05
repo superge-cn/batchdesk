@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::conflict::validate_target_name;
+use crate::conflict::{validate_target_name, NameRules};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::path::ProtectedDir;
@@ -44,6 +44,8 @@ pub struct PlanF11Input {
     pub existing_files: Vec<String>,
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。
+    pub name_rules: NameRules,
 }
 
 /// 生成 F11 计划：每条有效清单路径按其层级展开为 `create-dir` 条目。
@@ -83,7 +85,7 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
         if raw.is_empty() {
             continue;
         }
-        let normalized = match normalize_list_path(raw) {
+        let normalized = match normalize_list_path(raw, input.name_rules) {
             Ok(path) => path,
             Err(reason) => {
                 invalid_rows.push(format!("line {}: {reason}", row.line));
@@ -234,7 +236,7 @@ pub fn plan_f11(input: PlanF11Input) -> Result<PlanDocument, KernelError> {
 }
 
 /// 规范化清单相对路径；拒绝绝对路径、`..` 逃逸和非法/保留名。
-pub fn normalize_list_path(raw: &str) -> Result<String, String> {
+pub fn normalize_list_path(raw: &str, rules: NameRules) -> Result<String, String> {
     let trimmed = raw.trim().trim_start_matches('\u{feff}');
     if trimmed.is_empty() {
         return Err("empty path".to_string());
@@ -254,7 +256,7 @@ pub fn normalize_list_path(raw: &str) -> Result<String, String> {
     }
     let mut problems = Vec::new();
     for component in normalized.split('/') {
-        for warning in validate_target_name(component) {
+        for warning in validate_target_name(component, rules) {
             problems.push(format!("{component}: {}", warning.kind));
         }
     }
@@ -324,6 +326,7 @@ mod tests {
             existing_files: Vec::new(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
+            name_rules: crate::conflict::NameRules::windows(),
         }
     }
 
@@ -513,9 +516,12 @@ mod tests {
 
     #[test]
     fn normalize_rejects_absolute_and_escape_paths() {
-        assert!(normalize_list_path("../x").is_err());
-        assert!(normalize_list_path("/x").is_err());
-        assert!(normalize_list_path("C:/x").is_err());
-        assert_eq!(normalize_list_path("a/./b").unwrap(), "a/b");
+        assert!(normalize_list_path("../x", NameRules::windows()).is_err());
+        assert!(normalize_list_path("/x", NameRules::windows()).is_err());
+        assert!(normalize_list_path("C:/x", NameRules::windows()).is_err());
+        assert_eq!(
+            normalize_list_path("a/./b", NameRules::windows()).unwrap(),
+            "a/b"
+        );
     }
 }

@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+- **目标名合法性改成「能力值」，内核不再写死 Windows 规则（[ADR-0073](docs/adr/0073-目标名合法性改为能力值.md)，2026-11-05）**。`kernel::conflict::validate_target_name` 从 F12 切片起就带着两个常量——Windows 保留名（`CON`/`PRN`/`AUX`/`NUL`/`COM1–9`/`LPT1–9`）、非法字符 `< > : " | ? *`、结尾点与空格——**无条件**作用于所有调用方，一次 `if` 都没有。四个入口因此都在 Linux 上误伤合法名：F12/F13/C04 重命名把目标判 `E1002`，预览报 `reserved-name`/`invalid-char` 警告，F11 清单整行进 `invalid-rows` 建不出目录，C10 解压把含 `CON.txt` 的 ZIP 条目判成"不安全"整条跳过。POSIX 的文件名里只有 `/` 与 NUL 不可出现。
+
+  改法是把「什么是非法」变成数据：内核新增 `NameRules`（`windows()`／`posix()` 两个冻结取值），`validate_target_name`／`scan_conflicts` 收规则值；适配层新增 `FsAdapter::name_rules()`（`platform::fs::name_rules()`：Windows→`windows()`、其余→`posix()`），值经 `PlanF12Input`／`PlanF13Input`／`PlanC04Input`／`PlanF11Input`／`PlanC10Input` 与 apply 期的 `ApplyContext`／`ArchiveApplyContext` 传入。内核里不再有任何平台判断（不变量 1、设计 04 §2）。**空名/纯空白名对所有平台照旧拒绝**——那是产品级的"无意义名"，不随平台变，故没放进 `NameRules`。
+
+  同一批还修了一个**静默**的跨平台缺陷：`platform/src/fs.rs::case_sensitivity()` 原写作 `cfg!(windows) ? Insensitive : Sensitive`，把 macOS 归进了 Linux 那一档——而 APFS 默认不区分大小写（设计 04 §2 的平台表也这么写）。后果不是报错而是走错分支：macOS 上 `a.txt → A.txt` 被当成两个不同名字，唯一性校验不判占用、两阶段改名不触发。现按 Windows/macOS → `CaseInsensitive`、Linux → `Sensitive` 取值。
+
+  验证：`cargo test --workspace` **623 → 630 项**（kernel 413→418：`NameRules` 4 条规则用例＋1 条 F12 端到端回归；platform 103→105：两个平台能力用例），壳层 42 项不变。**先红实证**：CLI 的 `f12_reports_existing_conflicts_and_invalid_targets` 原本用 `CON` 断言 `E1002`——它在 Linux 上一直是靠"内核写死 Windows 规则"才绿的，改后立刻红；现拆成 `/`（两边都非法）与 `CON`（`assert_eq!(blocked, cfg!(windows))`）两半。**残余**：macOS 无 CI job、按卷探测（大小写敏感的 APFS／casefold ext4／Linux 挂 FAT-NTFS）未做、C07/C08 不过名称校验。
+
 - **处理模板有界面了，但只有「存取」那一半——「一键套用」仍等一个裁决（[ADR-0072](docs/adr/0072-处理模板前端只做存取半边.md)，2026-11-05）**。后端六条命令（`saveRecipe`/`getRecipe`/`listRecipes`/`deleteRecipe`/`exportRecipe`/`importRecipe`）从 2026-10-29 起就在 `src-tauri` 注册好了，而 `web/src` 对它们的调用数是 **0**：模板功能对用户而言一直不存在。卡住"套用"的是 [OQ-36](docs/OPEN-QUESTIONS.md)——模板里存的是 `PlanAction`（`split`／`edit-content`／`csv-rows`），壳层按功能码（`f01`／`c01`／`f08`）路由，而动作到功能码是**一对多**（`split` = f01/f02/f03），反推不出该走哪条采集路径。既然"存取"这一半不依赖裁决，就先把这一半做完。
 
   动工顺带查出三个潜伏缺陷，都不是新代码：① `kernel::recipe::PATH_PARAM_KEYS` 把 `source` 当路径键删——它是**编码**（`SourceEncoding`），于是保存一份 C01 转码模板会把「从 GB18030 转」这个最关键参数吃掉；② 真正的路径键反而没登记（`files`／`paths`／`manifest`／`outputDir`／`unclassifiedDir`…），不变量 13「模板不存绝对源路径」在保存这条路上等于空转；③ **只有 `importRecipe` 走了剔除、`saveRecipe` 没走**——同一份数据两个入口两种结果，差异会直接漂进用户的模板文件。

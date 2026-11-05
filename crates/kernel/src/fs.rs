@@ -306,6 +306,12 @@ pub trait FsAdapter: Send + Sync {
     fn stat(&self, path: &str) -> Result<StatInfo, KernelError>;
     fn canonicalize(&self, path: &str) -> Result<String, KernelError>;
     fn case_sensitivity(&self) -> CaseSense;
+    /// 目标名合法性规则（设计 04 §2.1）。
+    ///
+    /// 与 `case_sensitivity` 同属"环境事实"，但用法不同：这个值要一路带到计划
+    /// 输入里（`PlanF12Input::name_rules` 等），由计划函数原样使用；内核任何地方
+    /// 都不做 `cfg!(windows)` 判断（不变量 1）。
+    fn name_rules(&self) -> crate::conflict::NameRules;
     /// Optional content digest used for plan→apply revalidation.
     ///
     /// Returns `Ok(None)` when the adapter cannot hash with the requested

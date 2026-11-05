@@ -428,6 +428,7 @@ pub fn plan_zip_shell(
                 existing_targets: existing_paths(&output_dir),
                 protected_dirs: Vec::new(),
                 case_sense: CaseSense::Sensitive,
+                name_rules: platform::fs::name_rules(),
             })?
         }
         Some("compress") => {

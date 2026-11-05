@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use kernel::conflict::{scan_conflicts, ConflictKind};
+use kernel::conflict::{scan_conflicts, ConflictKind, NameRules};
 use kernel::csv::{
     plan_f05, validate_layout, CsvRecord, CsvRecordScanner, CsvSplitAccumulator, CsvSplitBasis,
     CsvSplitLayout, Delimiter, PlanF05File, PlanF05Input, Utf16Order,
@@ -116,6 +116,7 @@ fn rename_plan_for_row(
         existing_targets: vec![source_path.to_string()],
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
+        name_rules: NameRules::windows(),
         long_path_supported,
         access_facts: Vec::new(),
         rule: PlanF12Rule {
@@ -837,14 +838,24 @@ fn r02_case_only_targets_conflict_only_on_case_insensitive_hosts() {
         "样本目标名应仅大小写不同"
     );
 
-    let insensitive = scan_conflicts(&entries, &BTreeSet::new(), CaseSense::CaseInsensitive);
+    let insensitive = scan_conflicts(
+        &entries,
+        &BTreeSet::new(),
+        CaseSense::CaseInsensitive,
+        NameRules::windows(),
+    );
     assert_eq!(
         insensitive.conflicts.get(&1),
         Some(&ConflictKind::CaseOnly),
         "大小写不敏感卷上第二条目标应判 case-only"
     );
 
-    let sensitive = scan_conflicts(&entries, &BTreeSet::new(), CaseSense::Sensitive);
+    let sensitive = scan_conflicts(
+        &entries,
+        &BTreeSet::new(),
+        CaseSense::Sensitive,
+        NameRules::windows(),
+    );
     assert!(
         sensitive.conflicts.is_empty(),
         "大小写敏感卷上两个目标应视为不同名"
@@ -926,6 +937,7 @@ fn r06_extended_and_plain_paths_normalize_to_the_same_value() {
         existing_targets: vec![plain.clone()],
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
+        name_rules: NameRules::windows(),
         long_path_supported: true,
         access_facts: Vec::new(),
         rule: PlanF12Rule {
@@ -1026,6 +1038,7 @@ fn e03_readonly_target_is_marked_by_preflight_and_named_in_preview() {
         existing_targets: Vec::new(),
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
+        name_rules: NameRules::windows(),
         long_path_supported: true,
         access_facts: vec![PathCheck {
             path: source.clone(),

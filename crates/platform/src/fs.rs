@@ -122,6 +122,31 @@ impl CliFsAdapter {
     }
 }
 
+/// 本平台的**目标名合法性规则**（设计 04 §2.1）。
+///
+/// 这是适配层的判断，不是内核的：内核只收到 `NameRules` 值。Windows 拦保留名、
+/// `< > : " | ? *`、结尾点/空格；POSIX（Linux/macOS）只拦 `/` 与 NUL。
+pub fn name_rules() -> kernel::conflict::NameRules {
+    if cfg!(windows) {
+        kernel::conflict::NameRules::windows()
+    } else {
+        kernel::conflict::NameRules::posix()
+    }
+}
+
+/// 本平台的**大小写敏感能力**（设计 04 §2）。
+///
+/// Windows 与 macOS 的默认卷都不区分大小写，Linux 区分。这里只做**平台先验**：
+/// 大小写敏感的 APFS 卷与开了 casefold 的 ext4 目录不会被识别——按卷探测要传
+/// 计划根路径、多一次 stat，留到 macOS/Linux 批次（ADR-0073 §5 记了这条残余）。
+pub fn case_sensitivity() -> CaseSense {
+    if cfg!(windows) || cfg!(target_os = "macos") {
+        CaseSense::CaseInsensitive
+    } else {
+        CaseSense::Sensitive
+    }
+}
+
 impl FsAdapter for CliFsAdapter {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError> {
         fs::read(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
@@ -744,11 +769,11 @@ impl FsAdapter for CliFsAdapter {
     }
 
     fn case_sensitivity(&self) -> CaseSense {
-        if cfg!(windows) {
-            CaseSense::CaseInsensitive
-        } else {
-            CaseSense::Sensitive
-        }
+        case_sensitivity()
+    }
+
+    fn name_rules(&self) -> kernel::conflict::NameRules {
+        name_rules()
     }
 
     fn content_hash(&self, path: &str, algorithm: &str) -> Result<Option<String>, KernelError> {
@@ -1392,5 +1417,40 @@ mod tests {
             "C:data",
             "drive-relative stays unprefixed"
         );
+    }
+
+    /// 平台能力探测：适配层是唯一允许知道"平台是什么"的地方，内核只收到值。
+    #[test]
+    fn name_rules_follow_the_host_platform() {
+        let rules = name_rules();
+        let expect_windows = cfg!(windows);
+        assert_eq!(
+            rules == kernel::conflict::NameRules::windows(),
+            expect_windows
+        );
+        assert_eq!(
+            rules == kernel::conflict::NameRules::posix(),
+            !expect_windows
+        );
+        // 行为面：`CON.txt` 在 Windows 上是保留名，在 POSIX 上是普通文件名。
+        let warnings = kernel::conflict::validate_target_name("CON.txt", rules);
+        assert_eq!(warnings.is_empty(), !expect_windows, "{warnings:?}");
+        // 端口与自由函数必须同源，否则壳层两条采集路径会分叉。
+        assert_eq!(CliFsAdapter::new(None).name_rules(), rules);
+    }
+
+    /// 大小写能力：Windows/macOS 默认卷不区分大小写，Linux 区分。
+    ///
+    /// 这条用例在同一份代码里对三个平台各自成立——macOS 分支目前没有 CI job 跑，
+    /// 属 ADR-0073 §5 记的残余（人工在 mac 上跑一次即可，先由代码与设计表一致）。
+    #[test]
+    fn case_sensitivity_follows_the_host_platform() {
+        let expected = if cfg!(windows) || cfg!(target_os = "macos") {
+            CaseSense::CaseInsensitive
+        } else {
+            CaseSense::Sensitive
+        };
+        assert_eq!(case_sensitivity(), expected);
+        assert_eq!(CliFsAdapter::new(None).case_sensitivity(), expected);
     }
 }

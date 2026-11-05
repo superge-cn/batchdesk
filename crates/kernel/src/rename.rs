@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::conflict::{scan_conflicts, validate_target_name, ConflictKind};
+use crate::conflict::{scan_conflicts, validate_target_name, ConflictKind, NameRules};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::path::ProtectedDir;
@@ -88,6 +88,8 @@ pub struct PlanF12Input {
     /// 壳层采集的写入权限事实（与 S01 的 `PathCheck` 同型，按路径命中条目）。
     /// 只用于预览期点名，计划层不摸磁盘；执行期处置见设计 01 §5.1 与 OQ-37。
     pub access_facts: Vec<crate::preflight::PathCheck>,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。
+    pub name_rules: NameRules,
     pub rule: PlanF12Rule,
 }
 
@@ -110,6 +112,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
         case_sense,
         long_path_supported,
         access_facts,
+        name_rules,
         rule,
     } = input;
     let mut params = BTreeMap::new();
@@ -142,6 +145,7 @@ pub fn plan_f12(input: PlanF12Input) -> Result<PlanDocument, KernelError> {
             case_sense,
             long_path_supported,
             access_facts,
+            name_rules,
         },
         F12_KIND,
         params,
@@ -158,6 +162,8 @@ pub(crate) struct RenamePlanContext {
     pub long_path_supported: bool,
     /// 壳层采集的写入权限事实；仅用于预览期点名（方案 §5.13 的"预检标记"）。
     pub access_facts: Vec<crate::preflight::PathCheck>,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。
+    pub name_rules: NameRules,
 }
 
 /// F12/F13 共用的重命名计划核心：冲突扫描、长路径分级与两阶段编排。
@@ -175,6 +181,7 @@ pub(crate) fn plan_rename(
         case_sense,
         long_path_supported,
         access_facts,
+        name_rules,
     } = context;
     if plan_id.trim().is_empty() {
         return Err(KernelError::missing_param("planId is required"));
@@ -212,7 +219,7 @@ pub(crate) fn plan_rename(
         }
         let target = target_path(&item.path, &target_name);
         let target_key = conflict_key(&target, case_sense);
-        let target_warnings = validate_target_name(&target_name);
+        let target_warnings = validate_target_name(&target_name, name_rules);
         let mut blocked = None;
         if let Some(warning) = target_warnings.first() {
             blocked = Some(PlanBlocked {
@@ -287,7 +294,7 @@ pub(crate) fn plan_rename(
             )
         })
         .collect();
-    let scan = scan_conflicts(&pairs, &existing_effective, case_sense);
+    let scan = scan_conflicts(&pairs, &existing_effective, case_sense, name_rules);
 
     let mut valid = Vec::new();
     for (index, mapping) in mappings.into_iter().enumerate() {
@@ -739,6 +746,7 @@ mod tests {
             existing_targets: Vec::new(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
+            name_rules: crate::conflict::NameRules::windows(),
             long_path_supported: true,
             access_facts: Vec::new(),
             rule,
@@ -766,6 +774,43 @@ mod tests {
         assert_eq!(plan.entries.len(), 2);
         assert_eq!(plan.entries[0].target.as_deref(), Some("/data/new_a.txt"));
         assert_eq!(plan.params["twoPhase"], PlanParamValue::Bool(false));
+    }
+
+    /// ADR-0073 的回归点：`CON.txt` 在 Windows 上是保留名、在 POSIX 上是普通文件名。
+    /// 改成能力值之前，内核写死 Windows 规则，Linux 上"把 CON.txt 改成 CON.md"会被判
+    /// `E1002 target name is not allowed` —— 功能层面直接不可用。
+    /// 用「只改扩展名」的规则，是为了让**主名仍是 CON**，否则 `x-CON` 两边都合法，
+    /// 用例就测不到规则本身（第一次写这条时就是这么假绿的）。
+    #[test]
+    fn windows_only_names_are_renamed_when_the_rules_are_posix() {
+        let ext_rule = || PlanF12Rule {
+            prefix: None,
+            suffix: None,
+            find: Some("txt".to_string()),
+            replace: "md".to_string(),
+            scope: RenameScope::Ext,
+        };
+        let posix = plan_f12(PlanF12Input {
+            name_rules: crate::conflict::NameRules::posix(),
+            ..input(vec![item("CON.txt")], ext_rule())
+        })
+        .unwrap();
+        assert_eq!(posix.entries.len(), 1);
+        assert!(
+            posix.entries[0].blocked.is_none(),
+            "POSIX hosts may rename a file called CON.txt"
+        );
+        assert_eq!(posix.entries[0].target.as_deref(), Some("/data/CON.md"));
+
+        let windows = plan_f12(input(vec![item("CON.txt")], ext_rule())).unwrap();
+        assert_eq!(
+            windows.entries[0]
+                .blocked
+                .as_ref()
+                .map(|blocked| blocked.code.as_str()),
+            Some("E1002"),
+            "the same plan on Windows is still blocked"
+        );
     }
 
     #[test]

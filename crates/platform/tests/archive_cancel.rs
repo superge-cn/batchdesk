@@ -139,6 +139,7 @@ fn plan_for(fixture: &Fixture) -> kernel::plan::PlanDocument {
         existing_targets: Vec::new(),
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
+        name_rules: kernel::conflict::NameRules::windows(),
     })
     .expect("plan c10")
 }
@@ -169,6 +170,7 @@ fn cancel_between_items_keeps_extracted_files_and_stays_undoable() {
         now_rfc3339: "2026-11-03T00:00:00Z".to_string(),
         protected_dirs: Vec::new(),
         case_sense: adapter.case_sensitivity(),
+        name_rules: kernel::conflict::NameRules::windows(),
         progress: None,
         cancel: Some(&cancel),
     };
@@ -235,6 +237,7 @@ fn cancel_before_the_first_entry_touches_nothing() {
         now_rfc3339: "2026-11-03T00:00:00Z".to_string(),
         protected_dirs: Vec::new(),
         case_sense: adapter.case_sensitivity(),
+        name_rules: kernel::conflict::NameRules::windows(),
         progress: Some(&cancel),
         cancel: Some(&cancel),
     };

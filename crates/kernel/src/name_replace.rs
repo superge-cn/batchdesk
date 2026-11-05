@@ -58,6 +58,8 @@ pub struct PlanC04Input {
     pub long_path_supported: bool,
     /// 壳层采集的写入权限事实（S01 的 `PathCheck` 同型）；只用于预览期点名。
     pub access_facts: Vec<crate::preflight::PathCheck>,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。
+    pub name_rules: crate::conflict::NameRules,
     pub rule: PlanC04Rule,
 }
 
@@ -74,6 +76,7 @@ pub fn plan_c04(input: PlanC04Input) -> Result<PlanDocument, KernelError> {
         case_sense,
         long_path_supported,
         access_facts,
+        name_rules,
         rule,
     } = input;
     let mut params = BTreeMap::new();
@@ -103,6 +106,7 @@ pub fn plan_c04(input: PlanC04Input) -> Result<PlanDocument, KernelError> {
                 case_sense,
                 long_path_supported,
                 access_facts,
+                name_rules,
             },
             C04_KIND,
             params,
@@ -124,6 +128,7 @@ pub fn plan_c04(input: PlanC04Input) -> Result<PlanDocument, KernelError> {
                     case_sense,
                     long_path_supported,
                     access_facts,
+                    name_rules,
                 },
                 C04_KIND,
                 params,
@@ -154,6 +159,7 @@ mod tests {
             existing_targets: Vec::new(),
             protected_dirs: Vec::<ProtectedDir>::new(),
             case_sense: CaseSense::Sensitive,
+            name_rules: crate::conflict::NameRules::windows(),
             long_path_supported: true,
             access_facts: Vec::new(),
             rule,

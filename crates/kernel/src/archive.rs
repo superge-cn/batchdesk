@@ -11,7 +11,7 @@ use crate::apply::{
     execute_reverse, ApplyEntryReport, ApplyOptions, ApplyOutcome, ApplyReport, ApplyState,
     ApplyStatus, OnConflict,
 };
-use crate::conflict::validate_target_name;
+use crate::conflict::{validate_target_name, NameRules};
 use crate::error::KernelError;
 use crate::fs::{CaseSense, FsAdapter};
 use crate::journal::{FsOp, JournalStore};
@@ -119,6 +119,8 @@ pub struct PlanC10Input {
     pub existing_targets: Vec<String>,
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。
+    pub name_rules: NameRules,
 }
 
 #[derive(Clone, Debug)]
@@ -138,7 +140,7 @@ struct Selection {
     gbk_fallback: bool,
 }
 
-fn normalize_entry_name(raw: &str) -> Option<String> {
+fn normalize_entry_name(raw: &str, rules: NameRules) -> Option<String> {
     let trimmed = raw.trim_end_matches(['/', '\\']);
     if trimmed.is_empty() {
         return None;
@@ -159,7 +161,7 @@ fn normalize_entry_name(raw: &str) -> Option<String> {
         if part == ".." || part.contains('\0') {
             return None;
         }
-        if !validate_target_name(part).is_empty() {
+        if !validate_target_name(part, rules).is_empty() {
             return None;
         }
         parts.push(part);
@@ -183,6 +185,7 @@ fn select_entries(
     existing: &BTreeSet<String>,
     protected: &[ProtectedDir],
     sense: CaseSense,
+    rules: NameRules,
 ) -> Selection {
     let mut selection = Selection::default();
     for entry in entries {
@@ -192,7 +195,11 @@ fn select_entries(
         if entry.gbk_fallback {
             selection.gbk_fallback = true;
         }
-        let Some(name) = entry.name.as_deref().and_then(normalize_entry_name) else {
+        let Some(name) = entry
+            .name
+            .as_deref()
+            .and_then(|name| normalize_entry_name(name, rules))
+        else {
             selection.unsafe_names.push(
                 entry
                     .name
@@ -261,6 +268,7 @@ pub fn plan_c10(input: PlanC10Input) -> Result<PlanDocument, KernelError> {
         &existing,
         &input.protected_dirs,
         input.case_sense,
+        input.name_rules,
     );
     let total: u64 = selection.selected.iter().map(|entry| entry.size).sum();
     let ratio = if input.archive_size == 0 {
@@ -576,6 +584,8 @@ pub struct ArchiveApplyContext<'a> {
     pub now_rfc3339: String,
     pub protected_dirs: Vec<ProtectedDir>,
     pub case_sense: CaseSense,
+    /// 目标名合法性规则（平台能力；设计 04 §2.1）。与计划期同一套，见 `ApplyContext`。
+    pub name_rules: NameRules,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
 }
@@ -927,6 +937,7 @@ pub fn apply_archive_plan(
             &BTreeSet::new(),
             &context.protected_dirs,
             context.case_sense,
+            context.name_rules,
         );
         let total: u64 = selection.selected.iter().map(|item| item.size).sum();
         let ratio = if inspect.archive_size == 0 {
@@ -1165,15 +1176,30 @@ mod tests {
     #[test]
     fn entry_names_reject_traversal_and_absolute_paths() {
         assert_eq!(
-            normalize_entry_name("safe/ok.txt").as_deref(),
+            normalize_entry_name("safe/ok.txt", NameRules::windows()).as_deref(),
             Some("safe/ok.txt")
         );
-        assert_eq!(normalize_entry_name("safe/../escape.txt"), None);
-        assert_eq!(normalize_entry_name("../escape.txt"), None);
-        assert_eq!(normalize_entry_name("/etc/passwd"), None);
-        assert_eq!(normalize_entry_name(r"C:\windows\x"), None);
-        assert_eq!(normalize_entry_name("CON.txt"), None);
-        assert_eq!(normalize_entry_name("dir/"), Some("dir".to_string()));
+        assert_eq!(
+            normalize_entry_name("safe/../escape.txt", NameRules::windows()),
+            None
+        );
+        assert_eq!(
+            normalize_entry_name("../escape.txt", NameRules::windows()),
+            None
+        );
+        assert_eq!(
+            normalize_entry_name("/etc/passwd", NameRules::windows()),
+            None
+        );
+        assert_eq!(
+            normalize_entry_name(r"C:\windows\x", NameRules::windows()),
+            None
+        );
+        assert_eq!(normalize_entry_name("CON.txt", NameRules::windows()), None);
+        assert_eq!(
+            normalize_entry_name("dir/", NameRules::windows()),
+            Some("dir".to_string())
+        );
     }
 
     #[test]
@@ -1211,6 +1237,7 @@ mod tests {
             existing_targets: Vec::new(),
             protected_dirs: Vec::new(),
             case_sense: CaseSense::Sensitive,
+            name_rules: crate::conflict::NameRules::windows(),
         }
     }
 

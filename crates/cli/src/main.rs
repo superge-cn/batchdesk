@@ -765,6 +765,7 @@ fn run_apply(args: &[String]) -> i32 {
             now_rfc3339: now_rfc3339(),
             protected_dirs,
             case_sense: adapter.case_sensitivity(),
+            name_rules: platform::fs::name_rules(),
             progress: None,
             cancel: None,
         };
@@ -781,6 +782,7 @@ fn run_apply(args: &[String]) -> i32 {
             now_rfc3339: now_rfc3339(),
             protected_dirs,
             case_sense: adapter.case_sensitivity(),
+            name_rules: platform::fs::name_rules(),
             progress: None,
             cancel: None,
         };
@@ -1736,6 +1738,7 @@ fn run_c10(args: &[String]) -> i32 {
         existing_targets: existing,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
     });
     match planned {
         Ok(plan) => {
@@ -2530,6 +2533,7 @@ fn run_c04(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
         long_path_supported,
         access_facts,
         rule: PlanC04Rule {
@@ -4736,7 +4740,7 @@ fn run_f11(args: &[String]) -> i32 {
     let mut existing_targets = Vec::new();
     let mut existing_files = Vec::new();
     for row in &rows {
-        let Ok(normalized) = normalize_list_path(&row.path) else {
+        let Ok(normalized) = normalize_list_path(&row.path, platform::fs::name_rules()) else {
             continue;
         };
         let mut prefix = String::new();
@@ -4777,6 +4781,7 @@ fn run_f11(args: &[String]) -> i32 {
         existing_files,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
     });
     match planned {
         Ok(plan) => {
@@ -4945,6 +4950,7 @@ fn run_f12(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
         long_path_supported,
         access_facts,
         rule: PlanF12Rule {
@@ -5105,6 +5111,7 @@ fn run_f13(args: &[String]) -> i32 {
         existing_targets,
         protected_dirs,
         case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
         long_path_supported,
         access_facts,
         rule: PlanF13Rule {

@@ -616,6 +616,7 @@ fn plan_rename_match_shell(
         existing_targets,
         protected_dirs: Vec::new(),
         case_sense: CaseSense::Sensitive,
+        name_rules: platform::fs::name_rules(),
         long_path_supported,
         access_facts,
         rule: PlanC04Rule {

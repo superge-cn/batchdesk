@@ -157,9 +157,13 @@ kernel::conflict::tests::conflict_kinds_map_to_contract_strings_and_risk	ok
 kernel::conflict::tests::detects_case_only_conflicts_only_on_case_insensitive_hosts	ok
 kernel::conflict::tests::detects_conflicts_with_existing_files	ok
 kernel::conflict::tests::detects_within_batch_duplicates_and_case_variants	ok
+kernel::conflict::tests::empty_names_are_rejected_under_both_rule_sets	ok
 kernel::conflict::tests::existing_wins_over_batch_classification	ok
 kernel::conflict::tests::file_name_of_handles_both_separators	ok
+kernel::conflict::tests::posix_rules_accept_names_only_windows_forbids	ok
+kernel::conflict::tests::posix_rules_reject_only_slash_and_nul	ok
 kernel::conflict::tests::reports_name_warnings_for_platform_rules	ok
+kernel::conflict::tests::scan_conflicts_is_silent_about_posix_legal_names	ok
 kernel::conflict::tests::sequence_target_respects_case_insensitive_occupancy	ok
 kernel::conflict::tests::sequence_target_skips_occupied_names	ok
 kernel::create_dirs::tests::blocker_propagates_when_the_parent_was_planned_by_an_earlier_row	ok
@@ -458,6 +462,7 @@ kernel::rename::tests::prefix_rule_builds_direct_rename_entries	ok
 kernel::rename::tests::readonly_and_locked_facts_are_named_in_preview_warnings	ok
 kernel::rename::tests::scope_stem_and_ext_are_applied_separately	ok
 kernel::rename::tests::source_target_chain_is_not_an_existing_conflict	ok
+kernel::rename::tests::windows_only_names_are_renamed_when_the_rules_are_posix	ok
 kernel::rename::tests::windows_style_targets_still_match_existing_conflicts	ok
 kernel::replace_content::tests::anchored_and_unbounded_regex_still_produce_whole_file_results	ok
 kernel::replace_content::tests::blocked_files_are_not_named_as_readonly	ok
@@ -556,10 +561,12 @@ platform::csv_range::tests::start_beyond_rows_selects_nothing	ok
 platform::csv_range::tests::t02_corpus_quoted_newline_is_one_selected_record	ok
 platform::csv_range::tests::utf16_source_is_short_circuited_for_blocking	ok
 platform::fs::tests::backup_copies_into_quarantine_and_keeps_the_original	ok
+platform::fs::tests::case_sensitivity_follows_the_host_platform	ok
 platform::fs::tests::content_hash_matches_blake3_and_rejects_unknown_algorithm	ok
 platform::fs::tests::copy_range_atomic_writes_only_the_requested_slice	ok
 platform::fs::tests::copy_ranges_atomic_writes_the_prefix_once_before_all_ranges	ok
 platform::fs::tests::extended_path_is_identity_on_unix	ok
+platform::fs::tests::name_rules_follow_the_host_platform	ok
 platform::fs::tests::open_read_stream_pulls_bytes_on_demand_and_reports_missing_files	ok
 platform::fs::tests::quarantine_rename_restores_the_file	ok
 platform::fs::tests::read_ranges_returns_selected_bytes_and_rejects_invalid_spans	ok

@@ -2699,7 +2699,32 @@ fn f12_reports_existing_conflicts_and_invalid_targets() {
             |entry| entry["conflict"]["kind"] == "existing-target" && entry["resolution"] == "skip"
         ));
 
+    // 非法名分两半验，别把"Windows 规则"当成"所有平台"：
+    // ① `/` 两边都不允许（POSIX 只禁 `/` 与 NUL），这条是与平台无关的断言；
+    // ② `CON` 是 Windows 保留名、POSIX 上的普通文件名——按宿主断言（ADR-0073）。
+    //    改前这里只跑 ①，② 一直假装成立，Linux 上其实早就是假绿。
     let invalid = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--find",
+        "a",
+        "--replace",
+        "a/b",
+        "--json",
+    ]);
+    assert!(invalid.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&invalid.stdout).unwrap();
+    assert!(
+        document["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["blocked"]["code"] == "E1002"),
+        "a target name containing '/' is invalid on every platform"
+    );
+
+    let reserved = batchdesk(&[
         "f12",
         "--dir",
         path_text(&root),
@@ -2709,13 +2734,18 @@ fn f12_reports_existing_conflicts_and_invalid_targets() {
         "CON",
         "--json",
     ]);
-    assert!(invalid.status.success());
-    let document: serde_json::Value = serde_json::from_slice(&invalid.stdout).unwrap();
-    assert!(document["entries"]
+    assert!(reserved.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&reserved.stdout).unwrap();
+    let blocked = document["entries"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["blocked"]["code"] == "E1002"));
+        .any(|entry| entry["blocked"]["code"] == "E1002");
+    assert_eq!(
+        blocked,
+        cfg!(windows),
+        "CON is a reserved name on Windows and an ordinary name on POSIX"
+    );
 }
 
 #[test]
