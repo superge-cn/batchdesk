@@ -207,21 +207,30 @@ def digest_of(path: Path, limit: int | None = None) -> tuple[str, int]:
     return digest.hexdigest(), total
 
 
+def has_border(needle: bytes) -> bool:
+    """needle 是否有 border（某个真前缀＝某个真后缀）。有 border 时，一次命中内部还可能
+    再起一次命中（"aaa" 里的 "aa"），整块替换与固定回退就会重复计数；无 border 时
+    「一次命中的内部不会另起一次命中」成立，才能走 C 层整块快速路径。"""
+    return any(needle[:k] == needle[len(needle) - k:] for k in range(1, len(needle)))
+
+
 def count_needle(path: Path, needle: bytes, limit: int | None = None) -> int:
     """非重叠左到右计数（与 C03 plain 的替换纪律同口径）。
 
-    单字节（如 LF）没有跨块与自叠加问题，逐块 `count` 即可。更长的针要逐匹配推进起点：
-    尾巴必须从**上一次命中的末尾**接着扫，否则自叠加模式会把已消费的字节再数一遍
-    （"aaa" 里的 "aa" 只算一次）；代价是 O(命中数) 的 Python 循环，所以它只用在子档的前置
-    断言与单元格臂校验上，整档只有 unit=1 那条跑得动。
+    单字节与无 border 的针走整块 `bytes.count`＋固定回退 len-1 字节：这种针不会在一次
+    命中的内部再起一次命中，所以尾巴里不会重复计数。其余（有 border 的字面串）必须逐命中
+    推进起点，代价 O(命中数)——只在子档用得动。
     """
     length = len(needle)
-    if length == 1:
-        return sum(block.count(needle) for block in read_blocks(path, limit))
+    fast = length == 1 or not has_border(needle)
     found = 0
-    tail = b""
+    pending = b""
     for block in read_blocks(path, limit):
-        buf = tail + block
+        buf = pending + block
+        if fast:
+            found += buf.count(needle)
+            pending = buf[len(buf) - length + 1:] if length > 1 else b""
+            continue
         index = 0
         while True:
             at = buf.find(needle, index)
@@ -229,7 +238,17 @@ def count_needle(path: Path, needle: bytes, limit: int | None = None) -> int:
                 break
             found += 1
             index = at + length
-        tail = buf[max(index, len(buf) - length + 1):]
+        pending = buf[max(index, len(buf) - length + 1):]
+    if fast and pending:
+        found += pending.count(needle)
+    elif pending:
+        index = 0
+        while True:
+            at = pending.find(needle, index)
+            if at < 0:
+                break
+            found += 1
+            index = at + length
     return found
 
 
@@ -259,30 +278,42 @@ def _sub_step(buf: bytes, finder, repl: bytes, unit: int) -> tuple[bytes, bytes]
 def expected_digest(path: Path, spec: dict, limit: int | None = None) -> tuple[str, int]:
     """期望产物的 sha256 与字节数（校验用，在计时区外跑，不落盘）。
 
-    unit=1（LF→CRLF）时逐块整段替换即可：单字节匹配没有跨块问题，`bytes.replace` 的左到右
-    非重叠语义与内核一致。unit>1 时用 `_sub_step` 的逐步提交算法——它是 O(命中数) 的 Python
-    循环，所以 2 GiB 档只有 unit=1 这条跑得动（C03 两臂因此只到子档，见 R-14／R-15 口径）。
+    两条路径，产物必须逐字节相同（randomized 对账把住）：
+    - 整块快速路径只用于 **unit=1**（LF→CRLF）：单字节匹配既不跨块也不自叠加，逐块
+      `bytes.replace` 与整段一次替换逐字相等；
+    - 其余全部走 `_sub_step` 的逐步提交（有 border 的字面串、无 border 的长字面串、定长正则）。
+      长字面串**不能**走"整块替换＋固定回退"：那种做法会在回退点切断一次已提交的命中
+      （`abcd` 恰好压在边界上时，替换串的前缀被发出、剩余部分被当成输入带进下一块），
+      随机对账当场把它打回，所以这里宁可留 O(命中数) 的循环——2 GiB 每轮校验约 4 分钟。
     """
     digest = hashlib.sha256()
     total = 0
     find = spec["find"]
     repl = spec["replace"]
     unit = spec["unit"]
-    if spec["kind"] == "literal" and unit == 1:
+    fast = spec["kind"] == "literal" and unit == 1
+    if fast:
+        pending = b""
         for block in read_blocks(path, limit):
-            out = block.replace(find, repl)
+            buf = pending + block
+            if unit == 1:
+                out, pending = buf.replace(find, repl), b""
+            elif len(buf) < unit:
+                pending = buf
+                continue
+            else:
+                decided = len(buf) - unit + 1
+                full = buf.replace(find, repl)
+                if len(full) != len(buf):
+                    raise SystemExit("等长替换前提被破坏，截取前缀的算法不再成立")
+                out, pending = full[:decided], buf[decided:]
             digest.update(out)
             total += len(out)
+        if pending:
+            digest.update(pending)
+            total += len(pending)
         return digest.hexdigest(), total
-    if spec["kind"] == "literal":
-        def finder(buf: bytes, index: int) -> int:
-            return buf.find(find, index)
-    else:
-        compiled = re.compile(find)
-
-        def finder(buf: bytes, index: int) -> int:
-            match = compiled.search(buf, index)
-            return -1 if match is None else match.start()
+    finder = _finder(spec)
     pending = b""
     for block in read_blocks(path, limit):
         out, pending = _sub_step(pending + block, finder, repl, unit)
@@ -293,6 +324,24 @@ def expected_digest(path: Path, spec: dict, limit: int | None = None) -> tuple[s
     digest.update(out)
     total += len(out)
     return digest.hexdigest(), total
+
+
+def _finder(spec: dict):
+    """逐步提交路径用的「下一个命中起点」：字面串走 `find`，正则走 `search`。"""
+    if spec["kind"] == "literal":
+        needle = spec["find"]
+
+        def finder(buf: bytes, index: int) -> int:
+            return buf.find(needle, index)
+
+        return finder
+    compiled = re.compile(spec["find"])
+
+    def finder(buf: bytes, index: int) -> int:
+        match = compiled.search(buf, index)
+        return -1 if match is None else match.start()
+
+    return finder
 
 
 

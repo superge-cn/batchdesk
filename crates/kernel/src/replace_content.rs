@@ -166,22 +166,53 @@ impl Matcher {
     }
 }
 
-fn context_snippet(text: &str, start: usize, length: usize) -> String {
-    let mut begin = start.saturating_sub(20);
-    while begin > 0 && !text.is_char_boundary(begin) {
+/// 上下文半径（字节）：预览取匹配前后各 20 字节；壳层按「半径＋边界余量」回读窗口。
+pub const CONTEXT_RADIUS_BYTES: usize = 20;
+/// UTF-8 单字符最长 4 字节，因此向两侧走到字符边界最多各退 3 字节；窗口按这个余量多取。
+pub const CONTEXT_SLACK_BYTES: usize = 3;
+
+/// 首个匹配在全文中的字节偏移。流式采集只记偏移，上下文由壳层按偏移做一次
+/// **有界**回读后交给 [`context_from_window`]——这样内存与文件体积无关，
+/// 而预览文本与整段采集逐字一致。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstMatch {
+    pub start: usize,
+    pub length: usize,
+}
+
+/// 预览上下文只有一条规则：±20 字节、落到字符边界、`\r`/`\n` 折成空格、60 字符截尾。
+/// 整段版与流式版共用这里（`window` 取全文时窗口偏移为 0、`text_len` 即全文长度）。
+pub fn context_from_window(
+    window: &[u8],
+    window_start: usize,
+    text_len: usize,
+    matched: FirstMatch,
+) -> String {
+    let want_begin = matched.start.saturating_sub(CONTEXT_RADIUS_BYTES);
+    let want_end = (matched.start + matched.length + CONTEXT_RADIUS_BYTES).min(text_len);
+    let mut begin = want_begin.saturating_sub(window_start);
+    while (window_start + begin) > 0 && !is_utf8_boundary(window, begin) {
         begin -= 1;
     }
-    let mut end = (start + length + 20).min(text.len());
-    while end < text.len() && !text.is_char_boundary(end) {
+    let mut end = want_end - window_start;
+    while end < window.len() && !is_utf8_boundary(window, end) {
         end += 1;
     }
-    let snippet = text[begin..end].replace(['\r', '\n'], " ");
+    let snippet = String::from_utf8_lossy(&window[begin..end]).replace(['\r', '\n'], " ");
     if snippet.chars().count() > 60 {
         let truncated: String = snippet.chars().take(60).collect();
         format!("{truncated}…")
     } else {
         snippet
     }
+}
+
+fn is_utf8_boundary(bytes: &[u8], index: usize) -> bool {
+    !matches!(bytes.get(index), Some(byte) if (0x80..=0xBF).contains(byte))
+}
+
+fn context_snippet(text: &str, start: usize, length: usize) -> String {
+    context_from_window(text.as_bytes(), 0, text.len(), FirstMatch { start, length })
 }
 
 pub fn validate_rule(mode: ReplaceMode, find: &str, replacement: &str) -> Result<(), KernelError> {
@@ -244,6 +275,349 @@ pub fn inspect_bytes(
     inspect.match_count = count;
     inspect.context = context;
     Ok(inspect)
+}
+
+/// 计划段流式采集的通道选择（C03 事实采集，方案 §5.14／§4.8）。
+///
+/// 划界与改写段用的是同一把尺子（ADR-0057／ADR-0064）：能算出匹配长度上界才允许窗口化。
+/// 因此**不能**把本模块写成「C03 计划段已全流式」。
+pub enum ReplaceScan {
+    /// 内存 O(块＋窗口)：plain 文本、静态可界定上界的正则、CSV 单元格三臂。
+    Streaming(ReplaceStreamInspector),
+    /// 单元格臂但分隔符未定：壳层先用 `csv::DelimiterSniffer` 流式嗅探，再带着结果重来。
+    /// （整段版是把全文喂给 `sniff_delimiter`，判定口径不变，只是不再整读。）
+    SniffFirst,
+    /// 界定不出的正则（无界量词／锚点／`\b`／分组量化／零宽）：计划段仍整段采集，
+    /// 内存 O(文件)——行为与本 ADR 之前逐字节相同。
+    WholeFile,
+}
+
+/// 流式采集的产物。文本臂的 `inspect.context` 留空：上下文由壳层按 `context_probe`
+/// 做一次**有界**回读（±23 字节）后交给 [`context_from_window`]，规则与整段版同一条函数。
+pub struct StreamInspect {
+    pub inspect: ReplaceInspect,
+    pub context_probe: Option<FirstMatch>,
+    /// 全文字节数，供回读窗口判断末端是否已到文件尾。
+    pub text_len: usize,
+}
+
+/// C03 计划段的流式事实采集器：调用方逐块喂字节，本结构只保留尾巴窗口与首个匹配的偏移，
+/// 内存与文件体积无关。判定（左到右、非重叠、±20 字节上下文、未闭合引号、列数漂移、
+/// 非法 UTF-8 不计数）与 [`inspect_bytes`] 逐字一致，由等价性测试把住。
+pub struct ReplaceStreamInspector {
+    structure: ContentStructure,
+    scan: StreamScan,
+}
+
+enum StreamScan {
+    Text(TextScan),
+    Cell(Box<CellScan>),
+}
+
+enum TextKind {
+    Plain(String),
+    Regex { regex: Regex, window: usize },
+}
+
+impl TextKind {
+    /// 尾巴保留长度：字面串是 `len-1`，正则用的是算得出的字节上界（同改写段）。
+    fn overlap(&self) -> usize {
+        match self {
+            Self::Plain(find) => find.len().saturating_sub(1),
+            Self::Regex { window, .. } => *window,
+        }
+    }
+
+    fn next_match(&self, text: &str, search: usize) -> Option<(usize, usize)> {
+        match self {
+            Self::Plain(find) => text[search..]
+                .find(find.as_str())
+                .map(|offset| (search + offset, find.len())),
+            Self::Regex { regex, .. } => regex
+                .find(&text[search..])
+                .map(|matched| (search + matched.start(), matched.end() - matched.start())),
+        }
+    }
+}
+
+/// 文本臂（plain／可界定 regex）：逐块缓冲，只判定起点落在安全边界之前的匹配。
+/// 结构与 `ReplaceRewriter::rewrite_plain`／`rewrite_regex_windowed` 同源，
+/// 区别只在不写出内容。
+struct TextScan {
+    kind: TextKind,
+    buffer: Vec<u8>,
+    /// `buffer[0]` 在全文中的字节偏移。
+    base: usize,
+    total: usize,
+    count: u64,
+    first: Option<FirstMatch>,
+    utf8_error: bool,
+}
+
+impl TextScan {
+    fn new(kind: TextKind) -> Self {
+        Self {
+            kind,
+            buffer: Vec::new(),
+            base: 0,
+            total: 0,
+            count: 0,
+            first: None,
+            utf8_error: false,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.total += bytes.len();
+        if self.utf8_error {
+            return;
+        }
+        self.buffer.extend_from_slice(bytes);
+        self.scan(false);
+    }
+
+    fn finish(&mut self) {
+        if !self.utf8_error {
+            self.scan(true);
+        }
+    }
+
+    fn scan(&mut self, eof: bool) {
+        // 跨块被切开的多字节字符不算错：不完整尾巴留到下一块，EOF 才算错（同改写段）。
+        let valid = match std::str::from_utf8(&self.buffer) {
+            Ok(_) => self.buffer.len(),
+            Err(error) if error.error_len().is_none() && !eof => error.valid_up_to(),
+            Err(_) => {
+                self.utf8_error = true;
+                self.count = 0;
+                self.first = None;
+                self.buffer.clear();
+                return;
+            }
+        };
+        let mut safe = if eof {
+            self.buffer.len()
+        } else {
+            self.buffer.len().saturating_sub(self.kind.overlap())
+        };
+        safe = safe.min(valid);
+        safe = char_boundary_floor(&self.buffer[..valid], safe);
+        let text = std::str::from_utf8(&self.buffer[..valid]).expect("just validated");
+        let mut search = 0usize;
+        while let Some((start, length)) = self.kind.next_match(text, search) {
+            if start >= safe {
+                // 起点还在保留窗口里：下一块补齐后才是最终判定，否则会漏跨块匹配。
+                break;
+            }
+            self.count += 1;
+            if self.first.is_none() {
+                self.first = Some(FirstMatch {
+                    start: self.base + start,
+                    length,
+                });
+            }
+            search = start + length;
+        }
+        let consumed = search.max(safe);
+        self.buffer.drain(..consumed);
+        self.base += consumed;
+    }
+}
+
+/// 单元格臂：`RecordFeeder` 逐条产记录、逐字段计数，内存 O(单条记录)。
+/// 未闭合引号仍由 `CsvRecordScanner` 给出（与整段版同一个机器）。
+struct CellScan {
+    feeder: crate::csv_merge::RecordFeeder,
+    /// 未闭合引号仍由整段版用的同一台扫描器给出，收尾时取出 `finish()`。
+    scanner: Option<CsvRecordScanner>,
+    unclosed_quote: bool,
+    total: usize,
+    delimiter: Delimiter,
+    matcher: Matcher,
+    audit: Utf8Audit,
+    first_columns: Option<usize>,
+    column_drift: bool,
+    count: u64,
+    context: Option<String>,
+}
+
+impl CellScan {
+    fn push(&mut self, bytes: &[u8]) {
+        self.total += bytes.len();
+        self.audit.push(bytes, false);
+        if let Some(scanner) = self.scanner.as_mut() {
+            scanner.feed(bytes, |_| {});
+        }
+        let records = self.feeder.push(bytes);
+        self.consume(records);
+    }
+
+    fn finish(&mut self) {
+        self.audit.push(&[], true);
+        if let Some(scanner) = self.scanner.take() {
+            self.unclosed_quote = scanner.finish().unclosed_quote;
+        }
+        let records = self.feeder.drain_finish();
+        self.consume(records);
+    }
+
+    fn consume(&mut self, records: Vec<Vec<String>>) {
+        for record in records {
+            match self.first_columns {
+                Some(columns) if record.len() != columns => self.column_drift = true,
+                Some(_) => {}
+                None => self.first_columns = Some(record.len()),
+            }
+            for field in &record {
+                let (hits, context) = self.matcher.count_and_context(field);
+                self.count += hits;
+                if self.context.is_none() {
+                    self.context = context;
+                }
+            }
+        }
+    }
+}
+
+/// 增量 UTF-8 校验：与整段版 `from_utf8(data).is_err()` 同判定，尾巴不完整只在 EOF 才算错。
+#[derive(Default)]
+struct Utf8Audit {
+    pending: Vec<u8>,
+    invalid: bool,
+}
+
+impl Utf8Audit {
+    fn push(&mut self, bytes: &[u8], eof: bool) {
+        if self.invalid {
+            return;
+        }
+        let mut combined = std::mem::take(&mut self.pending);
+        combined.extend_from_slice(bytes);
+        match std::str::from_utf8(&combined) {
+            Ok(_) => self.pending.clear(),
+            Err(error) if error.error_len().is_none() && !eof => {
+                self.pending = combined[error.valid_up_to()..].to_vec();
+            }
+            Err(_) => {
+                self.invalid = true;
+                self.pending.clear();
+            }
+        }
+    }
+}
+
+impl ReplaceStreamInspector {
+    /// 按臂选择采集通道。`delimiter` 为 `None` 且走单元格臂时返回
+    /// [`ReplaceScan::SniffFirst`]：壳层嗅探完再带着结果重来。
+    pub fn start(
+        structure: ContentStructure,
+        csv_mode: CsvMode,
+        mode: ReplaceMode,
+        find: &str,
+        replacement: &str,
+        delimiter: Option<Delimiter>,
+    ) -> Result<ReplaceScan, KernelError> {
+        let matcher = Matcher::compile(mode, find, replacement)?;
+        if structure == ContentStructure::Csv && csv_mode == CsvMode::Cell {
+            let Some(delimiter) = delimiter else {
+                return Ok(ReplaceScan::SniffFirst);
+            };
+            return Ok(ReplaceScan::Streaming(Self {
+                structure,
+                scan: StreamScan::Cell(Box::new(CellScan {
+                    feeder: crate::csv_merge::RecordFeeder::new(delimiter.as_byte()),
+                    scanner: Some(CsvRecordScanner::new(delimiter.as_byte())),
+                    unclosed_quote: false,
+                    total: 0,
+                    delimiter,
+                    matcher,
+                    audit: Utf8Audit::default(),
+                    first_columns: None,
+                    column_drift: false,
+                    count: 0,
+                    context: None,
+                })),
+            }));
+        }
+        let kind = match matcher {
+            Matcher::Plain(find) => TextKind::Plain(find),
+            Matcher::Regex(regex) => match regex_window_bytes(regex.as_str()) {
+                Some(window) => TextKind::Regex { regex, window },
+                // 界定不出上界的正则：连计数都保持整段，内存口径与改写段一致。
+                None => return Ok(ReplaceScan::WholeFile),
+            },
+        };
+        Ok(ReplaceScan::Streaming(Self {
+            structure,
+            scan: StreamScan::Text(TextScan::new(kind)),
+        }))
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) {
+        match &mut self.scan {
+            StreamScan::Text(scan) => scan.push(bytes),
+            StreamScan::Cell(scan) => scan.push(bytes),
+        }
+    }
+
+    pub fn finish(self) -> StreamInspect {
+        match self.scan {
+            StreamScan::Text(mut scan) => {
+                scan.finish();
+                let mut inspect = ReplaceInspect {
+                    structure: self.structure,
+                    ..ReplaceInspect::default()
+                };
+                inspect.utf8_error = scan.utf8_error;
+                if scan.utf8_error {
+                    return StreamInspect {
+                        inspect,
+                        context_probe: None,
+                        text_len: scan.total,
+                    };
+                }
+                inspect.match_count = scan.count;
+                StreamInspect {
+                    inspect,
+                    context_probe: scan.first,
+                    text_len: scan.total,
+                }
+            }
+            StreamScan::Cell(mut scan) => {
+                scan.finish();
+                let mut inspect = ReplaceInspect {
+                    structure: self.structure,
+                    delimiter: Some(scan.delimiter),
+                    ..ReplaceInspect::default()
+                };
+                // 短路顺序与整段版一致：未闭合引号优先于 UTF-8 判定，两者都不计数。
+                if scan.unclosed_quote {
+                    inspect.unclosed_quote = true;
+                    return StreamInspect {
+                        inspect,
+                        context_probe: None,
+                        text_len: scan.total,
+                    };
+                }
+                if scan.audit.invalid {
+                    inspect.utf8_error = true;
+                    return StreamInspect {
+                        inspect,
+                        context_probe: None,
+                        text_len: scan.total,
+                    };
+                }
+                inspect.match_count = scan.count;
+                inspect.context = scan.context.take();
+                inspect.column_drift = scan.column_drift;
+                StreamInspect {
+                    inspect,
+                    context_probe: None,
+                    text_len: scan.total,
+                }
+            }
+        }
+    }
 }
 
 /// 执行内容变换（C03 重写器调用；整段读写）。
@@ -1072,6 +1446,411 @@ mod tests {
     use super::*;
 
     const PLAN_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    /// 一条待对账的用例：臂的入参＋输入字节。写成结构体是因为 clippy 不接受八个参数的
+    /// 测试助手，而不是因为逻辑需要它。
+    struct Case {
+        name: &'static str,
+        data: Vec<u8>,
+        structure: ContentStructure,
+        csv_mode: CsvMode,
+        mode: ReplaceMode,
+        find: &'static str,
+        replacement: &'static str,
+        delimiter: Option<Delimiter>,
+    }
+
+    impl Case {
+        fn whole(&self) -> ReplaceInspect {
+            inspect_bytes(
+                &self.data,
+                self.mode,
+                self.find,
+                self.replacement,
+                self.csv_mode,
+                self.structure,
+                self.delimiter,
+            )
+            .unwrap_or_else(|error| panic!("{}: 整段基准失败 {error:?}", self.name))
+        }
+    }
+
+    /// 流式采集＋「按偏移有界回读窗口填上下文」的完整链路，就是壳层 `inspect_file` 要做的事。
+    /// 用它把逐块结果逼回整段结果：任何一条臂、任何一个分块尺寸都必须逐字段相等。
+    fn streamed_inspect(case: &Case, chunk: usize) -> ReplaceInspect {
+        let started = ReplaceStreamInspector::start(
+            case.structure,
+            case.csv_mode,
+            case.mode,
+            case.find,
+            case.replacement,
+            case.delimiter,
+        )
+        .unwrap();
+        let ReplaceScan::Streaming(mut inspector) = started else {
+            panic!("这条臂必须走流式：{}", case.name);
+        };
+        for piece in case.data.chunks(chunk.max(1)) {
+            inspector.push(piece);
+        }
+        let mut outcome = inspector.finish();
+        if let Some(probe) = outcome.context_probe {
+            let pad = CONTEXT_RADIUS_BYTES + CONTEXT_SLACK_BYTES;
+            let window_start = probe.start.saturating_sub(pad);
+            let window_end = (probe.start + probe.length + pad).min(outcome.text_len);
+            let window = &case.data[window_start..window_end];
+            outcome.inspect.context = Some(context_from_window(
+                window,
+                window_start,
+                outcome.text_len,
+                probe,
+            ));
+        }
+        outcome.inspect
+    }
+
+    /// 文本臂用例的简写：structure/csv_mode 固定 Text/Text、不指定分隔符。
+    fn text_case(
+        name: &'static str,
+        data: Vec<u8>,
+        mode: ReplaceMode,
+        find: &'static str,
+        replacement: &'static str,
+    ) -> Case {
+        Case {
+            name,
+            data,
+            structure: ContentStructure::Text,
+            csv_mode: CsvMode::Text,
+            mode,
+            find,
+            replacement,
+            delimiter: None,
+        }
+    }
+
+    /// 单元格臂用例的简写：分隔符固定逗号（嗅探分支由 platform 的用例覆盖）。
+    fn cell_case(
+        name: &'static str,
+        data: Vec<u8>,
+        mode: ReplaceMode,
+        find: &'static str,
+        replacement: &'static str,
+    ) -> Case {
+        Case {
+            structure: ContentStructure::Csv,
+            csv_mode: CsvMode::Cell,
+            delimiter: Some(Delimiter::Comma),
+            ..text_case(name, data, mode, find, replacement)
+        }
+    }
+
+    #[test]
+    fn streaming_plan_inspect_matches_whole_file_for_every_arm_and_chunk_size() {
+        let mut straddle = vec![b'z'; 70_000];
+        straddle.extend_from_slice(b"normal-row tail normal-row");
+        let mut multibyte = vec![b'a'; 65_534];
+        multibyte.extend_from_slice("\u{1F600} normal-row".as_bytes());
+        let mut cell_rows = String::from("h1,h2\n");
+        for index in 0..6_000 {
+            cell_rows.push_str(&format!("{index},normal-row\n"));
+        }
+        let mut invalid_text = b"head normal-row ".to_vec();
+        invalid_text.extend_from_slice(&[0xff, 0xfe]);
+        let cases = vec![
+            // 文本臂：字面串恰好跨块、多字节、非法字节、末端不完整、零命中、空文件。
+            text_case(
+                "plain-basic",
+                b"xxnormal-rowyy normal-row\nlast normal-row".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "normal_row",
+            ),
+            text_case(
+                "plain-single-byte",
+                b"a a a".to_vec(),
+                ReplaceMode::Plain,
+                "a",
+                "b",
+            ),
+            text_case(
+                "plain-overlap",
+                b"aaaa aa aaaa".to_vec(),
+                ReplaceMode::Plain,
+                "aa",
+                "bb",
+            ),
+            text_case(
+                "plain-multibyte",
+                "汉字漢 normal-row \u{1F600} normal-row \u{1F389}"
+                    .as_bytes()
+                    .to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "normal_row",
+            ),
+            text_case(
+                "plain-boundary-cut",
+                b"0123456789\xc3\xa9 normal-row tail".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "X",
+            ),
+            text_case(
+                "plain-invalid-utf8",
+                invalid_text,
+                ReplaceMode::Plain,
+                "normal-row",
+                "X",
+            ),
+            text_case(
+                "plain-incomplete-tail",
+                b"normal-row \xc3".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "X",
+            ),
+            text_case(
+                "plain-no-match",
+                b"nothing here at all".to_vec(),
+                ReplaceMode::Plain,
+                "zzz",
+                "X",
+            ),
+            text_case("plain-empty", Vec::new(), ReplaceMode::Plain, "a", "b"),
+            text_case(
+                "plain-first-at-zero",
+                b"ab ab ab".to_vec(),
+                ReplaceMode::Plain,
+                "ab",
+                "cd",
+            ),
+            text_case(
+                "plain-cr-lf-context",
+                b"row1\r\nnormal-row\r\nrow3".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "X",
+            ),
+            text_case(
+                "plain-long-context",
+                "prefix ".repeat(30).into_bytes(),
+                ReplaceMode::Plain,
+                "fi",
+                "FI",
+            ),
+            text_case(
+                "plain-straddles-big-chunk",
+                straddle,
+                ReplaceMode::Plain,
+                "normal-row",
+                "normal_row",
+            ),
+            text_case(
+                "plain-multibyte-straddle-64k",
+                multibyte,
+                ReplaceMode::Plain,
+                "normal-row",
+                "normal_row",
+            ),
+            // 正则臂：可界定的走流式（定长字符类、有界量词＋捕获组）。
+            text_case(
+                "regex-bounded",
+                b"id 123456789 and 42 and 987654321".to_vec(),
+                ReplaceMode::Regex,
+                "[0-9]{9}",
+                "000000000",
+            ),
+            text_case(
+                "regex-group",
+                b"a1b a22 a333".to_vec(),
+                ReplaceMode::Regex,
+                "([0-9]{1,3})",
+                "[$1]",
+            ),
+            text_case(
+                "regex-bounded-ascii",
+                b"cat cat cat".to_vec(),
+                ReplaceMode::Regex,
+                "c[at]{2}",
+                "dog",
+            ),
+            // 单元格臂：引号内换行、列数漂移、未闭合引号、末条无换行、非法字节、仅表头。
+            cell_case(
+                "cell-basic",
+                b"h1,h2\n1,normal-row\n2,3\n".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "normal_row",
+            ),
+            cell_case(
+                "cell-multi-chunk",
+                cell_rows.into_bytes(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "normal_row",
+            ),
+            cell_case(
+                "cell-quoted-newline",
+                b"h1,h2\n\"a\nb\",normal-row\n".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "X",
+            ),
+            cell_case(
+                "cell-drift",
+                b"h1,h2\n1,2,3\n4\n".to_vec(),
+                ReplaceMode::Plain,
+                "1",
+                "X",
+            ),
+            cell_case(
+                "cell-unclosed-quote",
+                b"h1,h2\n\"oops,2\n".to_vec(),
+                ReplaceMode::Plain,
+                "oops",
+                "X",
+            ),
+            cell_case(
+                "cell-no-trailing-newline",
+                b"h1,h2\n1,normal-row".to_vec(),
+                ReplaceMode::Plain,
+                "normal-row",
+                "X",
+            ),
+            cell_case(
+                "cell-invalid-utf8",
+                b"h1,h2\n\"\xff\",2\n".to_vec(),
+                ReplaceMode::Plain,
+                "h1",
+                "X",
+            ),
+            cell_case(
+                "cell-header-only",
+                b"h1,h2\n".to_vec(),
+                ReplaceMode::Plain,
+                "h1",
+                "X",
+            ),
+            cell_case("cell-empty", Vec::new(), ReplaceMode::Plain, "a", "b"),
+            cell_case(
+                "cell-regex",
+                b"a,b\n123456789,x\n".to_vec(),
+                ReplaceMode::Regex,
+                "[0-9]{3}",
+                "Z",
+            ),
+            cell_case(
+                "cell-first-empty-record",
+                b"\n\nh1,h2\n1,2\n".to_vec(),
+                ReplaceMode::Plain,
+                "h1",
+                "X",
+            ),
+            // .csv 但按文本处理（--csv-mode text）：走文本臂，仍要求与整段版一致。
+            Case {
+                csv_mode: CsvMode::Text,
+                ..cell_case(
+                    "csv-as-text",
+                    b"a,b\nnormal-row,c\n".to_vec(),
+                    ReplaceMode::Plain,
+                    "normal-row",
+                    "X",
+                )
+            },
+        ];
+        for case in &cases {
+            let want = case.whole();
+            for chunk in [1usize, 2, 3, 5, 7, 13, 64, 4096, case.data.len().max(1)] {
+                let got = streamed_inspect(case, chunk);
+                assert_eq!(
+                    got.match_count, want.match_count,
+                    "{} chunk={chunk} 计数不符",
+                    case.name
+                );
+                assert_eq!(
+                    got.context, want.context,
+                    "{} chunk={chunk} 上下文不符：want={:?} got={:?}",
+                    case.name, want.context, got.context
+                );
+                assert_eq!(
+                    got.unclosed_quote, want.unclosed_quote,
+                    "{} chunk={chunk} 未闭合引号",
+                    case.name
+                );
+                assert_eq!(
+                    got.column_drift, want.column_drift,
+                    "{} chunk={chunk} 列数漂移",
+                    case.name
+                );
+                assert_eq!(
+                    got.utf8_error, want.utf8_error,
+                    "{} chunk={chunk} 非法 UTF-8",
+                    case.name
+                );
+                assert_eq!(
+                    got.delimiter, want.delimiter,
+                    "{} chunk={chunk} 分隔符",
+                    case.name
+                );
+                assert_eq!(
+                    got.structure, want.structure,
+                    "{} chunk={chunk} 结构",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unbounded_regex_keeps_the_whole_file_plan_channel() {
+        // 界定不出上界的正则不能窗口化：漏替换的代价比多占内存大（ADR-0064 同一条理由）。
+        for pattern in ["a.*b", "\\d+", "^ab", "ab$", "\\bcat\\b", "(a)+", "(?:a|)"] {
+            let started = ReplaceStreamInspector::start(
+                ContentStructure::Text,
+                CsvMode::Text,
+                ReplaceMode::Regex,
+                pattern,
+                "X",
+                None,
+            )
+            .unwrap();
+            assert!(
+                matches!(started, ReplaceScan::WholeFile),
+                "模式 {pattern} 应退回整段采集"
+            );
+        }
+        for pattern in ["[0-9]{3}", "abc", "a|bcde", "[a-c]{2,4}"] {
+            let started = ReplaceStreamInspector::start(
+                ContentStructure::Text,
+                CsvMode::Text,
+                ReplaceMode::Regex,
+                pattern,
+                "X",
+                None,
+            )
+            .unwrap();
+            assert!(
+                matches!(started, ReplaceScan::Streaming(_)),
+                "模式 {pattern} 应可窗口化流式"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_arm_without_delimiter_asks_for_the_sniff_pass() {
+        // 分隔符未定时计划段先嗅探（与整段版同样看全文），壳层嗅探完带着结果重来。
+        let started = ReplaceStreamInspector::start(
+            ContentStructure::Csv,
+            CsvMode::Cell,
+            ReplaceMode::Plain,
+            "a",
+            "b",
+            None,
+        )
+        .unwrap();
+        assert!(matches!(started, ReplaceScan::SniffFirst));
+    }
 
     #[test]
     fn plain_replacement_counts_and_replaces_non_overlapping() {

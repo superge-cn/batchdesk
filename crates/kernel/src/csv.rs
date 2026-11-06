@@ -339,20 +339,103 @@ pub fn sniff_delimiter(sample: &[u8]) -> Option<Delimiter> {
 fn modal_columns(counts: &[u64]) -> u64 {
     let mut sorted = counts.to_vec();
     sorted.sort_unstable();
-    let mut best = (0u64, 0usize);
-    let mut index = 0;
-    while index < sorted.len() {
-        let mut end = index;
-        while end < sorted.len() && sorted[end] == sorted[index] {
-            end += 1;
+    modal_of_groups(
+        sorted
+            .chunk_by(|left, right| left == right)
+            .map(|group| (group[0], group.len() as u64)),
+    )
+}
+
+/// 众数规则只有一条：出现次数最多者胜出，同次数取较大列数。
+/// 整段版（排序后分组）与流式版（按列数升序的频次表）共用这里，避免两处各自演化。
+fn modal_of_groups(groups: impl Iterator<Item = (u64, u64)>) -> u64 {
+    let mut best = (0u64, 0u64);
+    for (columns, frequency) in groups {
+        if frequency > best.1 || (frequency == best.1 && columns > best.0) {
+            best = (columns, frequency);
         }
-        let frequency = end - index;
-        if frequency > best.1 || (frequency == best.1 && sorted[index] > best.0) {
-            best = (sorted[index], frequency);
-        }
-        index = end;
     }
     best.0
+}
+
+struct SniffSlot {
+    delimiter: Delimiter,
+    scanner: CsvRecordScanner,
+    /// 列数 → 出现次数（整段版存的是每条记录的列数序列，量级随记录数增长）。
+    frequency: BTreeMap<u64, u64>,
+    multi: u64,
+}
+
+/// [`sniff_delimiter`] 的流式版本（C03 计划段用）：调用方逐块喂字节，内存
+/// O(不同列数个数)，与记录条数无关。
+///
+/// 判定口径与整段版逐字一致，包括那条容易漏的细节：**只 feed、不 finish**，
+/// 所以未以换行结束的末条记录不参与嗅探。
+pub struct DelimiterSniffer {
+    slots: Vec<SniffSlot>,
+}
+
+impl DelimiterSniffer {
+    pub fn new() -> Self {
+        Self {
+            slots: Delimiter::ALL
+                .iter()
+                .map(|delimiter| SniffSlot {
+                    delimiter: *delimiter,
+                    scanner: CsvRecordScanner::new(delimiter.as_byte()),
+                    frequency: BTreeMap::new(),
+                    multi: 0,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) {
+        for slot in self.slots.iter_mut() {
+            // 拆成字段引用：扫描器与频次表是互不相交的借用，闭包才不会和 feed 的借用冲突。
+            let SniffSlot {
+                scanner,
+                frequency,
+                multi,
+                ..
+            } = slot;
+            scanner.feed(bytes, |record| {
+                *frequency.entry(record.columns).or_insert(0) += 1;
+                if record.columns >= 2 {
+                    *multi += 1;
+                }
+            });
+        }
+    }
+
+    pub fn finish(self) -> Option<Delimiter> {
+        let mut best: Option<(u32, u32, Delimiter)> = None;
+        for slot in self.slots {
+            let records: u64 = slot.frequency.values().sum();
+            if records == 0 || slot.multi == 0 {
+                continue;
+            }
+            let modal = modal_of_groups(
+                slot.frequency
+                    .iter()
+                    .map(|(columns, hits)| (*columns, *hits)),
+            );
+            let consistent = *slot.frequency.get(&modal).unwrap_or(&0);
+            let (multi, consistent) = (slot.multi as u32, consistent as u32);
+            match best {
+                Some((best_consistent, best_multi, _))
+                    if (consistent, multi) <= (best_consistent, best_multi) => {}
+                _ => best = Some((consistent, multi, slot.delimiter)),
+            }
+        }
+        best.map(|(_, _, delimiter)| delimiter)
+    }
+}
+
+impl Default for DelimiterSniffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// 分片计量基准：按字节或按记录数（F05 方案 §5.3 "按大小/按行数"）。
@@ -1261,6 +1344,55 @@ mod tests {
     fn sniff_returns_none_for_single_column_data() {
         assert_eq!(sniff_delimiter(b"a\nb\nc\n"), None);
         assert_eq!(sniff_delimiter(b""), None);
+    }
+
+    #[test]
+    fn streaming_sniffer_matches_sniff_delimiter_for_every_chunk_split() {
+        // C03 计划段改流式后，嗅探结果必须与整段版逐字一致——包括「末条未以换行结束的记录
+        // 不参与判定」这条：流式版同样不调 finish。
+        let mut wide = Vec::new();
+        for index in 0..400 {
+            wide.extend_from_slice(format!("a{index},b{index};c\n").as_bytes());
+        }
+        let mut drift = Vec::new();
+        for index in 0..200 {
+            let row = if index % 7 == 0 {
+                format!("x|y|z|w{index}\n")
+            } else {
+                "x|y|z\n".to_string()
+            };
+            drift.extend_from_slice(row.as_bytes());
+        }
+        let inputs: Vec<&[u8]> = vec![
+            b"",
+            b"a\nb\nc\n",
+            b"a,b,c\n1,2,3\n4,5,6\n",
+            b"a,b,c\n1,2,3",
+            b"a;b;c\n1;2;3\n4,9,1\n",
+            b"a\tb\tc\n1\t2\t3\n",
+            b"a|b|c\n1|2|3\n",
+            b"a,b\n1,2\n3,4,5\n6,7\n",
+            b"\"a,b\",c\n\"x,y\",z\n",
+            b"\"unclosed,a\nb,c\n",
+            b" lone-comma-quoted,still-one-field\n",
+            &wide,
+            &drift,
+        ];
+        for input in inputs {
+            let want = sniff_delimiter(input);
+            for chunk in [1usize, 2, 3, 5, 7, 64, 4096] {
+                let mut sniffer = DelimiterSniffer::new();
+                for piece in input.chunks(chunk) {
+                    sniffer.push(piece);
+                }
+                assert_eq!(
+                    sniffer.finish(),
+                    want,
+                    "chunk={chunk} input={:?}",
+                    &input[..input.len().min(32)]
+                );
+            }
+        }
     }
 
     #[test]

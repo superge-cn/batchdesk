@@ -17,8 +17,8 @@ pub struct CliFsAdapter {
     counter: AtomicU64,
 }
 
-/// 流式读取块大小（与区间复制一致：64 KiB）。
-const STREAM_CHUNK_BYTES: usize = 64 * 1024;
+/// 流式读取与写缓冲的块大小（与区间复制一致：64 KiB），全模块单点定义。
+pub(crate) const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
 impl CliFsAdapter {
     pub fn new(quarantine_dir: Option<PathBuf>) -> Self {
@@ -202,7 +202,13 @@ impl FsAdapter for CliFsAdapter {
             std::process::id(),
             self.next_id()
         ));
-        let mut file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        let file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        // 写出侧统一走缓冲：重写器与清单写出器是按行／按匹配写的（一行可能只有几个字节），
+        // 直接把裸 File 交给它们＝每行一次 write 系统调用——C-2 实测 2.3–5.6 MiB/s 就是这里，
+        // 与体积无关（见 fixtures/bench/results.md R-13／R-18）。缓冲尺寸沿用本模块已有的
+        // 流式块大小，不自立新阈值。失败路径 drop(writer) 会把残余缓冲回灌进临时文件，
+        // 紧接着临时文件被删除，半成品不会落到目标路径。
+        let mut file = io::BufWriter::with_capacity(STREAM_CHUNK_BYTES, file);
         if let Err(error) = write(&mut file) {
             drop(file);
             let _ = fs::remove_file(&temp);
@@ -244,7 +250,9 @@ impl FsAdapter for CliFsAdapter {
         ));
         let mut reader = fs::File::open(fs_path(Path::new(path)))
             .map_err(|error| io_error(&error, Path::new(path)))?;
-        let mut file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        let file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        // 同 write_atomic_with：重写器按行／按匹配写出，裸 File 会让每次写都成一次系统调用。
+        let mut file = io::BufWriter::with_capacity(STREAM_CHUNK_BYTES, file);
         if let Err(error) = rewrite(&mut reader, &mut file) {
             drop(file);
             drop(reader);
@@ -1187,6 +1195,132 @@ mod tests {
             b"A\r\nB\n",
             "failed rewrite must keep the original file"
         );
+    }
+
+    fn write_error(error: &str) -> KernelError {
+        KernelError::new(
+            "E3005",
+            "content rewrite failed",
+            Some(error.to_string()),
+            false,
+        )
+    }
+
+    fn read_error(error: &str) -> KernelError {
+        KernelError::new("E5001", "read failed", Some(error.to_string()), false)
+    }
+
+    /// 通道自己创建的临时文件必须在成功与失败两条路上都被清掉。
+    fn leftover_temp_files(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".batchdesk-"))
+            .collect()
+    }
+
+    #[test]
+    fn rewrite_atomic_with_buffers_many_small_writes() {
+        // 重写器的真实形状：每行一次写、单行几个字节。这里既验内容逐字节正确（缓冲必须在
+        // 改名前回灌完），也验失败路径：缓冲里还压着没落盘的字节时，半成品绝不能留在目标
+        // 路径或临时路径上。
+        let dir = TempDir::new();
+        let path = dir.0.join("lines.txt");
+        let source: Vec<u8> = (0..2_000)
+            .flat_map(|index| format!("line-{index}\n").into_bytes())
+            .collect();
+        fs::write(&path, &source).unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        adapter
+            .rewrite_atomic_with(path.to_str().unwrap(), &mut |reader, writer| {
+                let mut buffer = [0u8; 1];
+                loop {
+                    let read = reader
+                        .read(&mut buffer)
+                        .map_err(|error| read_error(&error.to_string()))?;
+                    if read == 0 {
+                        break;
+                    }
+                    writer
+                        .write_all(
+                            &buffer[..read]
+                                .iter()
+                                .map(|byte| byte.to_ascii_uppercase())
+                                .collect::<Vec<u8>>(),
+                        )
+                        .map_err(|error| write_error(&error.to_string()))?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            source.to_ascii_uppercase(),
+            "逐字节写必须与整段写产物一致"
+        );
+        assert_eq!(
+            leftover_temp_files(&dir.0),
+            Vec::<String>::new(),
+            "成功后不应留下临时文件"
+        );
+
+        fs::write(&path, &source).unwrap();
+        let error = adapter
+            .rewrite_atomic_with(path.to_str().unwrap(), &mut |reader, writer| {
+                let mut buffer = [0u8; 64];
+                for index in 0..200 {
+                    let read = reader
+                        .read(&mut buffer)
+                        .map_err(|e| read_error(&e.to_string()))?;
+                    writer
+                        .write_all(&buffer[..read])
+                        .map_err(|e| write_error(&e.to_string()))?;
+                    if index == 7 {
+                        return Err(KernelError::new("E3005", "中途失败", None, false));
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "E3005");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            source,
+            "缓冲未落盘就失败时，原文件必须一个字节都没变"
+        );
+        assert_eq!(
+            leftover_temp_files(&dir.0),
+            Vec::<String>::new(),
+            "失败路径必须删掉临时文件"
+        );
+    }
+
+    #[test]
+    fn write_atomic_with_buffers_many_small_writes() {
+        // F10 清单写出器就是逐行写的；同一条缓冲纪律也要覆盖它。
+        let dir = TempDir::new();
+        let path = dir.0.join("listing.csv");
+        fs::write(&path, b"stale").unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        adapter
+            .write_atomic_with(path.to_str().unwrap(), &mut |writer| {
+                for index in 0..3_000 {
+                    let line = format!("row-{index},1\n");
+                    writer
+                        .write_all(line.as_bytes())
+                        .map_err(|error| write_error(&error.to_string()))?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let written = fs::read(&path).unwrap();
+        assert!(written.starts_with(b"row-0,1\n"));
+        assert!(written.ends_with(b"row-2999,1\n"));
+        assert_eq!(written.iter().filter(|byte| **byte == b'\n').count(), 3_000);
+        assert_eq!(leftover_temp_files(&dir.0), Vec::<String>::new());
     }
 
     #[test]
