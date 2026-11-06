@@ -396,7 +396,6 @@ mod tests {
         map
     }
 
-
     #[test]
     fn every_registered_feature_has_slots_and_no_duplicates() {
         let mut seen = std::collections::BTreeSet::new();
