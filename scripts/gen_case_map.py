@@ -695,7 +695,7 @@ add("C03",
             "＋C-2 整档实测 `fixtures/bench/measure.py c2rw --case c03-plain｜c03-regex｜c03-cell`（结果行 R-21、R-22、R-23）"
             "＋计划段流式采集 `kernel::replace_content::tests::streaming_plan_inspect_matches_whole_file_for_every_arm_and_chunk_size`",
             "**按模式分别记录的 C-2 整档数值已出（2026-11-07 复跑，`fixtures/bench/results.md` R-21／R-22／R-23；"
-            "构建 `dc75aed`＋本批改动、二进制 sha256 `d0cabc69…6035a`）**：plain 计划段中位 21.961 秒＋改写段 41.410 秒＝51.0 MiB/s；"
+            "构建 `dc75aed`＋本批改动＝提交 `0ceef76` 的那棵树、二进制 sha256 `d0cabc69…6035a`）**：plain 计划段中位 21.961 秒＋改写段 41.410 秒＝51.0 MiB/s；"
             "regex（`[0-9]{9}`，`regex_window_bytes` 算得出上界→窗口臂）计划段 62.445 秒＋改写段 150.557 秒＝14.0 MiB/s；"
             "CSV 单元格计划段 186.979 秒＋改写段 215.512 秒＝9.8 MiB/s（每记录解析＋重序列化，CPU 主导）。"
             "**三条臂的峰值 RSS 都是 4–7 MiB 量级、与 2 GiB 体积无关＝§9.1 第③子句与 §4.8 改判成立**。"
