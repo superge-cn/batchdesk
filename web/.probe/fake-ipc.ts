@@ -42,14 +42,14 @@ export const state = {
   listReject: null as unknown,
   cancelCalls: [] as string[],
   retryCalls: [] as string[],
-  recoverCalls: Array<[string, string]>,
+  recoverCalls: [] as Array<[string, string]>,
   planOverride: null as Record<string, unknown> | null,
   getTaskNull: false,
   planReject: null as unknown,
   planInput: null as unknown,
   applyCalls: [] as Array<[string, unknown]>,
   dryRunOverride: null as Record<string, unknown> | null,
-  stateListeners: Array<(event: { taskId: string; state: string }) => void> = [],
+  stateListeners: [] as Array<(event: { taskId: string; state: string }) => void>,
   undoCalls: [] as string[],
   calls: { getConfig: 0, setConfig: 0, resetScope: 0 }
 };

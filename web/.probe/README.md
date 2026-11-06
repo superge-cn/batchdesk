@@ -19,6 +19,31 @@ node -e "try{new WebAssembly.Memory({initial:1});console.log('WASM_OK')}catch(e)
 
 ## 怎么跑
 
+**首选：宿主 WASM 恢复时直接跑权威套件**（`pnpm test` / `pnpm test:e2e`）。
+以下探针仅在宿主 WASM 受限期间作为替代通道；其中 8 个入口已实测通过
+（设置页 7／App·UiState 11／取消回顾 12／错误文案 24／导航可达 16／集中报告 7／
+i18n 18／任务视图 29，共 124 条），`entry-controls`（任务控制 7 例的镜像版）已
+写好但未实测。
+
+构建（免打包转译，输出 mirror/；esbuild 只做 loader，react 由 Node 原生解析）：
+
+```bash
+cd web/.probe && node build.mjs
+```
+
+运行（入口在 mirror/probe/，react 系具名导出经 build 生成的 *-interop.mjs 垫片）：
+
+```bash
+node --import ./globals.mjs mirror/probe/entry-settings.js   # 7
+node --import ./globals.mjs mirror/probe/entry-app.js        # 11
+node --import ./globals.mjs mirror/probe/entry-cancel.js     # 12
+node --import ./globals.mjs mirror/probe/entry-errors.js     # 24
+node --import ./globals.mjs mirror/probe/entry-nav.js        # 16
+node --import ./globals.mjs mirror/probe/entry-warnings.js   # 7
+node --import ./globals.mjs mirror/probe/entry-i18n.js       # 18
+node --import ./globals.mjs mirror/probe/entry-tasks.js      # 29
+```
+
 ```bash
 cd web/.probe
 node build.mjs                                                   # esbuild 打包两个入口（原生二进制，不碰 WASM）

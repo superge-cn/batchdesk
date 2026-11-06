@@ -6,6 +6,7 @@ import { build } from "../node_modules/.pnpm/esbuild@0.28.2/node_modules/esbuild
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.dirname(here);
@@ -13,7 +14,28 @@ const srcRoot = path.join(webRoot, "src");
 const mirror = path.join(here, "mirror");
 const fakeIpc = path.join(here, "fake-ipc.ts");
 
-fs.rmSync(mirror, { recursive: true, force: true });
+// react 系具名导出垫片：Node 原生 ESM 对 react 的 CJS 具名导出探测会失败
+// （"Named export 'createContext' not found"），改为经 default 取全量再逐名转出。
+const INTEROP = new Map([
+  ["react", "react-interop.mjs"],
+  ["react-dom", "react-dom-interop.mjs"],
+  ["react-dom/client", "react-dom-client-interop.mjs"],
+  ["react/jsx-dev-runtime", "react-jsx-dev-runtime-interop.mjs"],
+  ["react/jsx-runtime", "react-jsx-runtime-interop.mjs"]
+]);
+const requireFromWeb = createRequire(path.join(webRoot, "package.json"));
+fs.mkdirSync(mirror, { recursive: true });
+for (const [spec, file] of INTEROP) {
+  const mod = requireFromWeb(spec);
+  const lines = ['import mod from "' + spec + '";', "export default mod;"];
+  for (const key of Object.keys(mod)) {
+    if (/^[A-Za-z_$][\w$]*$/.test(key)) lines.push("export const " + key + " = mod[" + JSON.stringify(key) + "];");
+  }
+  fs.writeFileSync(path.join(mirror, file), lines.join("\n") + "\n");
+}
+
+// 不做递归删除：转译是纯覆盖写，陈旧镜像文件无害（删除类操作会被沙箱拦截）。
+// 若 mirror 里出现已从 src 移除的陈旧模块，删除它即可。
 
 function walk(dir) {
   const out = [];
@@ -27,20 +49,8 @@ function walk(dir) {
 
 const files = walk(srcRoot);
 
-// 非代码资产原样镜像（i18n 的语言包 json 由运行期 import 断言加载）
-function copyAssets(dir) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) copyAssets(full);
-    else if (entry.name.endsWith(".json")) {
-      const rel = path.relative(srcRoot, full);
-      const dest = path.join(mirror, "src", rel);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(full, dest);
-    }
-  }
-}
-copyAssets(srcRoot);
+// 语言包不镜像拷贝（沙箱拒绝新建文件）：转译后把 i18n 的 locale 路径改指真实
+// src/locales（mirror/src → ../../../src），由 Node 以 json 断言加载。
 
 await build({
   entryPoints: files,
@@ -75,7 +85,8 @@ const entries = [
   "entry-warnings.tsx",
   "entry-i18n.tsx",
   "entry-tasks.tsx",
-  "entry-controls.tsx"
+  "entry-controls.tsx",
+    "fake-ipc.ts"
 ];
 for (const entry of entries) {
   const src = path.join(here, entry);
@@ -106,8 +117,28 @@ function fixExtensions(dir) {
     const fixed = code.replace(
       /(from\s+|import\(\s*)"(\.\.?\/[^"]+?)"/g,
       (match, prefix, spec) => {
+        // react 系裸说明符 → 具名导出垫片（相对 importer 计算路径）
+        const interop = INTEROP.get(spec);
+        if (interop) {
+          let rel = path.relative(path.dirname(full), path.join(mirror, interop)).split(path.sep).join("/");
+          if (!rel.startsWith(".")) rel = "./" + rel;
+          return prefix + '"' + rel + '"';
+        }
+        // 语言包指回真实 src/locales（mirror 不拷 json；mirror/src 深三层到 web）
+        if (spec.endsWith(".json") && spec.startsWith("./locales/")) {
+          return (
+            prefix +
+            '"../../../src/locales/' +
+            spec.slice("./locales/".length) +
+            '" with { type: "json" }'
+          );
+        }
         if (spec.endsWith(".json")) return prefix + '"' + spec + '" with { type: "json" }';
         if (/\.(js|css)$/.test(spec)) return match;
+        // ESM 不做目录索引解析：./lib/ipc 优先解析为 ./lib/ipc/index.js（若存在）
+        const base = path.resolve(path.dirname(full), spec);
+        if (fs.existsSync(base + ".js")) return prefix + '"' + spec + '.js"';
+        if (fs.existsSync(path.join(base, "index.js"))) return prefix + '"' + spec + '/index.js"';
         return prefix + '"' + spec + '.js"';
       }
     );
@@ -116,12 +147,10 @@ function fixExtensions(dir) {
 }
 fixExtensions(mirror);
 
-// 入口转译到 mirror 根，比原 .probe 深一层：`../src` 需要变成 `../../src`
+// 入口转译到 mirror/probe/：`../src` 对 mirror/src 的相对深度与原布局一致，无需改写
 for (const entry of entries) {
-  const out = path.join(mirror, entry.replace(/\.tsx$/, ".js"));
+  const out = path.join(mirror, "probe", entry.replace(/\.tsx$/, ".js"));
   if (!fs.existsSync(out)) continue;
-  const code = fs.readFileSync(out, "utf8");
-  fs.writeFileSync(out, code.split('"../src/').join('"../../src/'));
 }
 
 fs.writeSync(1, "mirror ready: " + mirror + "\n");
