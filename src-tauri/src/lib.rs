@@ -774,10 +774,9 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
             steps: steps
                 .into_iter()
                 .map(|step| {
-                    let feature = step
-                        .feature
-                        .clone()
-                        .or_else(|| kernel::recipe::feature_for_action(step.kind).map(str::to_string));
+                    let feature = step.feature.clone().or_else(|| {
+                        kernel::recipe::feature_for_action(step.kind).map(str::to_string)
+                    });
                     TemplateStep { feature, ..step }
                 })
                 .collect(),
@@ -797,8 +796,9 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
             let feature = input
                 .feature
                 .or_else(|| kernel::recipe::feature_for_action(kind).map(str::to_string));
-            let mut document =
-                RecipeDocument::from_single_step(recipe_id, input.name, kind, params, created_at, feature);
+            let mut document = RecipeDocument::from_single_step(
+                recipe_id, input.name, kind, params, created_at, feature,
+            );
             document.description = input.description;
             document.match_ = input.match_;
             document
