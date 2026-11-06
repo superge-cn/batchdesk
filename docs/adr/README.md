@@ -105,6 +105,7 @@
 | [0072](./0072-处理模板前端只做存取半边.md) | 处理模板前端只做存取半边（列表/删除/导入导出＋保存入口），「套用」留待 OQ-36 裁决；`kind` 取计划里的动作、参数快照取 `plan.params`，路径剔除只在壳层与内核做一处 | 已采纳 |
 | [0073](./0073-目标名合法性改为能力值.md) | 目标名合法性改成能力值注入：`NameRules` 由适配层给出（`windows()`／`posix()`，POSIX 只拦 `/` 与 NUL），经五个计划输入与两个执行上下文传入，内核不再写死 Windows 保留名；顺带把 macOS 的 `case_sensitivity` 从 `Sensitive` 归回 `CaseInsensitive` | 已采纳 |
 | [0074](./0074-C10密码包的秘密注入面.md) | C10 加密 ZIP 的秘密注入面：密码只进执行期（`ArchiveApplyContext.password`／CLI `--password-stdin`／壳层内存 `plan_secrets`），计划只记 `passwordProvided` 布尔；`inspect` 改 `by_index_data` 使加密包能出预览，三道门分别是整单 E3008、逐条目 E3008、解密失败 E3009，同时支持 ZipCrypto 与 AES | 已采纳 |
+| [0077](./0077-loadRecipe的路径槽位表与形状差异.md) | `loadRecipe` 的路径槽位表：键名逐条取自各路由结构体（`files`/`roots`/`sourceRoot`/c10 双模式/c09 走 sourcePaths），每个槽位键必须同时是 `PATH_PARAM_KEYS` 成员；出口只有 `planOperation` 一条且不进队列；防漂移断言＝注入键要真的解进结构体字段，由此查出**快照形状≠请求形状**（c01 `sampleWindow`、c02/c03 `sampleBytes`、c03 `replace` vs `replacement`）转 OQ-41，界面套用入口因此未接 | 已采纳 |
 | [0076](./0076-配方v4记功能码与套用通道缺口.md) | 配方 v4 记功能码：保存即记录（当前页 id）、迁移只补动作→功能码**唯一**的 11 项、一对多保持未绑定＝不可套用；内核表与浏览器 mock 表由 `check_docs.py` 逐键核对（含自校）；`loadRecipe` 仍不实现——缺的是输入通道（方案 §15.2.5 与设计 01/03 命令表冲突），转 OQ-40 | 已采纳 |
 | [0075](./0075-界面状态把手的尺寸来源与排序语义.md) | 界面状态把手：侧栏宽/列宽的尺寸权威是 `tokens.css` 的占位 token（TS 只读，U 终值挂 OQ-39）；`tables` 整节替换所以要件是「先并再写」；排序只重排显示、不进计划也不进 §7.3 表单快照；落盘防抖 300ms；分隔符带键盘步进 | 已采纳 |
 | [0015](./0015-F01分片计划与撤销语义.md) | F01 分片计划与撤销语义（split 动作＋range＋流式区间复制） | 已采纳 |

@@ -1,6 +1,6 @@
 # 03 配置 Schema 与迁移契约
 
-> 状态：已评审·实现冻结 v1.6（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36；2026-11-06 §11 补实现记录之三：`layout.sidebarWidth` 与 `tables` 的列宽/排序首次有界面把手，契约条文未变） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.7（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36；2026-11-06 §11 补实现记录之三：`layout.sidebarWidth` 与 `tables` 的列宽/排序首次有界面把手，契约条文未变） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
 >
 > 上游：[01-内核接口与IPC契约](01-内核接口与IPC契约.md)（命令名与错误结构）、[02-Web双通道传输契约](02-Web双通道传输契约.md)（Web 存储形态）。
 > 权威：方案 §4.5（三档优先级/存储位置/版本迁移/安全默认值）、§6.7（设置区分组）、§7.3（参数配置）、§4.6／§9.6（日志双轨与保留）、§9.5（配方与配置带版本、位图配置驱动）、§8.5（授权数据单独加密）、§13.8（跨形态只经配方导出迁移）、§15（处理模板与持久化扩展）。
@@ -233,7 +233,7 @@ pub fn migration_chain() -> &'static [(u32, MigrationFn)];  // [(1, m1_to_2), (2
 | `saveRecipe` | `{name, description?, match?, kind?, paramsSnapshot?, steps?}` | `RecipeDocumentV2/V3` | C37；Phase A 用 kind/params，Phase B 用 steps；参数按 schema 校验 |
 | `getRecipe` | `{recipeId}` | `RecipeDocumentV3` | Phase B 读取完整步骤；不重载 `loadRecipe` 返回类型 |
 | `listRecipes` | `{page}` | `RecipePage`（`type RecipePage = Page<RecipeDocumentV2 \| RecipeDocumentV3>`，`Page` 见篇 01 §3.2） | 列表只读；载入前按需迁移 |
-| `loadRecipe` | `{recipeId}` | `PlanDocument`（**直接产出预览计划**，不执行，§7.3） | 仅单步；与 `planOperation` 同出口；多步用 getRecipe + 分步 plan |
+| `loadRecipe` | `{recipeId, pathParams}` | `PlanDocument`（**产出预览计划**，不执行，§7.3） | **已实现（OQ-40 裁决①，v1.7）**：仅单步；`pathParams` 按该功能的路径槽位给齐（键名取自各路由结构体，见 ADR-0077）；与 `planOperation` **同一条出口**；多步用 getRecipe + 分步 plan。**注意形状差异**：快照是计划形状，路由要的是请求形状，c01/c02/c03 上两者不一致 ⇒ OQ-41 |
 | `deleteRecipe` | `{recipeId}` | `void`（幂等） | |
 | `exportRecipe` | `{recipeId}` | `{payload: string}`（序列化 `RecipeDocumentV2/V3` JSON，含 `schemaVersion`；落盘位置由壳层另存对话框决定，kernel 不碰磁盘） | §13.8 导出 |
 | `importRecipe` | `{payload: string}` | `RecipeDocumentV3`（导入即低版本升级迁移；高版本拒绝报 E1007） | §13.8 导入；导入后须重新预览（§7.3） |
@@ -248,7 +248,7 @@ pub fn migration_chain() -> &'static [(u32, MigrationFn)];  // [(1, m1_to_2), (2
 - `saveRecipe`／`getRecipe`／`listRecipes`／`deleteRecipe`／`exportRecipe`／`importRecipe` 六条均已实现并接入界面（模板库视图＋功能页「存为处理模板」，见设计 12 §5、[ADR-0072](../adr/0072-处理模板前端只做存取半边.md)）；命令与 DTO 同步进设计 01 §4.4.2。
 - `saveRecipe` 落盘前对每个步骤剔除路径参数（`RecipeDocumentV3::strip_paths`）：模板不保存源路径/输出目录（不变量 13），此前只有导入路径会剔除。名单按本仓库参数名真实语义校正——`source`／`target` 是**编码**不是路径，旧表把 `source` 当路径会让模板丢编码。
 - **OQ-36 已裁并落地（①）**：schema v4 记 `feature`，保存时记当前功能页、迁移时只补唯一映射、界面如实显示绑定与未绑定；两处副本（内核推断表↔浏览器 mock）由 `check_docs.py` 的配方功能码表核对盯住（含自校）。
-- **`loadRecipe` 仍未实现，但阻塞点换了**：功能码已不是缺口，缺的是**输入通道**——本表写 `loadRecipe {recipeId} → PlanDocument`，而方案 §15.2.5 写「应用模板只回填参数并调用 `planOperation`」；模板按不变量 13 不保存源路径，只给 `recipeId` 无法完成事实采集。这是命令面冲突，登记 [OQ-40](../OPEN-QUESTIONS.md) 待人类裁决，裁决前界面仍**不提供**「一键套用」。
+- **`loadRecipe` 已实现（OQ-40 裁决①）**：入参 `{recipeId, pathParams}`，壳层按路径槽位表把文件集写进该功能认的键，再走与 `planOperation` 同一条路由、不进队列（ADR-0077 §2）。**但套用在部分功能上还不成立**：快照存的是计划形状、路由要的是请求形状，实测出 c01 缺 `sampleWindow`、c02/c03 缺 `sampleBytes`、c03 还差一个改名（`replace` vs `replacement`）——这条**不是工程侧可自行调和**的（改快照口径／加映射表／宣布部分不支持，三选一），登记 [OQ-41](../OPEN-QUESTIONS.md)；裁决前界面仍**不提供**「一键套用」。
 
 ## 8. 授权数据的边界（§8.5 / §9.5）
 
@@ -320,6 +320,7 @@ interface UiState {
 | v1.2 | 2026-10-28 | `GeneralScope.theme` 工程默认由 `"system"` 改为 `"light"`（U v1.3 §5 D-U5 浅色默认，用户确认）；枚举 `system/light/dark` 不变。 |
 | v1.3 | 2026-10-28 | RecipeDocument v2/v3（match/steps/迁移、CURRENT_RECIPE_SCHEMA_VERSION=3）；新增 getRecipe 与 UiState 契约（get/set/reset、独立 uiStateVersion、重置规则）；对应方案 §15 与 OQ-26/27。 |
 | v1.4 | 2026-11-05 | §7 补「实现状态」：`saveRecipe`/`getRecipe`/`listRecipes`/`deleteRecipe`/`exportRecipe`/`importRecipe` 六条已实现并接入界面（模板库＋功能页保存入口，ADR-0072），命令与 DTO 同步进设计 01 §4.4.2（v1.51）；`saveRecipe` 落盘前剔除路径参数（名单按参数名真实语义校正：`source`/`target` 是编码不是路径）；**`loadRecipe` 未实现**，阻塞 OQ-36（动作→功能码一对多），界面不提供「一键套用」——表格保留该行属契约目标，不是现状 |
+| v1.7 | 2026-11-06 | OQ-40 裁决①落地：§7 命令表 `loadRecipe` 入参改为 `{recipeId, pathParams}`（路径槽位表逐条取自路由结构体，见 ADR-0077），实现状态由「未实现」改为「已实现但受形状差异限制」；新登记 OQ-41——参数快照（计划形状）与路由请求形状在 c01/c02/c03 上不一致。 |
 | v1.6 | 2026-11-06 | OQ-36 裁决①落地：§5.2 补 **RecipeDocument v4**——`TemplateStep` 增 `feature`（功能码），`CURRENT_RECIPE_SCHEMA_VERSION` 3→4；迁移只补**动作→功能码唯一**的 11 项，一对多动作保持 `None`＝**不可套用**（不猜功能）；§7 的 `loadRecipe` 阻塞理由随之改写：功能码已不是缺口，缺的是**输入通道**（模板按不变量 13 不存路径，只给 `recipeId` 产不出计划），登记为 OQ-40 待裁决。实现见 [ADR-0076](../adr/0076-配方v4记功能码与套用通道缺口.md)。 |
 | v1.5 | 2026-11-06 | 无契约变更：§11.2 的 `layout.sidebarWidth`／`tables.columnWidths`／`tables.sort` 首次接界面把手（侧栏拖宽、列宽拖拽、列头排序），§11.3 的「面板宽度 clamp」与「重置回默认」随之有了真实用户路径；实现口径与占位 token 见 [ADR-0075](../adr/0075-界面状态把手的尺寸来源与排序语义.md)，尺寸终值挂 [OQ-39](../OPEN-QUESTIONS.md)。 |
 
