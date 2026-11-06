@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+- **「任务与撤销」表能拖列宽了（[ADR-0075](docs/adr/0075-界面状态把手的尺寸来源与排序语义.md) §6，2026-11-06）**。表头换成共享的 `TableHead`，四列都可拖宽（鼠标与方向键两条路都通），宽度记在 `UiState.tables.table.tasks`。
+
+  **排序这一轮故意没做**，而且不是「还没顾上」：写比较器要按 `TaskSummary` 各列的真实字段名来，没逐字段核实就凭记忆写，正是本项目明令禁止的补全式幻觉。所以四列表头只给列名与把手、不给排序按钮，并把这件事钉成一条断言（「本轮不给排序按钮：排序要等 TaskSummary 字段名核实后才写比较器」）——将来接上排序时这条会红，逼着一起改台账，而不是静默漂移。
+
+  另记一次重复踩坑：组件多一处 `getUiState` 调用，它的既有测试就得补桩，否则整组用例红（第一次跑 9 条全红正是如此）。
+
+  验证：`pnpm test` 113 → **115 项**（`TaskHistory` 9→11：四个分隔把手存在＋键盘调宽写进 `tables.table.tasks.columnWidths.task`＋无排序按钮）、`pnpm build` exit 0、`pnpm test:e2e` **17 项**通过、`check_locales.py`／`check_docs.py` exit 0。剩余：C05 预览表未接把手；任务表排序待字段核实；拖拽手感属 Windows 实机日。
+
 - **`loadRecipe` 有了命令面：套用现在要调用方把文件集交进来（[ADR-0077](docs/adr/0077-loadRecipe的路径槽位表与形状差异.md)，2026-11-06，OQ-40 裁决①）**。看着只是加一个入参，真正的活是**「往哪个键里塞」**：每个功能的路由都有自己的参数结构体，`SplitParams.file`、`MergeParams.files`、`CsvPlanParams.roots`（不是 `root`）、`ManifestParams.sourceRoot/targetRoot`、`ZipPlanParams.archive`（解压）与 `sources`（压缩）、`F11ShellParams.list`＋`root`，而 c09 压根没有路径字段——它的扫描根走 `sourcePaths`。
 
   所以我没按记忆写表：第一版按记忆写的四处全错（`c01` 写成 `file`、`f10` 写成 `root`、c10 两模式混为一谈、拿「键名以 s 结尾」当多值判据），改成**逐条从结构体必填字段读**，出处写进代码注释与 ADR。表建好后又钉了两条自校：每个槽位键必须同时是 `PATH_PARAM_KEYS` 的成员（否则它不是路径，是我错当槽位登记了）；槽位表里每个功能都必须有一条「把注入的键解回真实结构体、逐字段比值」的落地断言——新加功能没补断言就红。命令的出口只有一条：组装完直接走 `planOperation`，**不进队列**（方案 §15.2.5 要求载入后必须重新预览、不得直接执行）。
