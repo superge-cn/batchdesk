@@ -43,6 +43,7 @@ mod plan_csv;
 mod plan_kinds;
 mod plan_manifest;
 mod plan_ops;
+mod recipe_apply;
 mod tasks;
 mod window_state;
 
@@ -736,6 +737,45 @@ fn resetUiState(state: State<'_, AppState>) -> Result<UiState, IpcError> {
         .map_err(IpcError::from)
 }
 
+/// 把模板变成**预览计划**（设计 03 §命令表；OQ-40 裁决①＝入参加文件集）。
+///
+/// 三条不变式写在这里：
+/// - **同出口**：槽位注入后直接走 `planOperation` 用的那条路由，不另造第二套采集；
+/// - **只出计划不执行**：本命令不碰队列（方案 §15.2.5「载入后必须重新预览，不得直接 apply」）；
+/// - **路径不来自模板**：模板按不变量 13 不存路径，路径全部来自 `pathParams` 入参，
+///   键位由 `recipe_apply` 的槽位表校验（缺、多、形状不符都报错，不猜）。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn loadRecipe(
+    state: State<'_, AppState>,
+    recipe_id: String,
+    path_params: Value,
+) -> Result<PlanDocument, IpcError> {
+    let document = config_store(&state)
+        .get_recipe(&recipe_id)
+        .map_err(IpcError::from)?;
+    let object = match path_params {
+        Value::Object(map) => map,
+        Value::Null => Map::new(),
+        _ => {
+            return Err(IpcError::new(
+                "E1002",
+                "loadRecipe: pathParams must be an object of path slots",
+            ))
+        }
+    };
+    let invocation = recipe_apply::build_invocation(&document, &object)
+        .map_err(|message| IpcError::new("E1002", format!("loadRecipe: {message}")))?;
+    // c09 的根走 sourcePaths 通道、其余走 params——差别已经在槽位表里表达完，
+    // 这里只有一条出口：同一次 planOperation 调用。
+    planOperation(
+        state,
+        invocation.kind,
+        invocation.params,
+        invocation.source_paths,
+    )
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveRecipeInput {
@@ -1355,6 +1395,7 @@ pub fn run() {
             getUiState,
             setUiState,
             resetUiState,
+            loadRecipe,
             saveRecipe,
             getRecipe,
             listRecipes,
@@ -1368,7 +1409,353 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    // ── loadRecipe 槽位表的防漂移断言（OQ-40 裁决①）──────────────────────────
+    //
+    // 为什么不能只测 `build_invocation` 自己：它把键写进 params，而**真正决定成败的是
+    // 各路由结构体的字段名**。表里某个键一旦与结构体不符（改名、camelCase 形态写错、
+    // 单复数搞混），`build_invocation` 照样成功、路由却会带着空输入去采集事实——
+    // 那是最坏的一种漂移：命令不报错，计划是错的。
+    //
+    // 所以每条断言都是「表注入的键 → 解进真实结构体 → 字段值必须等于注入值」，
+    // 键名不符时字段会留在默认值（空串/空列表），断言立刻红。
+
+    fn slots_of(
+        feature: &str,
+        // 快照里带上该路由**必填的非路径字段**（如 `target` 编码、`rules` 规则），
+        // 否则解结构体失败的是这些字段，而不是我要证的槽位键——断言就失去针对性了。
+        snapshot_pairs: &[(&str, serde_json::Value)],
+        path_params: &[(&str, serde_json::Value)],
+    ) -> serde_json::Value {
+        use kernel::plan::PlanAction;
+        use kernel::recipe::RecipeDocument;
+        let mut snapshot = serde_json::Map::new();
+        for (key, value) in snapshot_pairs {
+            snapshot.insert((*key).to_string(), value.clone());
+        }
+        let mut object = serde_json::Map::new();
+        for (key, value) in path_params {
+            object.insert((*key).to_string(), value.clone());
+        }
+        let document = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            "漂移核对",
+            PlanAction::Split,
+            snapshot.clone(),
+            "2026-11-06T00:00:00Z",
+            Some(feature.to_string()),
+        );
+        let invocation = recipe_apply::build_invocation(&document, &object)
+            .unwrap_or_else(|error| panic!("{feature} 槽位注入失败：{error}"));
+        invocation.params
+    }
+
+    #[test]
+    fn split_and_csv_slots_land_on_the_route_struct_fields() {
+        // f01/f02/f03 → SplitParams{file, output_dir}
+        for feature in ["f01", "f02", "f03"] {
+            let params = slots_of(
+                feature,
+                &[],
+                &[("file", json!("/in/a.txt")), ("outputDir", json!("/out"))],
+            );
+            let parsed: plan_kinds::SplitParams = serde_json::from_value(params).unwrap();
+            assert_eq!(parsed.file, "/in/a.txt", "{feature} 的 file 槽没解进去");
+            assert_eq!(
+                parsed.output_dir, "/out",
+                "{feature} 的 outputDir 槽没解进去"
+            );
+        }
+
+        // f04 → MergeParams{files, output}
+        let params = slots_of(
+            "f04",
+            &[("target", json!("utf-8"))],
+            &[
+                ("files", json!(["/in/a.txt", "/in/b.txt"])),
+                ("output", json!("/out/all.txt")),
+            ],
+        );
+        let parsed: plan_kinds::MergeParams = serde_json::from_value(params).unwrap();
+        assert_eq!(
+            parsed.files,
+            vec!["/in/a.txt".to_string(), "/in/b.txt".to_string()]
+        );
+        assert_eq!(parsed.output, "/out/all.txt");
+
+        // f06…f09 → CsvPlanParams{files, output / outputDir}
+        // f06 只要 `output`（plan_csv.rs:215 明写 requires output），
+        // f07–f09 才是 output/outputDir 二选一（plan_csv.rs:115-134）。
+        for feature in ["f06", "f07", "f08", "f09"] {
+            let output_slot = if feature == "f06" {
+                ("output", json!("/out/all.csv"))
+            } else {
+                ("outputDir", json!("/out"))
+            };
+            let params = slots_of(
+                feature,
+                &[],
+                &[("files", json!(["/in/a.csv"])), output_slot],
+            );
+            let parsed: plan_csv::CsvPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(
+                parsed.files,
+                vec!["/in/a.csv".to_string()],
+                "{feature} 的 files 槽"
+            );
+            if feature == "f06" {
+                assert_eq!(
+                    parsed.output.as_deref(),
+                    Some("/out/all.csv"),
+                    "f06 的 output 槽"
+                );
+            } else {
+                assert_eq!(
+                    parsed.output_dir.as_deref(),
+                    Some("/out"),
+                    "{feature} 的 outputDir 槽"
+                );
+            }
+        }
+
+        // f10 → 同一个结构体的 roots（**不是 root**，写错就永远是空列表）
+        let params = slots_of(
+            "f10",
+            &[],
+            &[("roots", json!(["/data"])), ("outputDir", json!("/out"))],
+        );
+        let parsed: plan_csv::CsvPlanParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.roots, vec!["/data".to_string()], "f10 的 roots 槽");
+    }
+
+    #[test]
+    fn rewrite_and_ops_slots_land_on_the_route_struct_fields() {
+        // c01/c02 → files（**不是 file**）。这两个路由还有必填的非路径字段
+        // （`sampleWindow`／`sampleBytes` 没有 serde 默认值），真实计划快照里带着它们，
+        // 所以测试也照实带上——不然失败的是这些字段，槽位断言就失去针对性了。
+        for feature in ["c01", "c02"] {
+            let snapshot: &[(&str, serde_json::Value)] = if feature == "c01" {
+                &[("target", json!("utf-8")), ("sampleWindow", json!(65536))]
+            } else {
+                &[("target", json!("crlf")), ("sampleBytes", json!(65536))]
+            };
+            let params = slots_of(feature, snapshot, &[("files", json!(["/in/a.txt"]))]);
+            let files = if feature == "c01" {
+                serde_json::from_value::<plan_kinds::TranscodeParams>(params)
+                    .unwrap()
+                    .files
+            } else {
+                serde_json::from_value::<plan_kinds::LineEndingsParams>(params)
+                    .unwrap()
+                    .files
+            };
+            assert_eq!(
+                files,
+                vec!["/in/a.txt".to_string()],
+                "{feature} 的 files 槽"
+            );
+        }
+
+        // c03 **实证一条已知不匹配**（不是把它绕过去）：
+        // 内核计划参数存的是 `replace`（replace_content.rs:349），
+        // 而壳层路由要的字段是 `replacement`（plan_kinds.rs ReplaceParams），界面也发 `replacement`。
+        // ADR-0072 定的是「参数快照＝计划自带的那份」，于是 c03 的快照喂回路由时**必然缺 `replacement`**。
+        // 这条断言钉住"现在会失败"这个事实；待人类裁快照形状（见 OPEN-QUESTIONS OQ-41）。
+        let snapshot = &[
+            ("mode", json!("plain")),
+            ("find", json!("a")),
+            ("replace", json!("b")),
+            ("sampleBytes", json!(65536)),
+        ];
+        let params = slots_of("c03", snapshot, &[("files", json!(["/in/a.txt"]))]);
+        match serde_json::from_value::<plan_kinds::ReplaceParams>(params) {
+            Ok(_) => {
+                panic!("c03 的快照形状与请求形状居然一致了——那 OQ-41 就该关掉，这条断言要一起改")
+            }
+            Err(error) => assert!(
+                error.to_string().contains("replacement"),
+                "c03 的失败原因应当就是缺 `replacement`，实际：{error}"
+            ),
+        }
+
+        // c04/c11…c14 → OpPlanParams.dir / files / output
+        let params = slots_of("c04", &[], &[("dir", json!("/data"))]);
+        assert_eq!(
+            serde_json::from_value::<plan_ops::OpPlanParams>(params)
+                .unwrap()
+                .dir
+                .as_deref(),
+            Some("/data"),
+            "c04 的 dir 槽"
+        );
+        let params = slots_of(
+            "c11",
+            &[],
+            &[("files", json!(["/a.csv"])), ("output", json!("/b.csv"))],
+        );
+        let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.files, vec!["/a.csv".to_string()]);
+        assert_eq!(parsed.output.as_deref(), Some("/b.csv"));
+
+        // c14 的列数槽与 files 同结构体（顺带证明没把非路径键当成槽位）
+        let params = slots_of(
+            "c14",
+            &[],
+            &[("files", json!(["/a.csv"])), ("outputDir", json!("/out"))],
+        );
+        let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.output_dir.as_deref(), Some("/out"));
+    }
+
+    #[test]
+    fn manifest_archive_and_zip_slots_land_on_the_route_struct_fields() {
+        // c07 → manifest + sourceRoot（必填）与 targetRoot（输出）
+        let params = slots_of(
+            "c07",
+            &[],
+            &[
+                ("manifest", json!("/list.csv")),
+                ("sourceRoot", json!("/src")),
+                ("targetRoot", json!("/dst")),
+            ],
+        );
+        let parsed: plan_manifest::ManifestParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.manifest, "/list.csv");
+        assert_eq!(parsed.source_root, "/src");
+        assert_eq!(parsed.target_root, "/dst");
+
+        // c08 → sourceRoot / targetRoot（线协议名是 camelCase，写 source_root 就永远为空）
+        let params = slots_of(
+            "c08",
+            &[("rules", json!(["docs|ext:pdf"]))],
+            &[("sourceRoot", json!("/src")), ("targetRoot", json!("/dst"))],
+        );
+        let parsed: plan_manifest::ArchivePlanParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.source_root, "/src");
+        assert_eq!(parsed.target_root, "/dst");
+
+        // c10 解压 → archive + outputDir；压缩 → sources + output
+        use kernel::plan::PlanAction;
+        use kernel::recipe::RecipeDocument;
+        let mut snapshot = serde_json::Map::new();
+        snapshot.insert("mode".to_string(), json!("compress"));
+        let compress_doc = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            "压缩",
+            PlanAction::Archive,
+            snapshot,
+            "2026-11-06T00:00:00Z",
+            Some("c10".to_string()),
+        );
+        let mut object = serde_json::Map::new();
+        object.insert("sources".to_string(), json!(["/a.txt"]));
+        object.insert("output".to_string(), json!("/out.zip"));
+        let invocation = recipe_apply::build_invocation(&compress_doc, &object).unwrap();
+        let parsed: plan_manifest::ZipPlanParams =
+            serde_json::from_value(invocation.params).unwrap();
+        assert_eq!(
+            parsed.sources,
+            vec!["/a.txt".to_string()],
+            "c10 压缩的 sources 槽"
+        );
+        assert_eq!(parsed.output.as_deref(), Some("/out.zip"));
+
+        let extract_doc = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9",
+            "解压",
+            PlanAction::Extract,
+            serde_json::Map::new(),
+            "2026-11-06T00:00:00Z",
+            Some("c10".to_string()),
+        );
+        let mut object = serde_json::Map::new();
+        object.insert("archive".to_string(), json!("/a.zip"));
+        object.insert("outputDir".to_string(), json!("/out"));
+        let invocation = recipe_apply::build_invocation(&extract_doc, &object).unwrap();
+        let parsed: plan_manifest::ZipPlanParams =
+            serde_json::from_value(invocation.params).unwrap();
+        assert_eq!(
+            parsed.archive.as_deref(),
+            Some("/a.zip"),
+            "c10 解压的 archive 槽"
+        );
+        assert_eq!(parsed.output_dir.as_deref(), Some("/out"));
+    }
+
+    #[test]
+    fn shell_only_routes_keep_their_own_slots() {
+        // f05/f11/f12 用的是壳层自己的参数结构体，不在各 plan_* 模块里，
+        // 表也照样要能对上——这三条是"只改一处就漏掉"的高危项。
+        let params = slots_of(
+            "f05",
+            &[],
+            &[("file", json!("/a.csv")), ("outputDir", json!("/out"))],
+        );
+        let parsed: F05ShellParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.file, "/a.csv");
+        assert_eq!(parsed.output_dir, "/out");
+
+        let params = slots_of(
+            "f11",
+            &[],
+            &[("list", json!("/list.csv")), ("root", json!("/data"))],
+        );
+        let parsed: F11ShellParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.list, "/list.csv", "f11 的清单槽");
+        assert_eq!(parsed.root, "/data", "f11 的建档根槽");
+
+        let params = slots_of("f12", &[], &[("dir", json!("/data"))]);
+        let parsed: F12ShellParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.dir, "/data", "f12 的 dir 槽");
+    }
+
+    #[test]
+    fn c09_slot_goes_to_source_paths_and_not_into_params() {
+        use kernel::plan::PlanAction;
+        use kernel::recipe::RecipeDocument;
+        let document = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            "去重",
+            PlanAction::Delete,
+            serde_json::Map::new(),
+            "2026-11-06T00:00:00Z",
+            Some("c09".to_string()),
+        );
+        let mut object = serde_json::Map::new();
+        object.insert("sourcePaths".to_string(), json!(["/data"]));
+        let invocation = recipe_apply::build_invocation(&document, &object).unwrap();
+        assert_eq!(invocation.source_paths, vec!["/data".to_string()]);
+        // c09 的 C09Params 没有路径字段：键若误进 params，这里会多出未知字段
+        let parsed: C09Params = serde_json::from_value(invocation.params).unwrap();
+        assert!(parsed.keep.is_none() && parsed.quick_window_bytes.is_none());
+    }
+
+    #[test]
+    fn every_slot_table_feature_has_a_landing_test() {
+        // 自校：槽位表里登记的功能必须**逐个**在上面这几条断言里出现。
+        // 新加功能却没补落地断言＝表可以漂移而 CI 全绿，这条就是拦这个的。
+        let covered: std::collections::BTreeSet<&str> = [
+            "f01", "f02", "f03", "f04", "f05", "f06", "f07", "f08", "f09", "f10", "f11", "f12",
+            "c01", "c02", "c03", "c04", "c07", "c08", "c09", "c10", "c11", "c12", "c13", "c14",
+        ]
+        .into_iter()
+        .collect();
+        for entry in recipe_apply::FEATURE_PATH_SLOTS {
+            assert!(
+                covered.contains(entry.feature),
+                "功能 {} 进了槽位表却没有落地断言（表会漂，CI 不会红）",
+                entry.feature
+            );
+        }
+        assert_eq!(
+            covered.len(),
+            recipe_apply::FEATURE_PATH_SLOTS.len(),
+            "落地断言覆盖的功能数与槽位表不一致"
+        );
+    }
 
     #[test]
     fn protected_snapshot_comparison_ignores_order_and_duplicates() {
