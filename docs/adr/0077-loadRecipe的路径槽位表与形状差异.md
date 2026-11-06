@@ -47,5 +47,5 @@ ADR-0072 定的是「参数快照＝计划自带的那份」，而 ① 的套用
 - 壳层：`cargo test --manifest-path src-tauri/Cargo.toml --offline` **43 → 53 项**。新增 `recipe_apply` 单测 10 项（同出口组装、c09 通道、缺/多槽按名列举、单复数形状、快照已带路径即拒、c10 双模式、未绑定与多步先拒、唯一映射表里的功能都有槽位）＋ 防漂移断言 7 项（含两条自校）。
 - 全量：`cargo test --workspace` **647 项**、桌面壳 `cargo test` **53 项**、`cargo clippy`（含独立 workspace）exit 0。
 - **CI 第一次判红（run 178，head `8ca3564`）**：lint 的「rustfmt（桌面壳独立 workspace）」——本地我在批次中段跑过一次壳层 rustfmt 是绿的，**但随后删掉一个死代码辅助函数时没再重跑**，格式又漂回去了。同一批里我还在 ADR 里写了「两个 workspace 显式跑了两遍」，这句当时并不成立——属于虚标，本段即为更正。
-- **流程结论（写在这里供后续照做）**：桌面壳的 `fmt --check`／`clippy`／`test` 必须在**最后一次改动 `src-tauri` 之后**跑，而不是批次开始时跑一次；本批的修复批 `2c0a1ad`（纯格式）即为重跑后转绿的那一步。
+- **流程结论（写在这里供后续照做）**：桌面壳的 `fmt --check`／`clippy`／`test` 必须在**最后一次改动 `src-tauri` 之后**跑，而不是批次开始时跑一次；本批的修复批 `e8c96b2`（纯格式＋台账更正）重跑后 CI 为 run 179，结果见 `docs/DEVELOPMENT-PLAN.md` §6.1。
 - 前端未改，`pnpm test` **113 项**／`pnpm test:e2e` **17 项**／`check_locales.py`／`check_docs.py` 沿用并通过（本批改动为壳层命令＋文档）。
