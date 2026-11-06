@@ -1,6 +1,6 @@
 # 03 配置 Schema 与迁移契约
 
-> 状态：已评审·实现冻结 v1.4（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.5（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36；2026-11-06 §11 补实现记录之三：`layout.sidebarWidth` 与 `tables` 的列宽/排序首次有界面把手，契约条文未变） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
 >
 > 上游：[01-内核接口与IPC契约](01-内核接口与IPC契约.md)（命令名与错误结构）、[02-Web双通道传输契约](02-Web双通道传输契约.md)（Web 存储形态）。
 > 权威：方案 §4.5（三档优先级/存储位置/版本迁移/安全默认值）、§6.7（设置区分组）、§7.3（参数配置）、§4.6／§9.6（日志双轨与保留）、§9.5（配方与配置带版本、位图配置驱动）、§8.5（授权数据单独加密）、§13.8（跨形态只经配方导出迁移）、§15（处理模板与持久化扩展）。
@@ -318,7 +318,10 @@ interface UiState {
 | v1.2 | 2026-10-28 | `GeneralScope.theme` 工程默认由 `"system"` 改为 `"light"`（U v1.3 §5 D-U5 浅色默认，用户确认）；枚举 `system/light/dark` 不变。 |
 | v1.3 | 2026-10-28 | RecipeDocument v2/v3（match/steps/迁移、CURRENT_RECIPE_SCHEMA_VERSION=3）；新增 getRecipe 与 UiState 契约（get/set/reset、独立 uiStateVersion、重置规则）；对应方案 §15 与 OQ-26/27。 |
 | v1.4 | 2026-11-05 | §7 补「实现状态」：`saveRecipe`/`getRecipe`/`listRecipes`/`deleteRecipe`/`exportRecipe`/`importRecipe` 六条已实现并接入界面（模板库＋功能页保存入口，ADR-0072），命令与 DTO 同步进设计 01 §4.4.2（v1.51）；`saveRecipe` 落盘前剔除路径参数（名单按参数名真实语义校正：`source`/`target` 是编码不是路径）；**`loadRecipe` 未实现**，阻塞 OQ-36（动作→功能码一对多），界面不提供「一键套用」——表格保留该行属契约目标，不是现状 |
+| v1.5 | 2026-11-06 | 无契约变更：§11.2 的 `layout.sidebarWidth`／`tables.columnWidths`／`tables.sort` 首次接界面把手（侧栏拖宽、列宽拖拽、列头排序），§11.3 的「面板宽度 clamp」与「重置回默认」随之有了真实用户路径；实现口径与占位 token 见 [ADR-0075](../adr/0075-界面状态把手的尺寸来源与排序语义.md)，尺寸终值挂 [OQ-39](../OPEN-QUESTIONS.md)。 |
 
 > **实现记录（不改契约，2026-11-03）**：设置区 UI 已落地（`web/src/SettingsPage.tsx`，设计 12 v0.18），按本篇 §4.1 的五个可写 scope 一组一页签面板渲染——字段清单与枚举值取自 §4.1，来源标记读 `SettingValue.effectiveSource`（`user` 显示"已自定义"、`default` 显示"默认值"），分组重置走 `resetScope`（**不**逐项 `setConfig`），高版本只读以 `E1007` 呈现为只读横幅并回读现值。`general.language`／`general.theme` 的写入路径与界面即时生效的关系见设计 09 v0.2 §8；字段注册表在 `web/src/SettingsPage.tsx` 的 `SCOPES`（加字段＝加一行，不改渲染代码）。本篇 schema、默认值、错误码与迁移链**均未变更**。
 >
 > **实现记录之二（不改契约，2026-11-03）**：§11 的界面联动接了第一处——C09 工作台按 §11.2 的 `navigation.lastDirectory`／`recentDirectories` 做"启动预填上次目录 + 生成预览后记住这次目录 + 输入框候选"，前端 `web/src/lib/uiState.ts` 的 `rememberDirectory` 与内核 `UiState::remember_directory` 同语义（去重置顶、不设上限），写盘走既有 `setUiState` 的读改写（patch 是顶层浅合并，必须整体回写 `navigation`）。同批接了 `lastSection`／`lastFeature`：功能页记 `lastSection="feature"`＋功能 id，顶层视图直接记其 id，启动时若功能 id 仍在导航表里就回到该页（不在则回默认，避免空白页）。`window`/`layout`/`tables`/`templatePrefs` 与 §11.3 的离屏 clamp 仍未接；**§11.3 的"重置界面状态"入口已建**（设置区「本机界面状态」卡片 → `resetUiState`，与 ConfigDocument 严格分离），见 [ADR-0062](../adr/0062-UiState的前端联动上次目录与上次页面.md)。
+> **实现记录之三（不改契约，2026-11-06）**：§11.2 的 `layout` 与 `tables` 两段从「类型与存储都在、界面零调用」转为可用——侧栏右缘有分隔把手（拖拽＋方向键），C09 与功能页的预览/结果表有列宽把手与列头排序。表 id 用 `table.` 命名空间（`table.c09.plan`／`table.c09.result`／`table.feature.<功能码>`），原因是 `check_locales.py` 第 ⑥ 项会把 `c09.`／`feature.` 形态的字符串当作文案 key 核对，两个命名空间不能撞车。§11.3 的「面板宽度 clamp」实现为**读 CSS token 的上下界**（`web/src/styles/tokens.css` 里的 `--layout-sidebar-min/max` 等占位值），渲染层只读不定义；`tables.sort` 实现为**视图态**——只重排显示行，不改计划序、也不进「参数变更→旧计划失效」的表单快照（方案 §7.1／§7.3）。仍未接：`layout.sidebarCollapsed`、AI 面板宽度/开关、任务面板开关、`templatePrefs` 的运行模式入口。详见 [ADR-0075](../adr/0075-界面状态把手的尺寸来源与排序语义.md)。「任务与撤销」表与 C05 预览表本轮未接把手。
+>
