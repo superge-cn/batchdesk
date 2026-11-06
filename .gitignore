@@ -54,4 +54,7 @@ web/blob-report/
 # 无 WASM 探针：镜像转译产物（源码在 web/.probe，见其 README）
 web/.probe/mirror/
 web/.probe/entry-*.mjs
+web/.probe/*.log
+ctrl.log
+warn.log
 ignore 探针日志
