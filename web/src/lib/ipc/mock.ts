@@ -668,13 +668,16 @@ let recipeCounter = 0;
 let recipes: RecipeDocument[] = [
   {
     recipeId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8R1",
-    schemaVersion: 3,
+    schemaVersion: 4,
     name: "CSV 分片（每片 5 万行）",
     description: "演示夹具：真实模板由桌面壳落盘",
     steps: [
       {
         stepId: "step-1",
         kind: "split",
+        // `split` 是**一对多**动作（f01/f02/f03/f05），这里刻意留绑定值 f05：
+        // 夹具的作用是演示 v4 的形状，不是证明界面能反推——反推不出来时该显示「未绑定」。
+        feature: "f05",
         paramsSnapshot: { rows: 50000 },
         source: "original"
       }
@@ -726,13 +729,40 @@ export function mockGetRecipe(recipeId: string): RecipeDocument {
   return found;
 }
 
+/**
+ * 与内核 `feature_for_action` 同一张表：只登记**动作→功能码唯一**的项。
+ * 一对多的六个动作族必须留 `undefined`，浏览器侧不许比壳层更宽松。
+ */
+const ONE_TO_ONE_FEATURES: Record<string, string> = {
+  delete: "c09",
+  "csv-extract": "f07",
+  listing: "f10",
+  "create-dir": "f11",
+  archive: "c10",
+  extract: "c10",
+  "csv-dedup": "c11",
+  "csv-filter": "c12",
+  "csv-sort": "c13",
+  "csv-columns": "c14",
+  copy: "c07"
+};
+
+function inferFeature(kind: string): string | undefined {
+  return ONE_TO_ONE_FEATURES[kind];
+}
+
 export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
   const steps: TemplateStep[] = input.steps
-    ? input.steps.map((step) => ({ ...step, paramsSnapshot: stripPaths(step.paramsSnapshot) }))
+    ? input.steps.map((step) => ({
+        ...step,
+        feature: step.feature ?? inferFeature(step.kind),
+        paramsSnapshot: stripPaths(step.paramsSnapshot)
+      }))
     : [
         {
           stepId: "step-1",
           kind: input.kind ?? "rename",
+          feature: input.feature ?? inferFeature(input.kind ?? "rename"),
           paramsSnapshot: stripPaths(input.paramsSnapshot ?? {}),
           source: "original"
         }
@@ -743,7 +773,7 @@ export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
   recipeCounter += 1;
   const document: RecipeDocument = {
     recipeId: input.recipeId ?? `01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8S${recipeCounter}`,
-    schemaVersion: 3,
+    schemaVersion: 4,
     name: input.name,
     description: input.description,
     steps,

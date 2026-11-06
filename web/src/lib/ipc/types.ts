@@ -351,8 +351,16 @@ export interface RecipeMatch {
 
 export interface TemplateStep {
   stepId: string;
-  /** 动作级类型（见 `PlanAction` 注释）；功能码不落模板（OQ-36 待裁决）。 */
+  /** 动作级类型（见 `PlanAction` 注释）。 */
   kind: PlanAction;
+  /**
+   * 该步绑定的功能码（schema v4 新增，OQ-36 裁决①）。
+   *
+   * `undefined`＝**不可套用**：这个动作对应多个功能码（`split`＝f01/f02/f03/f05、
+   * `edit-content`＝c01/c02/c03、`rename`＝f12/f13/c04、`merge`＝f04/f06、
+   * `csv-rows`＝f08/f09、`move`＝c07/c08），反推不出来就不猜。
+   */
+  feature?: string;
   /** 参数快照：不含源路径/输出目录/脚本（不变量 13，内核与壳层各兜一层）。 */
   paramsSnapshot: Record<string, unknown>;
   source: StepSource;
@@ -389,9 +397,11 @@ export interface SaveRecipeInput {
   kind?: PlanAction;
   paramsSnapshot?: Record<string, unknown>;
   steps?: TemplateStep[];
+  /** 单步模板的功能码（界面保存时传当前功能页 id）；缺省时壳层按唯一动作推断。 */
+  feature?: string;
 }
 
-/** `exportRecipe` 出参：序列化后的 v3 JSON（落盘位置由壳层另存对话框决定）。 */
+/** `exportRecipe` 出参：序列化后的当前版本（v4）JSON（落盘位置由壳层另存对话框决定）。 */
 export interface RecipeExportPayload {
   payload: string;
 }

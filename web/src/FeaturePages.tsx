@@ -942,7 +942,10 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
         kind: action,
         // 参数快照就是计划自己带的那份（设计 01 §5）；源路径与输出目录由壳层剔除，
         // 这里不再抄一份路径键表——两份清单必然漂移，判据只留内核一处。
-        paramsSnapshot: plan.params
+        paramsSnapshot: plan.params,
+        // 功能码在保存这一刻是**已知**的（就是当前页），不记下来就得事后反推——
+        // 而 `split`/`edit-content`/`rename` 这些动作对应多个功能码，反推必然靠猜（OQ-36 裁决①）。
+        feature: view
       });
       setTemplateOpen(false);
       setTemplateName("");

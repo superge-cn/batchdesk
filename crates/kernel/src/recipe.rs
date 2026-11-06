@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::error::KernelError;
 use crate::plan::PlanAction;
 
-pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 4;
 
 /// 多步骤上限沿用 F15 单束上限（方案 §15.1，不新增数值）。
 pub const MAX_RECIPE_STEPS: usize = 10;
@@ -81,6 +81,49 @@ pub struct TemplateStep {
     pub kind: PlanAction,
     pub params_snapshot: Map<String, Value>,
     pub source: StepSource,
+    /// 该步绑定的**功能码**（`f01`／`c09`／`c10`…），v4 新增（OQ-36 裁决①）。
+    ///
+    /// 为什么必须有它：`kind` 是 `PlanAction`，而壳层 `planOperation` 按功能码路由，
+    /// 一个动作对多个功能码（`split`＝f01/f02/f03/f05、`edit-content`＝c01/c02/c03、
+    /// `rename`＝f12/f13/c04、`merge`＝f04/f06、`csv-rows`＝f08/f09、`move`＝c07/c08），
+    /// 25 个功能码里 16 个反推不出来——没有这个字段，模板永远不知道该回填到哪一页。
+    /// `None`＝该步**不可套用**（旧 v3 里一对多动作迁移后的状态），不是"绑定到了通用出口"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<String>,
+}
+
+/// 动作→功能码**一对一**的表：只登记唯一对应项，迁移时用来自动补 `feature`。
+///
+/// 依据（2026-11-06 逐模块实测）：`crates/kernel/src` 里各动作的计划生成模块与
+/// `src-tauri/src/lib.rs` 的 `planOperation` 路由。`archive` 与 `extract` 都只出自
+/// `archive.rs`（c10），`copy` 只出自 `c07.rs`；`transcode` 没有任何计划生成方使用，
+/// 故不登记。**故意不完整**：六个一对多动作族必须留在 `None`，补全＝猜功能。
+pub fn feature_for_action(action: PlanAction) -> Option<&'static str> {
+    match action {
+        PlanAction::Delete => Some("c09"),
+        PlanAction::CsvExtract => Some("f07"),
+        PlanAction::Listing => Some("f10"),
+        PlanAction::CreateDir => Some("f11"),
+        PlanAction::Archive => Some("c10"),
+        PlanAction::Extract => Some("c10"),
+        PlanAction::CsvDedup => Some("c11"),
+        PlanAction::CsvFilter => Some("c12"),
+        PlanAction::CsvSort => Some("c13"),
+        PlanAction::CsvColumns => Some("c14"),
+        PlanAction::Copy => Some("c07"),
+        _ => None,
+    }
+}
+
+impl TemplateStep {
+    /// 该步能否被「一键套用」：有功能码绑定才算能——判据只有一条，
+    /// 不做参数键猜测（方案 §15.2.5：应用模板只回填参数并调用 `planOperation`）。
+    pub fn is_applicable(&self) -> bool {
+        self.feature
+            .as_deref()
+            .map(|feature| !feature.trim().is_empty())
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +162,7 @@ pub struct RecipeDocumentV2 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RecipeDocumentV3 {
+pub struct RecipeDocument {
     pub recipe_id: String,
     pub schema_version: u32,
     pub name: String,
@@ -141,7 +184,7 @@ pub struct RecipeDocumentV3 {
     pub pinned: Option<bool>,
 }
 
-impl RecipeDocumentV3 {
+impl RecipeDocument {
     /// 单步模板的入口（Phase A 兼容：kind + paramsSnapshot → steps[0]）。
     pub fn from_single_step(
         recipe_id: impl Into<String>,
@@ -149,6 +192,7 @@ impl RecipeDocumentV3 {
         kind: PlanAction,
         params_snapshot: Map<String, Value>,
         created_at: impl Into<String>,
+        feature: Option<String>,
     ) -> Self {
         Self {
             recipe_id: recipe_id.into(),
@@ -160,6 +204,7 @@ impl RecipeDocumentV3 {
                 kind,
                 params_snapshot,
                 source: StepSource::Original,
+                feature,
             }],
             match_: None,
             source_format: None,
@@ -201,6 +246,14 @@ impl RecipeDocumentV3 {
                     step.step_id
                 )));
             }
+            if let Some(feature) = &step.feature {
+                if !is_feature_code(feature) {
+                    return Err(KernelError::invalid_params(format!(
+                        "invalid feature code for step {}: {feature}",
+                        step.step_id
+                    )));
+                }
+            }
             if let Some(key) = script_key(&step.params_snapshot) {
                 return Err(KernelError::invalid_params(format!(
                     "template parameters must not contain scripts (found {key})"
@@ -225,6 +278,55 @@ impl RecipeDocumentV3 {
         }
         removed
     }
+
+    /// v3→v4：把**能唯一确定**的功能码补进步骤；一对多动作保持 `None`。
+    /// 已经带 `feature` 的步骤不动它——显式值优先于推断。
+    pub fn bind_features_from_actions(&mut self) {
+        for step in &mut self.steps {
+            if step.feature.is_none() {
+                step.feature = feature_for_action(step.kind).map(str::to_string);
+            }
+        }
+    }
+
+    /// 「一键套用」的入口判据：**单步**且该步有功能码（方案 §15.2.5、设计 03 §命令表）。
+    /// 不满足就返回 E1002 并说明原因，界面据此不给按钮，而不是给一个按不动的按钮。
+    pub fn single_step_binding(&self) -> Result<(String, &TemplateStep), KernelError> {
+        let step = self
+            .steps
+            .first()
+            .ok_or_else(|| KernelError::invalid_params("recipe has no step to apply"))?;
+        if self.steps.len() > 1 {
+            return Err(KernelError::invalid_params(format!(
+                "multi-step recipe is not applied in one click ({} steps); plan each step separately",
+                self.steps.len()
+            )));
+        }
+        let feature = step.feature.clone().ok_or_else(|| {
+            KernelError::invalid_params(format!(
+                "recipe step {} has no feature binding; action {} maps to several features, re-save it from that feature page",
+                step.step_id, step.kind.as_str()
+            ))
+        })?;
+        if !is_feature_code(&feature) {
+            return Err(KernelError::invalid_params(format!(
+                "recipe step {} has an invalid feature code",
+                step.step_id
+            )));
+        }
+        Ok((feature, step))
+    }
+}
+
+/// 功能码形态：小写字母＋数字，2–4 字符（`c09`／`f12`／`c14`）。只判形态，
+/// 「这个码在不在路由表里」由壳层 `planOperation` 的 `other =>` 分支把关。
+fn is_feature_code(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (2..=4).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 fn script_key(params: &Map<String, Value>) -> Option<&str> {
@@ -251,10 +353,13 @@ pub fn strip_path_params(params: &mut Map<String, Value>) -> Vec<String> {
     removed
 }
 
-/// 读取任意版本的模板 JSON 并迁移到 v3（设计 03 §6.1-5）。
+/// 读取任意版本的模板 JSON 并迁移到当前版本（设计 03 §6.1-5）。
+///
+/// v3→v4 的迁移是**补 `feature`**：一对多动作留 `None`（不可套用），
+/// 一对一动作按 `feature_for_action` 自动绑定——迁移不猜功能码。
 ///
 /// 低版本（1/2）迁移；高于 `CURRENT_RECIPE_SCHEMA_VERSION` → E1007（不猜测语义）。
-pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocumentV3, KernelError> {
+pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelError> {
     let version = payload
         .get("schemaVersion")
         .and_then(Value::as_u64)
@@ -273,18 +378,26 @@ pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocumentV3, KernelEr
     match version {
         1 => {
             let v1: RecipeV1 = serde_json::from_value(payload).map_err(recipe_parse_error)?;
-            Ok(v1.into_v3())
+            Ok(v1.into_current())
         }
         2 => {
             let v2: RecipeDocumentV2 =
                 serde_json::from_value(payload).map_err(recipe_parse_error)?;
-            Ok(v2.into_v3())
+            Ok(v2.into_current())
         }
         3 => {
-            let mut v3: RecipeDocumentV3 =
+            let mut v3: RecipeDocument =
                 serde_json::from_value(payload).map_err(recipe_parse_error)?;
             v3.strip_paths();
+            v3.bind_features_from_actions();
+            v3.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
             Ok(v3)
+        }
+        CURRENT_RECIPE_SCHEMA_VERSION => {
+            let mut current: RecipeDocument =
+                serde_json::from_value(payload).map_err(recipe_parse_error)?;
+            current.strip_paths();
+            Ok(current)
         }
         other => Err(KernelError::new(
             "E1007",
@@ -313,10 +426,10 @@ struct RecipeV1 {
 }
 
 impl RecipeV1 {
-    fn into_v3(mut self) -> RecipeDocumentV3 {
+    fn into_current(mut self) -> RecipeDocument {
         let removed = strip_path_params(&mut self.params_snapshot);
         let _ = removed;
-        RecipeDocumentV3 {
+        RecipeDocument {
             recipe_id: self.recipe_id,
             schema_version: CURRENT_RECIPE_SCHEMA_VERSION,
             name: self.name,
@@ -326,6 +439,7 @@ impl RecipeV1 {
                 kind: self.kind,
                 params_snapshot: self.params_snapshot,
                 source: StepSource::Original,
+                feature: feature_for_action(self.kind).map(str::to_string),
             }],
             match_: Some(RecipeMatch::default()),
             source_format: None,
@@ -339,10 +453,10 @@ impl RecipeV1 {
 }
 
 impl RecipeDocumentV2 {
-    fn into_v3(self) -> RecipeDocumentV3 {
+    fn into_current(self) -> RecipeDocument {
         let mut params = self.params_snapshot;
         strip_path_params(&mut params);
-        RecipeDocumentV3 {
+        RecipeDocument {
             recipe_id: self.recipe_id,
             schema_version: CURRENT_RECIPE_SCHEMA_VERSION,
             name: self.name,
@@ -352,6 +466,7 @@ impl RecipeDocumentV2 {
                 kind: self.kind,
                 params_snapshot: params,
                 source: StepSource::Original,
+                feature: feature_for_action(self.kind).map(str::to_string),
             }],
             match_: self.match_,
             source_format: self.source_format,
@@ -407,18 +522,20 @@ mod tests {
         let mut last = Map::new();
         last.insert("file".to_string(), json!("/src/b.txt"));
         last.insert("outputDir".to_string(), json!("/out"));
-        let mut recipe = RecipeDocumentV3::from_single_step(
+        let mut recipe = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "两步模板",
             PlanAction::Split,
             first,
             "2026-11-05T00:00:00Z",
+            None,
         );
         recipe.steps.push(TemplateStep {
             step_id: "step-2".to_string(),
             kind: PlanAction::Transcode,
             params_snapshot: last,
             source: StepSource::Previous,
+            feature: None,
         });
         assert_eq!(
             recipe.strip_paths(),
@@ -483,12 +600,13 @@ mod tests {
         let mut step_params = Map::new();
         step_params.insert("pattern".to_string(), json!("x-{n}"));
         step_params.insert("outputDir".to_string(), json!("/tmp/out"));
-        let mut recipe = RecipeDocumentV3::from_single_step(
+        let mut recipe = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "模板",
             PlanAction::Rename,
             step_params,
             "2026-10-29T00:00:00Z",
+            None,
         );
         let payload = serde_json::to_value(&recipe).unwrap();
         let migrated = migrate_recipe_value(payload).unwrap();
@@ -505,7 +623,7 @@ mod tests {
     fn newer_schema_version_is_rejected_with_e1007() {
         let payload = json!({
             "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
-            "schemaVersion": 4,
+            "schemaVersion": CURRENT_RECIPE_SCHEMA_VERSION + 1,
             "name": "x",
             "steps": []
         });
@@ -525,12 +643,13 @@ mod tests {
 
     #[test]
     fn script_parameters_are_rejected() {
-        let mut recipe = RecipeDocumentV3::from_single_step(
+        let mut recipe = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "危险模板",
             PlanAction::Rename,
             Map::new(),
             "2026-10-29T00:00:00Z",
+            None,
         );
         recipe.steps[0]
             .params_snapshot
@@ -542,12 +661,13 @@ mod tests {
 
     #[test]
     fn step_count_and_duplicate_ids_are_enforced() {
-        let mut recipe = RecipeDocumentV3::from_single_step(
+        let mut recipe = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "十一步",
             PlanAction::Rename,
             Map::new(),
             "2026-10-29T00:00:00Z",
+            None,
         );
         let template = recipe.steps[0].clone();
         while recipe.steps.len() < MAX_RECIPE_STEPS {
@@ -563,12 +683,13 @@ mod tests {
         assert_eq!(error.code, "E1002");
         assert!(error.message.contains("limit"));
 
-        let mut duplicated = RecipeDocumentV3::from_single_step(
+        let mut duplicated = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "重复 id",
             PlanAction::Rename,
             Map::new(),
             "2026-10-29T00:00:00Z",
+            None,
         );
         let step = duplicated.steps[0].clone();
         duplicated.steps.push(step);
@@ -579,15 +700,173 @@ mod tests {
 
     #[test]
     fn empty_steps_are_rejected() {
-        let mut recipe = RecipeDocumentV3::from_single_step(
+        let mut recipe = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "空模板",
             PlanAction::Rename,
             Map::new(),
             "2026-10-29T00:00:00Z",
+            None,
         );
         recipe.steps.clear();
         let error = recipe.validate().unwrap_err();
         assert_eq!(error.code, "E1002");
+    }
+
+    #[test]
+    fn migration_from_v3_binds_unique_features_and_leaves_many_to_many_unbound() {
+        // v3 只带动作：一对一动作自动补功能码，一对多保持 None＝不可套用（不许猜）。
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            "schemaVersion": 3,
+            "name": "旧的分片模板",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "split",
+                "paramsSnapshot": {"targetBytes": 1048576},
+                "source": "original"
+            }],
+            "createdAt": "2026-11-05T00:00:00Z"
+        });
+        let migrated = migrate_recipe_value(payload).unwrap();
+        assert_eq!(migrated.schema_version, CURRENT_RECIPE_SCHEMA_VERSION);
+        assert_eq!(migrated.steps[0].feature, None);
+        assert!(!migrated.steps[0].is_applicable());
+
+        let unique = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q9",
+            "schemaVersion": 3,
+            "name": "旧的清单模板",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "listing",
+                "paramsSnapshot": {},
+                "source": "original"
+            }],
+            "createdAt": "2026-11-05T00:00:00Z"
+        });
+        assert_eq!(
+            migrate_recipe_value(unique).unwrap().steps[0]
+                .feature
+                .as_deref(),
+            Some("f10")
+        );
+    }
+
+    #[test]
+    fn migration_never_overwrites_an_explicit_feature() {
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QA",
+            "schemaVersion": 3,
+            "name": "已经绑好功能的旧模板",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "delete",
+                "paramsSnapshot": {},
+                "source": "original",
+                "feature": "c09"
+            }],
+            "createdAt": "2026-11-05T00:00:00Z"
+        });
+        let doc = migrate_recipe_value(payload).unwrap();
+        assert_eq!(doc.steps[0].feature.as_deref(), Some("c09"));
+    }
+
+    #[test]
+    fn v4_round_trip_keeps_feature_and_omits_the_key_when_absent() {
+        let mut params = Map::new();
+        params.insert("targetBytes".to_string(), json!(2048));
+        let bound = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QB",
+            "按大小分片",
+            PlanAction::Split,
+            params.clone(),
+            "2026-11-06T00:00:00Z",
+            Some("f01".to_string()),
+        );
+        let json = serde_json::to_value(&bound).unwrap();
+        assert_eq!(json["steps"][0]["feature"], json!("f01"));
+        let back: RecipeDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(back, bound);
+
+        let unbound = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QC",
+            "没绑功能的分片",
+            PlanAction::Split,
+            params,
+            "2026-11-06T00:00:00Z",
+            None,
+        );
+        let json = serde_json::to_value(&unbound).unwrap();
+        assert!(json["steps"][0].get("feature").is_none());
+    }
+
+    #[test]
+    fn single_step_binding_is_the_apply_gate() {
+        let mut params = Map::new();
+        params.insert("find".to_string(), json!("a"));
+        let bound = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QD",
+            "改名（已绑定）",
+            PlanAction::Rename,
+            params.clone(),
+            "2026-11-06T00:00:00Z",
+            Some("f12".to_string()),
+        );
+        let (feature, step) = bound.single_step_binding().unwrap();
+        assert_eq!(feature, "f12");
+        assert_eq!(step.kind, PlanAction::Rename);
+
+        // 一对多动作没绑定 → 报的是「该重存了」，不是含糊的失败。
+        let unbound = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QE",
+            "改名（未绑定）",
+            PlanAction::Rename,
+            params.clone(),
+            "2026-11-06T00:00:00Z",
+            None,
+        );
+        let error = unbound.single_step_binding().unwrap_err();
+        assert_eq!(error.code, "E1002");
+        assert!(error.message.contains("re-save"));
+
+        // 多步模板不走一键（方案 §15.2.5 的一键只给单步）。
+        let mut multi = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QF",
+            "两步",
+            PlanAction::Rename,
+            params.clone(),
+            "2026-11-06T00:00:00Z",
+            Some("f12".to_string()),
+        );
+        multi.steps.push(TemplateStep {
+            step_id: "step-2".to_string(),
+            kind: PlanAction::CsvDedup,
+            params_snapshot: params,
+            source: StepSource::Previous,
+            feature: Some("c11".to_string()),
+        });
+        let error = multi.single_step_binding().unwrap_err();
+        assert_eq!(error.code, "E1002");
+        assert!(error.message.contains("multi-step"));
+    }
+
+    #[test]
+    fn validate_rejects_malformed_feature_codes() {
+        let mut recipe = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QG",
+            "坏功能码",
+            PlanAction::Split,
+            Map::new(),
+            "2026-11-06T00:00:00Z",
+            Some("F01".to_string()),
+        );
+        assert_eq!(recipe.validate().unwrap_err().code, "E1002");
+        recipe.steps[0].feature = Some("f0123".to_string());
+        assert_eq!(recipe.validate().unwrap_err().code, "E1002");
+        recipe.steps[0].feature = Some("c09 ".to_string());
+        assert_eq!(recipe.validate().unwrap_err().code, "E1002");
+        recipe.steps[0].feature = Some("f01".to_string());
+        recipe.validate().unwrap();
     }
 }

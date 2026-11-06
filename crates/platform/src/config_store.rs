@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use kernel::config::{ConfigDocument, CURRENT_CONFIG_VERSION};
 use kernel::error::KernelError;
 use kernel::fs::FsAdapter;
-use kernel::recipe::{migrate_recipe_value, RecipeDocumentV3, CURRENT_RECIPE_SCHEMA_VERSION};
+use kernel::recipe::{migrate_recipe_value, RecipeDocument, CURRENT_RECIPE_SCHEMA_VERSION};
 use kernel::ui_state::UiState;
 use serde::Serialize;
 use serde_json::Value;
@@ -27,7 +27,7 @@ pub struct ConfigLoad {
 
 #[derive(Clone, Debug, Default)]
 pub struct RecipeList {
-    pub recipes: Vec<RecipeDocumentV3>,
+    pub recipes: Vec<RecipeDocument>,
     pub warnings: Vec<KernelError>,
 }
 
@@ -162,7 +162,7 @@ impl ConfigStore {
     }
 
     /// 保存模板：校验结构约束后原子写（`schemaVersion` 固定为当前版本）。
-    pub fn save_recipe(&self, recipe: &mut RecipeDocumentV3) -> Result<(), KernelError> {
+    pub fn save_recipe(&self, recipe: &mut RecipeDocument) -> Result<(), KernelError> {
         recipe.validate()?;
         recipe.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
         let path = self.recipe_path(&recipe.recipe_id)?;
@@ -170,7 +170,7 @@ impl ConfigStore {
     }
 
     /// 读取单个模板（低版本按需迁移；高版本 E1007）。
-    pub fn get_recipe(&self, recipe_id: &str) -> Result<RecipeDocumentV3, KernelError> {
+    pub fn get_recipe(&self, recipe_id: &str) -> Result<RecipeDocument, KernelError> {
         let path = self.recipe_path(recipe_id)?;
         if !path.exists() {
             return Err(KernelError::new(
@@ -221,7 +221,7 @@ impl ConfigStore {
     }
 
     /// 导入模板：解析 → 迁移（低版本升级、高版本 E1007）→ 校验 → 落盘（§13.8）。
-    pub fn import_recipe(&self, payload: &str) -> Result<RecipeDocumentV3, KernelError> {
+    pub fn import_recipe(&self, payload: &str) -> Result<RecipeDocument, KernelError> {
         let value: Value = serde_json::from_str(payload).map_err(|error| {
             KernelError::invalid_params(format!("invalid recipe payload: {error}"))
         })?;
@@ -344,15 +344,16 @@ mod tests {
         (dir, store)
     }
 
-    fn recipe(recipe_id: &str) -> RecipeDocumentV3 {
+    fn recipe(recipe_id: &str) -> RecipeDocument {
         let mut params = Map::new();
         params.insert("keep".to_string(), json!("earliest"));
-        RecipeDocumentV3::from_single_step(
+        RecipeDocument::from_single_step(
             recipe_id,
             "去重模板",
             PlanAction::Delete,
             params,
             "2026-10-29T00:00:00Z",
+            None,
         )
     }
 
@@ -505,13 +506,17 @@ mod tests {
     }
 
     #[test]
-    fn export_returns_v3_json() {
+    fn export_returns_current_schema_json() {
         let (_dir, store) = store();
         let mut template = recipe("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8");
         store.save_recipe(&mut template).unwrap();
         let payload = store.export_recipe(&template.recipe_id).unwrap();
         let decoded: Value = serde_json::from_str(&payload).unwrap();
-        assert_eq!(decoded["schemaVersion"], json!(3));
+        // 版本号跟着常量走，不写死：写死过一次（v3），升版时这条测试就是假绿。
+        assert_eq!(
+            decoded["schemaVersion"],
+            json!(kernel::recipe::CURRENT_RECIPE_SCHEMA_VERSION)
+        );
         assert!(decoded.get("steps").is_some());
     }
 

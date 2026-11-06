@@ -4,17 +4,21 @@ import { deleteRecipe, exportRecipe, importRecipe, listRecipes, toIpcError } fro
 import { ErrorBanner } from "./ErrorBanner";
 import { useI18n } from "./i18n";
 import { actionLabel } from "./labels";
+import { NAV_LABEL_BY_ID } from "./navCatalog";
 import type { IpcError, RecipeDocument } from "./lib/ipc/types";
 
 /**
  * 处理模板（C37，方案 §15、设计 12 §5）。
  *
- * **这一版只做"存取那一半"**：列表、查看步骤、删除、导入、导出，以及功能页那边的
- * 「存为处理模板」。缺的是"把模板变成计划"——那需要 `loadRecipe`，而它卡在
- * [OQ-36](../../docs/OPEN-QUESTIONS.md)：`TemplateStep.kind` 是动作（`split`／`rename`／
- * `csv-rows`），壳层按功能码（`f01`／`f03`）路由，动作→功能码是一对多。
- * 裁决前不实现（AGENTS「何时停下来问人」），页面把这件事写成一条横幅而不是给个
- * 假按钮：点了没反应比没有按钮更糟。
+ * **这一版做到"绑定已记录、套用还没通道"**：列表、查看步骤、删除、导入、导出、
+ * 「存为处理模板」都在；OQ-36 已裁（取①），所以模板现在**记着功能码**——
+ * 每个步骤卡上会写明它绑到哪个功能，一对多且没绑定的直接说"未绑定"。
+ *
+ * 剩下的不是功能码问题，而是**输入通道**：方案 §15.2.5 说套用＝回填参数后调
+ * `planOperation`，而设计 03/01 的 `loadRecipe` 只收 `recipeId`——模板按不变量 13
+ * 不存路径，只给 id 就产不出计划。这条冲突登记在
+ * [OQ-40](../../docs/OPEN-QUESTIONS.md) 等人类裁决（AGENTS「何时停下来问人」：命令面变更走人），
+ * 裁决前这里不放一个点了没反应的按钮。
  *
  * 另两条硬约束写在交互里：
  * - 模板**不含**源路径与输出目录（不变量 13），所以"套用"时本来就要重选位置；
@@ -55,6 +59,29 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
   const stepSummary = useMemo(
     () => (item: RecipeDocument) =>
       Array.from(new Set(item.steps.map((step) => step.kind))).map((kind) => actionLabel(t, kind)),
+    [t]
+  );
+
+  /**
+   * 该模板能否套用（OQ-36 裁决①落地后的判据）：每一步都要有功能码绑定。
+   *
+   * 刻意不说"可以套用"——套用通道还卡在 OQ-40；这里只如实回答"绑没绑上"，
+   * 因为绑定决定的是**将来**能不能路由，用户现在就该知道自己存的东西缺什么。
+   */
+  const binding = useMemo(
+    () => (item: RecipeDocument) => {
+      const features = item.steps.map((step) => step.feature?.trim()).filter(Boolean) as string[];
+      if (features.length === 0) {
+        return { bound: false as const, label: "" };
+      }
+      const label = features
+        .map((code) => {
+          const labelKey = NAV_LABEL_BY_ID[code as keyof typeof NAV_LABEL_BY_ID];
+          return labelKey ? `${t(labelKey as never)} (${code})` : code;
+        })
+        .join(" → ");
+      return { bound: true as const, label };
+    },
     [t]
   );
 
@@ -168,6 +195,11 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                         kinds: stepSummary(item).join(" / "),
                         updated: item.updatedAt ?? item.createdAt
                       })}
+                    </p>
+                    <p className="hint" data-testid="template-binding">
+                      {binding(item).bound
+                        ? t("templates.bound", { features: binding(item).label })
+                        : t("templates.unbound")}
                     </p>
                     {item.match?.extensions?.length ? (
                       <p className="hint">

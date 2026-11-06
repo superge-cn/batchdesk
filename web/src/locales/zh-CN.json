@@ -591,8 +591,8 @@
   "templates.list.title": "处理模板",
   "templates.list.subtitle": "把常做的参数组合存成模板；当前 {total} 个。",
   "templates.empty": "还没有模板。到任一功能页生成预览后点「存为处理模板」。",
-  "templates.blocked.title": "「一键套用」还没裁决。",
-  "templates.blocked.body": "模板按动作保存（分割／改名／抽取…），壳层按功能码路由（F01／F03…），一个动作对应多个功能，这正是未决的 OQ-36。裁决前这里只做存取、管理与导入导出——不给点了没反应的按钮。",
+  "templates.blocked.title": "「一键套用」还缺一条输入通道。",
+  "templates.blocked.body": "功能码现在已记在模板里（OQ-36 已裁，schema v4），卡点变成输入：方案 §15.2.5 说套用＝回填参数后调 planOperation，而 loadRecipe 只收模板 id，模板按规矩不存路径。这条命令面冲突登记在 OQ-40，裁决前这里只做存取、管理与导入导出——不给点了没反应的按钮。",
   "templates.meta": "{steps} 步 · {kinds} · 更新于 {updated}",
   "templates.match": "建议用于：{extensions}（只是建议，不自动筛选、不自动执行）",
   "templates.step": "第 {index} 步",
@@ -638,5 +638,7 @@
   "feature.action.csvRows": "抽取行",
   "feature.action.listing": "生成清单",
   "feature.action.csvDedup": "去重",
-  "feature.action.csvFilter": "过滤"
+  "feature.action.csvFilter": "过滤",
+  "templates.bound": "已绑定功能：{features}（套用通道待 OQ-40 裁决）",
+  "templates.unbound": "未绑定功能：这一步只有动作，套用时无法确定走哪个功能的采集"
 }

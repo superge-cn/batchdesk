@@ -34,6 +34,25 @@ vi.mock("./lib/ipc", () => ({
 
 import { deleteRecipe, exportRecipe, importRecipe, listRecipes } from "./lib/ipc";
 
+/** v4 的一步模板：功能码已绑定（OQ-36 裁决①落地后的形状）。 */
+function boundRecipe(feature: string | undefined): RecipeDocument {
+  return {
+    recipeId: "r-bound",
+    schemaVersion: 4,
+    name: "按大小分片",
+    steps: [
+      {
+        stepId: "step-1",
+        kind: "split",
+        ...(feature ? { feature } : {}),
+        paramsSnapshot: { targetBytes: 1048576 },
+        source: "original"
+      }
+    ],
+    createdAt: "2026-11-06T09:00:00Z"
+  };
+}
+
 function renderPage() {
   return render(<TemplatesPage onBack={() => undefined} />);
 }
@@ -97,5 +116,25 @@ describe("处理模板视图", () => {
     expect(exportRecipe).toHaveBeenCalledWith("r1");
     const box = await screen.findByRole("textbox", { name: /导出「CSV 分片/ });
     expect((box as HTMLTextAreaElement).value).toContain('"schemaVersion": 3');
+  });
+})
+
+describe("模板的功能码绑定（OQ-36 裁决①，schema v4）", () => {
+  it("绑定过就写明是哪个功能，而不是只报动作名", async () => {
+    vi.mocked(listRecipes).mockResolvedValueOnce({ items: [boundRecipe("f01")], total: 1 });
+    renderPage();
+
+    const line = await screen.findByTestId("template-binding");
+    expect(line).toHaveTextContent("已绑定功能");
+    expect(line).toHaveTextContent("f01");
+  });
+
+  it("没绑定的如实说「未绑定」，不假装可以套用", async () => {
+    vi.mocked(listRecipes).mockResolvedValueOnce({ items: [boundRecipe(undefined)], total: 1 });
+    renderPage();
+
+    const line = await screen.findByTestId("template-binding");
+    expect(line).toHaveTextContent("未绑定功能");
+    expect(screen.queryByRole("button", { name: /一键套用|套用/ })).toBeNull();
   });
 });

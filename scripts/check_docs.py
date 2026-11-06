@@ -772,6 +772,86 @@ def check_design_index_versions(errors: list[str]) -> None:
         )
 
 
+def check_recipe_feature_table(errors: list[str]) -> None:
+    """配方 v4 的功能码推断表：内核与浏览器 mock 必须逐键相等（OQ-36 裁决①）。
+
+    动因：这张「动作→功能码（仅一对一）」的表在两处各写一份——内核
+    `feature_for_action` 与 `web/src/lib/ipc/mock.ts` 的 `ONE_TO_ONE_FEATURES`。
+    mock 比壳层宽松（多绑一个）就会让 Playwright 走一条真机不存在的通路，
+    比壳层严格则界面在浏览器里少绑。两处漂移只能靠机器拦。
+    """
+    kernel = ROOT / "crates" / "kernel" / "src" / "recipe.rs"
+    plan = ROOT / "crates" / "kernel" / "src" / "plan.rs"
+    mock = ROOT / "web" / "src" / "lib" / "ipc" / "mock.ts"
+    if not (kernel.exists() and plan.exists() and mock.exists()):
+        errors.append("找不到 recipe.rs／plan.rs／mock.ts：配方功能码表核对无法进行")
+        return
+
+    # 锚点要限定在 `impl PlanAction` 里：`KeepPolicy` 等类型也有同名 as_str，
+    # 不限定的话解析到别人的块，这张表就永远核不到正例。
+    plan_text = plan.read_text(encoding="utf-8")
+    impl_at = plan_text.find("impl PlanAction {")
+    slug_block = (
+        _paired_block(plan_text[impl_at:], "pub const fn as_str") if impl_at >= 0 else None
+    )
+    if not slug_block:
+        errors.append(
+            "配方功能码表核对自校失败：解析不到 `impl PlanAction` 里 as_str 的映射块"
+        )
+        return
+    variant_to_slug = dict(re.findall(r"Self::([A-Za-z]+) => \"([a-z-]+)\"", slug_block))
+
+    fn_block = _paired_block(kernel.read_text(encoding="utf-8"), "pub fn feature_for_action")
+    if not fn_block:
+        errors.append("配方功能码表核对自校失败：解析不到 feature_for_action 函数体")
+        return
+    kernel_table = {}
+    for variant, code in re.findall(
+        r"PlanAction::([A-Za-z]+) => Some\(\"([a-z0-9]+)\"\)", fn_block
+    ):
+        slug = variant_to_slug.get(variant)
+        if slug is None:
+            errors.append(f"配方功能码表：内核登记的动作 {variant} 在 as_str 里找不到线协议名")
+            continue
+        kernel_table[slug] = code
+
+    mock_block = _paired_block(mock.read_text(encoding="utf-8"), "const ONE_TO_ONE_FEATURES")
+    if not mock_block:
+        errors.append("配方功能码表核对自校失败：解析不到 mock.ts 的 ONE_TO_ONE_FEATURES")
+        return
+    # TS 里键可以带引号也可以不带（`delete:` 与 `"csv-extract":`），两种都要收
+    mock_table = dict(re.findall(r"\"?([a-z][a-z-]*)\"?: \"([a-z0-9]+)\"", mock_block))
+
+    # 自校：两张表都要有实质内容，解析缩水说明写法变了（探测器失效＝没有正例）
+    if len(kernel_table) < 8 or len(mock_table) < 8:
+        errors.append(
+            f"配方功能码表核对自校失败：解析结果异常（内核 {len(kernel_table)} 项／mock {len(mock_table)} 项，"
+            "期望各 ≥8）——锚点或写法变了，探测器失效＝没有正例"
+        )
+        return
+
+    only_kernel = sorted(set(kernel_table) - set(mock_table))
+    only_mock = sorted(set(mock_table) - set(kernel_table))
+    if only_kernel:
+        errors.append(
+            "配方功能码表漂移：内核有而浏览器 mock 没有的动作 → "
+            + "、".join(f"{slug}（{kernel_table[slug]}）" for slug in only_kernel)
+        )
+    if only_mock:
+        errors.append(
+            "配方功能码表漂移：浏览器 mock 有而内核没有的动作 → "
+            + "、".join(f"{slug}（{mock_table[slug]}）" for slug in only_mock)
+        )
+    mismatched = sorted(
+        slug for slug in set(kernel_table) & set(mock_table) if kernel_table[slug] != mock_table[slug]
+    )
+    if mismatched:
+        errors.append(
+            "配方功能码表漂移：同名动作绑到不同功能码 → "
+            + "、".join(f"{slug}：内核 {kernel_table[slug]}／mock {mock_table[slug]}" for slug in mismatched)
+        )
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -785,6 +865,7 @@ def main() -> int:
     check_case_stats(errors)
     check_table_arity(errors)
     check_kind_routing(errors)
+    check_recipe_feature_table(errors)
     check_assertion_claims(errors)
     check_design_index_versions(errors)
 
@@ -796,7 +877,7 @@ def main() -> int:
 
     print(
         "文档一致性检查通过：索引文件、链接/锚点、基线版本与哈希、语料 expected.md、"
-        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、语料断言口径以 assertions.tsv 为单一来源、设计索引版本＝正文当前版本、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、用例覆盖统计≡两份 CSV 实测、Markdown 表格列数。"
+        "错误码白名单、功能码路由↔侧栏↔FeatureView 三处相等、配方功能码表（内核↔浏览器 mock）逐键相等、语料断言口径以 assertions.tsv 为单一来源、设计索引版本＝正文当前版本、用例覆盖映射表（296 条对账＋锚点实名＋状态一致性）、用例执行台账（296 行对齐＋判定词法＋硬缺陷为零）、用例覆盖统计≡两份 CSV 实测、Markdown 表格列数。"
     )
     return 0
 

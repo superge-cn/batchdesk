@@ -101,6 +101,10 @@ describe("功能页的「存为处理模板」", () => {
       match: { extensions: ["csv", "txt"] },
       // 动作来自计划条目，不来自"功能码→动作"对照表
       kind: "split",
+      // OQ-36 裁决①：功能码在保存这一刻就写进模板，事后不必反推。
+      // `split` 对应 f01/f02/f03/f05 四个功能——正是"反推不出来"的那一族，
+      // 这里存的是 f05，说明绑定的来源是"当前页"而不是猜测。
+      feature: "f05",
       // 快照原样交给壳层；路径剔除由内核 `strip_path_params` 与 `saveRecipe` 做（只留一处判据）
       paramsSnapshot: splitPlan.params
     });

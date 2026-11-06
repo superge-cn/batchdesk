@@ -19,7 +19,7 @@ use kernel::plan::{
     plan_c09, KeepPolicy, PlanAction, PlanC09Input, PlanDocument, PlanFile, PlanResolution,
 };
 use kernel::preflight::{run_preflight, DiskSpaceCheck, PreflightInput, PreflightReport};
-use kernel::recipe::{RecipeDocumentV3, RecipeMatch, TemplateStep};
+use kernel::recipe::{RecipeDocument, RecipeMatch, TemplateStep};
 use kernel::ui_state::UiState;
 use platform::config_store::ConfigStore;
 use platform::fs::CliFsAdapter;
@@ -752,22 +752,35 @@ struct SaveRecipeInput {
     params_snapshot: Option<Map<String, Value>>,
     #[serde(default)]
     steps: Option<Vec<TemplateStep>>,
+    /// 单步模板绑定的功能码（OQ-36 裁决①：`TemplateStep.feature`）。
+    /// 界面保存时传的就是当前功能页的 id；没传就按动作推断，**只在动作唯一时**才补得上。
+    #[serde(default)]
+    feature: Option<String>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
-fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumentV3, IpcError> {
+fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocument, IpcError> {
     let input: SaveRecipeInput = serde_json::from_value(recipe)
         .map_err(|error| IpcError::new("E1002", format!("invalid recipe input: {error}")))?;
     let recipe_id = input.recipe_id.unwrap_or_else(|| new_ulid(&input.name));
     let created_at = platform::fs::now_rfc3339();
     let mut document = match input.steps {
-        Some(steps) => RecipeDocumentV3 {
+        Some(steps) => RecipeDocument {
             recipe_id,
             schema_version: kernel::recipe::CURRENT_RECIPE_SCHEMA_VERSION,
             name: input.name,
             description: input.description,
-            steps,
+            steps: steps
+                .into_iter()
+                .map(|step| {
+                    let feature = step
+                        .feature
+                        .clone()
+                        .or_else(|| kernel::recipe::feature_for_action(step.kind).map(str::to_string));
+                    TemplateStep { feature, ..step }
+                })
+                .collect(),
             match_: input.match_,
             source_format: None,
             created_at,
@@ -781,8 +794,11 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
                 .kind
                 .ok_or_else(|| IpcError::new("E1001", "saveRecipe requires kind or steps"))?;
             let params = input.params_snapshot.unwrap_or_default();
+            let feature = input
+                .feature
+                .or_else(|| kernel::recipe::feature_for_action(kind).map(str::to_string));
             let mut document =
-                RecipeDocumentV3::from_single_step(recipe_id, input.name, kind, params, created_at);
+                RecipeDocument::from_single_step(recipe_id, input.name, kind, params, created_at, feature);
             document.description = input.description;
             document.match_ = input.match_;
             document
@@ -801,7 +817,7 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
-fn getRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<RecipeDocumentV3, IpcError> {
+fn getRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<RecipeDocument, IpcError> {
     config_store(&state)
         .get_recipe(&recipe_id)
         .map_err(IpcError::from)
@@ -810,7 +826,7 @@ fn getRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<RecipeDocu
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecipePage {
-    items: Vec<RecipeDocumentV3>,
+    items: Vec<RecipeDocument>,
     total: usize,
 }
 
@@ -857,7 +873,7 @@ fn exportRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<ExportP
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
-fn importRecipe(state: State<'_, AppState>, payload: String) -> Result<RecipeDocumentV3, IpcError> {
+fn importRecipe(state: State<'_, AppState>, payload: String) -> Result<RecipeDocument, IpcError> {
     // 导入即低版本迁移、高版本 E1007；导入后必须重新预览（不变量 13）。
     config_store(&state)
         .import_recipe(&payload)
