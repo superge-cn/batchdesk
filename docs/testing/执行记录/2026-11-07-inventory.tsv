@@ -207,6 +207,7 @@ kernel::csv::tests::scanner_reports_unclosed_quote_tail	ok
 kernel::csv::tests::scanner_state_survives_chunk_boundaries	ok
 kernel::csv::tests::sniff_picks_the_delimiter_with_stable_columns	ok
 kernel::csv::tests::sniff_returns_none_for_single_column_data	ok
+kernel::csv::tests::streaming_sniffer_matches_sniff_delimiter_for_every_chunk_split	ok
 kernel::csv::tests::utf16_scanner_ignores_structural_bytes_inside_wide_characters	ok
 kernel::csv::tests::utf16_scanner_projects_code_units_and_counts_source_bytes	ok
 kernel::csv::tests::utf16_scanner_survives_odd_chunk_boundaries	ok
@@ -481,6 +482,7 @@ kernel::rename::tests::windows_only_names_are_renamed_when_the_rules_are_posix	o
 kernel::rename::tests::windows_style_targets_still_match_existing_conflicts	ok
 kernel::replace_content::tests::anchored_and_unbounded_regex_still_produce_whole_file_results	ok
 kernel::replace_content::tests::blocked_files_are_not_named_as_readonly	ok
+kernel::replace_content::tests::cell_arm_without_delimiter_asks_for_the_sniff_pass	ok
 kernel::replace_content::tests::cell_streaming_matches_whole_file_cell_replace_across_every_chunk_boundary	ok
 kernel::replace_content::tests::cell_streaming_still_refuses_unclosed_quotes_with_e3004	ok
 kernel::replace_content::tests::csv_cell_mode_replaces_inside_quoted_fields_without_breaking_structure	ok
@@ -502,6 +504,8 @@ kernel::replace_content::tests::regex_invalid_or_missing_capture_is_rejected	ok
 kernel::replace_content::tests::regex_streaming_matches_whole_file_replace_across_every_chunk_boundary	ok
 kernel::replace_content::tests::regex_window_bytes_only_accepts_patterns_with_a_computable_bound	ok
 kernel::replace_content::tests::regex_with_capture_reference_streams_identically_to_whole_file	ok
+kernel::replace_content::tests::streaming_plan_inspect_matches_whole_file_for_every_arm_and_chunk_size	ok
+kernel::replace_content::tests::unbounded_regex_keeps_the_whole_file_plan_channel	ok
 kernel::split::tests::closes_parts_on_line_boundaries	ok
 kernel::split::tests::empty_file_has_no_spans	ok
 kernel::split::tests::empty_input_returns_plan_with_warning_and_no_entries	ok
@@ -589,8 +593,10 @@ platform::fs::tests::quarantine_rename_restores_the_file	ok
 platform::fs::tests::read_ranges_returns_selected_bytes_and_rejects_invalid_spans	ok
 platform::fs::tests::read_stream_delivers_bounded_chunks_and_propagates_the_callback_error	ok
 platform::fs::tests::rename_sequence_avoids_existing_target	ok
+platform::fs::tests::rewrite_atomic_with_buffers_many_small_writes	ok
 platform::fs::tests::rewrite_atomic_with_replaces_the_file_and_preserves_it_on_error	ok
 platform::fs::tests::rfc3339_formats_a_known_timestamp	ok
+platform::fs::tests::write_atomic_with_buffers_many_small_writes	ok
 platform::ids::tests::generated_plan_id_has_ulid_shape	ok
 platform::journal::tests::append_persists_and_mark_reverted_updates_status	ok
 platform::journal::tests::append_with_kind_persists_plan_kind	ok
@@ -615,6 +621,7 @@ platform::preflight::tests::path_check_reads_metadata_without_error_for_missing_
 platform::preflight::tests::path_check_reports_readonly_files	ok
 platform::preflight::tests::same_volume_is_true_for_two_paths_on_the_same_temp_dir	ok
 platform::preflight::tests::unc_share_root_picks_the_share_not_the_local_root	ok
+platform::replace_content::tests::inspect_file_matches_whole_file_semantics_across_chunk_boundaries	ok
 platform::replace_content::tests::inspects_csv_cells_and_quoted_newlines	ok
 platform::replace_content::tests::inspects_text_matches_and_context	ok
 platform::replace_content::tests::short_file_sample_is_truncated	ok

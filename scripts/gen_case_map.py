@@ -118,8 +118,9 @@ EXE_RECIPE = {
 }
 
 # 功能 → 其 apply 实际走的 generic_apply 执行臂（按 plan 构建器里的 PlanAction 实测：
-# csv.rs:616 F05=Split、plan.rs:982 C01=EditContent、line_endings.rs:477／replace_content.rs:461
-# =EditContent＋rewriter、plan.rs:758 C09=Delete、archive.rs C10=专用执行器）。
+# csv.rs 的 F05 计划条目 action=Split、plan.rs 的 C01＝EditContent、line_endings.rs／
+# replace_content.rs 的 plan_*＝EditContent＋rewriter、plan.rs 的 C09＝Delete、
+# archive.rs 的 C10＝专用执行器。一律按符号名定位，不写行号——行号会随每次改动腐烂）。
 # 值为 None 的臂尚无条目级取消回滚断言，不得据此升级状态。
 ARM = {
     "F01": "split", "F02": "split", "F03": "split", "F05": "split",
@@ -371,7 +372,7 @@ add("F04",
 
 add("F05",
     name="CSV 分割", stage="阶段 0", prio="P0★", src="方案 §5.3；T §3.2 F05",
-    plan_tests="kernel `csv` 23 项（CsvRecordScanner〔含 UTF-16 码元投影〕/CsvSplitAccumulator/sniff_delimiter）＋platform `csv` 7 项",
+    plan_tests="kernel `csv` 24 项（CsvRecordScanner〔含 UTF-16 码元投影〕/CsvSplitAccumulator/sniff_delimiter＋流式嗅探对账 1 项，ADR-0079 加）＋platform `csv` 7 项",
     exe1="apply_flow::f05_plan_apply_and_undo_repeats_the_csv_header",
     rbk1="同上（copy_ranges_atomic 一次原子写，撤销进隔离目录）",
     pre=["正常 CSV 预览", "分片值/行数典型与临界", "@T02 引号内换行与 @K08 BOM 标注（多行表头不支持）", "改参数后旧预览失效"],
@@ -379,7 +380,7 @@ add("F05",
          "@T02 引号内换行不切记录", "执行中暂停/取消"],
     rbk=["撤销分片产物", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        True, "kernel `csv` 23 项",
+        True, "kernel `csv` 24 项",
         ("kernel::csv::tests::overlong_record_occupies_its_own_part＋platform `csv` 7 项", ""),
         ("kernel::csv::tests::plan_blocks_utf16_without_bom_and_multi_line_header＋plan_f05_writes_a_bom_on_every_utf16_part", "UI 标注与阻断待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -626,7 +627,8 @@ add("C01",
             "＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm（edit-content 臂，覆盖本行「执行中取消」部分）"
             "＋apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry"
             "＋generic_apply::tests::edit_content_carries_detail_per_entry_and_keeps_it_absent_when_not_produced"
-            "＋C-2 整档实测 `fixtures/bench/measure.py c2rw --case c01`（结果行 R-09、R-10、R-11）",
+            "＋C-2 整档实测 `fixtures/bench/measure.py c2rw --case c01`（结果行 R-09、R-10、R-11，"
+            "写侧合块后复测 R-19）",
             "**C-2 整档已实测（2026-11-06 Linux 预跑，`fixtures/bench/results.md` R-09／R-10／R-11）**：计划段中位 0.014 秒（采样式，与 2.05 GiB 体积无关）、改写段中位 24.317 秒＝86.9 MiB/s 源吞吐（读数含整源备份 IO，约 4× 源体积）、全程峰值 RSS 4.37 MiB＝§9.1「超大文件内存占用恒定」第③子句达标；产物 sha256＝源 sha256（夹具独立算出期望后断言逐字节一致）。**Linux 预跑不作验收证据**，仍 ⛔：余下＝Windows 实机日按同一夹具重测，以及 GB18030 **多字节**解码分支未压到（本轮数据集是纯 ASCII，GB18030 只走到 1:1 子集；要压多字节需新增数据集构造，属 T 附录 C 射程，开发代理不自行加）"),
     },
     rbk_slots={
@@ -654,13 +656,16 @@ add("C02",
         4: ("◐", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "条目边界取消已测（content-rewriter 臂）；单条内部 mid-stream 取消未做（流式重写中途不中断）"),
         5: ("⛔", MANUAL_CARRIER, "FsAdapter::rewrite_atomic_with 流式（设计 04 v1.8）"
             "＋C-2 整档与子档实测 `fixtures/bench/measure.py c2rw --case c02`（结果行 R-12、R-13、R-18）",
-            "**C-2 已实测（2026-11-06 Linux 预跑，`fixtures/bench/results.md` R-12／R-13／R-18）**："
-            "计划段整档中位 12.528 秒做完全量换行计数（实测 79,017,693 条 LF，峰值 RSS 3.9 MiB 不随体积增长＝§9.1 第③子句成立）；"
-            "改写段整档中位 904.269 秒＝2.3 MiB/s（页缓存较热的轮次 4.6，256 MiB 子档 4.3）。"
-            "**慢的原因既不是介质也不是体积**：`crates/platform/src/fs.rs:247` 交给回调的是没有写缓冲的裸 `File`，"
-            "而 `crates/kernel/src/line_endings.rs:175-205` 每行调一次 `write_all`，于是 7,901.7 万行＝7,901.7 万次系统调用。"
-            "缺口＝① 写侧合块这一实现切片（做完必须重测本行数值）；② Windows 实机日按同一夹具重测——"
-            "Linux 预跑不作验收证据，仍 ⛔"),
+            "**C-2 已实测并在 2026-11-07 复测（Linux 预跑，`fixtures/bench/results.md` R-12／R-13／R-18／R-20）**："
+            "计划段整档 10.3–15.2 秒做完全量换行计数（实测 79,017,693 条 LF，峰值 RSS 3.9–4.4 MiB 不随体积增长＝§9.1 第③子句成立）；"
+            "**改写段整档复测＝R-20：中位 33.485 秒／63.1 MiB/s**，而合块前（R-18）同一档同一命令是 904.269 秒／2.3 MiB/s——27 倍。"
+            "原因当时已钉死：通道交给回调的是没有写缓冲的裸 `File`（`crates/platform/src/fs.rs`），"
+            "而 `crates/kernel/src/line_endings.rs:175-205` 每行调一次 `write_all`，7,901.7 万行＝7,901.7 万次系统调用；"
+            "**已按 [ADR-0078](../adr/0078-改写通道的写缓冲合块.md) 在通道处加 `BufWriter` 修掉**（容量沿用模块内 64 KiB 块尺寸，不是新阈值）。"
+            "读数至此落进 §9.1「机械盘 ≥60 MB/s」那一档的量级，但**本机是 SATA SSD、不作达标判定**，"
+            "且 apply 的一次 IO 约为源体积 4 倍（整源备份进隔离目录）。"
+            "剩余缺口＝Windows 实机日按同一夹具重测（Linux 预跑不作验收证据，仍 ⛔）；"
+            "另注意 ADR-0078 的复测窗口 loadavg 6.5–14.9 不是静默窗口，与 R-18 的比较方向仍是有利的"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
@@ -669,14 +674,14 @@ add("C02",
 
 add("C03",
     name="批量查找替换", stage="阶段 0", prio="P0★", src="方案 §5.14；T §3.2 C03",
-    plan_tests="kernel `replace_content` 23 项＋platform `replace_content` 3 项",
+    plan_tests="kernel `replace_content` 26 项（含 ADR-0079 的计划段流式对账 3 项）＋platform `replace_content` 4 项",
     exe1="apply_flow::c03_plain_replace_plan_apply_and_undo",
     rbk1="同上",
     pre=["普通与正则替换预览（匹配数/上下文）", "正则捕获组与空替换边界", "@K06 二进制、未闭合引号 E3004 标注", "改规则后旧预览失效"],
     exe=["正常替换（非重叠）", "正则捕获组替换", "@K06 不进入文本管道", "@T01 CSV 引号内命中的单元格保护", "执行中取消/行区间"],
     rbk=["撤销还原", "部分失败", "产物占用"],
     pre_slots=default_pre_slots(
-        True, "kernel `replace_content` 23 项",
+        True, "kernel `replace_content` 26 项",
         ("kernel::replace_content::tests::empty_replacement_is_a_danger_warning＋plan_skips_no_matches_and_creates_entries_for_matches", ""),
         ("apply_flow::c03_blocks_binary_and_unclosed_csv", "UI 呈现待 WebDriver"),
         ("FeaturePages.controls.test.tsx「改参数后旧计划立即失效」", "预览失效在通用面断言（改参数即旧计划失效并禁用执行/撤销），本功能页专属面未单独测")),
@@ -685,11 +690,22 @@ add("C03",
         3: (corpus_cell(["K06"])[0], CI, "corpus.rs::K06（C02 接入的魔数管道）", corpus_cell(["K06"])[1]),
         4: ("◐", CI, "apply_flow::c03_csv_cell_mode_preserves_quoted_newlines（T01 台账＝asserted）",
             "CSV 单元格模式会把记录终止符规范化为 LF，源 CRLF 未保留（C-2 集 32 MiB 子档实测到同一行为：末条无终止符的记录被补 1 个 LF，产物＋1 字节、记录数＋1，见 `fixtures/bench/results.md` R-16）"),
-        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 流式（plain/cell 按 ADR-0057、可界定正则按 ADR-0064）＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂取消）"
-            "＋C-2 集子档实测 `fixtures/bench/measure.py c2rw --case c03-plain｜c03-regex｜c03-cell`（结果行 R-14、R-15、R-16、R-17）",
-            "**按模式分别实测已做（2026-11-06 Linux 预跑，`fixtures/bench/results.md` R-14／R-15／R-16／R-17）**：64 MiB 子档 plain 中位 13.053 秒＝4.9 MiB/s、regex（定长 9 字节、`regex_window_bytes` 算得出上界→走窗口臂）16.297 秒＝3.9 MiB/s，两者改写段峰值 RSS 4.2–4.9 MiB＝ADR-0057／0064 的流式宣称在改写段成立；32 MiB 子档 CSV 单元格臂 5.740 秒＝5.6 MiB/s、改写段峰值 4.6 MiB。**两条实测查出的实现缺口**：① **计划段不流式**——`crates/platform/src/replace_content.rs:38` 的 `inspect_file` 用 `fs::read` 整读，实测峰值 64 MiB→67 MiB、256 MiB→258 MiB（≈体积 1.01 倍），cell 路再经 `parse_records` 全量分配 32 MiB→300 MiB（9.4 倍），2 GiB 整档三臂全在 1 GiB 保险丝处被终止（R-17），于是 §4.8「10 MB–2 GB 纯流式…内存占用恒定」与 §9.1 第③子句**在 C03 的计划段不成立**，C-2 整档改写数值因此拿不到（不是「没排期」）；② 改写段虽流式但每行（每匹配）一次 `write_all` 到裸 `File`，故只有 3.9–5.6 MiB/s。两者各需一个实现切片（计划段流式采集＋写侧合块），修完才谈得上整档数值。"
-            "另：无界量词／锚点／`\\b`／分组量化／零宽的模式按 ADR-0064 退回整段，2 GiB 档必超保险丝，属实现边界、本轮不测。"
-            "**Linux 预跑不作验收证据**，仍 ⛔：Windows 实机日重测＋上面两个切片"),
+        5: ("⛔", MANUAL_CARRIER, "ReplaceRewriter 流式（plain/cell 按 ADR-0057、可界定正则按 ADR-0064）"
+            "＋generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms（content-rewriter 臂取消）"
+            "＋C-2 整档实测 `fixtures/bench/measure.py c2rw --case c03-plain｜c03-regex｜c03-cell`（结果行 R-21、R-22、R-23）"
+            "＋计划段流式采集 `kernel::replace_content::tests::streaming_plan_inspect_matches_whole_file_for_every_arm_and_chunk_size`",
+            "**按模式分别记录的 C-2 整档数值已出（2026-11-07 复跑，`fixtures/bench/results.md` R-21／R-22／R-23；"
+            "构建 `dc75aed`＋本批改动、二进制 sha256 `d0cabc69…6035a`）**：plain 计划段中位 21.961 秒＋改写段 41.410 秒＝51.0 MiB/s；"
+            "regex（`[0-9]{9}`，`regex_window_bytes` 算得出上界→窗口臂）计划段 62.445 秒＋改写段 150.557 秒＝14.0 MiB/s；"
+            "CSV 单元格计划段 186.979 秒＋改写段 215.512 秒＝9.8 MiB/s（每记录解析＋重序列化，CPU 主导）。"
+            "**三条臂的峰值 RSS 都是 4–7 MiB 量级、与 2 GiB 体积无关＝§9.1 第③子句与 §4.8 改判成立**。"
+            "这组数值此前拿不到，原因写在 R-17：计划段 `fs::read` 整读（实测 ≈体积 1.01 倍、cell 路 9.4 倍，2 GiB 在 1 GiB 保险丝处被终止）"
+            "＋改写段每匹配一次 `write_all` 到裸 `File`；两条已分别由 ADR-0079（内核逐块采集器＋记录级增量＋流式嗅探，"
+            "等价性由 29 条用例 × 9 种分块尺寸逐字段对账把住）与 ADR-0078（通道 `BufWriter` 合块）修掉。"
+            "仍留的边界只有一条：**界定不出的正则（无界量词／锚点／`\\b`／分组量化／零宽）计划段与改写段都仍整段读，"
+            "内存 O(文件)**——ADR-0064 划的同一条闸门，要测它需要先决定左邻上下文的读法（引入 `regex-automata` 或改判定口径），"
+            "属新切片而非本批欠账。剩余缺口＝Windows 实机日按同一夹具重测（Linux 预跑不作验收证据，仍 ⛔）；"
+            "另外 R-14／R-15／R-16 是修复前的子档读数，引用时要带「合块前」限定"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply", "本功能部分失败注入未测"),
