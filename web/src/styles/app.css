@@ -563,7 +563,9 @@ button {
 /* 任务列表：任务 / 进度 / 状态 / 操作 四列。
    操作列不换行——行高在虚拟列表里是统一的，换行会让后续行错位。 */
 .row-tasks {
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.7fr) auto minmax(0, 1.6fr);
+  /* 默认轨道只在这里出现一次；拖过的列由表容器上的 --col-N 覆盖（同 .row，ADR-0075） */
+  grid-template-columns: var(--col-1, minmax(0, 1.4fr)) var(--col-2, minmax(0, 1.7fr))
+    var(--col-3, auto) var(--col-4, minmax(0, 1.6fr));
 }
 
 .task-row-actions {

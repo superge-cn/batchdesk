@@ -9,6 +9,8 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { VirtualList } from "./VirtualList";
+import { TableHead, columnVarsStyle, useUiTableState } from "./TableHead";
+import type { MessageKey } from "./i18n";
 import { ErrorBanner } from "./ErrorBanner";
 import { isActiveState, phaseLabel, stateBadge, taskKindLabel, type Translate } from "./labels";
 import { useI18n } from "./i18n";
@@ -52,6 +54,17 @@ function timeText(task: TaskSummary) {
  *
  * 任务列表本身也可能上百条，照样走窗口化（方案 6.2）。
  */
+// 任务表本轮只接**列宽**把手：排序要先拿到 `TaskSummary` 各列的准确字段名才能写比较器，
+// 没核实之前不猜（AGENTS 引用回核），缺口写在 ADR-0075 §6 与本文件注释里。
+const TASKS_TABLE = "table.tasks";
+const TASKS_COLUMNS = ["task", "progress", "state", "actions"];
+const TASKS_LABELS: Record<string, MessageKey> = {
+  task: "tasks.table.task",
+  progress: "tasks.table.progress",
+  state: "tasks.table.state",
+  actions: "tasks.table.actions"
+};
+
 export function TaskHistory({
   live,
   onBack
@@ -66,6 +79,8 @@ export function TaskHistory({
   const [busyTask, setBusyTask] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { t } = useI18n();
+  // 列宽把手（设计 03 §11.2 的 tables）：表 id 固定为 table.tasks。
+  const uiTables = useUiTableState();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -248,13 +263,19 @@ export function TaskHistory({
             {t("tasks.empty")}
           </div>
         ) : (
-          <div className="table">
-            <div className="row row-tasks row-head">
-              <span>{t("tasks.table.task")}</span>
-              <span>{t("tasks.table.progress")}</span>
-              <span>{t("tasks.table.state")}</span>
-              <span>{t("tasks.table.actions")}</span>
-            </div>
+          <div
+            className="table"
+            style={columnVarsStyle(TASKS_COLUMNS, uiTables.widths(TASKS_TABLE))}
+          >
+            <TableHead
+              tableId={TASKS_TABLE}
+              tables={uiTables}
+              columns={TASKS_COLUMNS.map((id) => ({
+                id,
+                label: t(TASKS_LABELS[id]),
+                sortable: false
+              }))}
+            />
             <VirtualList
               label={t("tasks.detail")}
               items={rows}

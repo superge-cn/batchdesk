@@ -44,6 +44,9 @@ const listed: TaskSummary[] = [
 
 vi.mock("./lib/ipc", () => ({
   isTauri: () => true,
+  // 列宽把手会读界面状态；这些用例不测它，给一个空的稳定桩。
+  getUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
+  setUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   listTasks: vi.fn(async () => ({ items: listed, total: listed.length })),
   cancelTask: vi.fn(async () => undefined),
   retryTask: vi.fn(async () => ({ taskId: "01TASK-RETRY" })),
@@ -52,7 +55,7 @@ vi.mock("./lib/ipc", () => ({
   toIpcError: (value: unknown) => value
 }));
 
-import { cancelTask, listTasks, recoverTask, retryTask, undoPlan } from "./lib/ipc";
+import { cancelTask, listTasks, recoverTask, retryTask, setUiState, undoPlan } from "./lib/ipc";
 
 function renderView(live: Parameters<typeof TaskHistory>[0]["live"] = {}) {
   return render(<TaskHistory live={live} onBack={() => undefined} />);
@@ -191,5 +194,32 @@ describe("任务与撤销视图", () => {
     expect(banner.textContent).not.toContain("/home/operator");
     expect(banner.textContent).not.toContain("permission denied");
     expect(banner.textContent).not.toContain("os error 13");
+  });
+});
+
+describe("任务表的列宽把手（设计 03 §11.2 的 tables）", () => {
+  it("四个列都有分隔把手，键盘调宽写进 table.tasks", async () => {
+    renderView();
+    const handles = await screen.findAllByRole("separator");
+    expect(handles.length).toBe(4);
+
+    handles[0].focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(setUiState).mock.calls.some(
+          ([patch]) =>
+            (patch as { tables?: Record<string, { columnWidths?: Record<string, number> }> })
+              .tables?.["table.tasks"]?.columnWidths?.task !== undefined
+        )
+      ).toBe(true)
+    );
+  });
+
+  it("本轮不给排序按钮：排序要等 TaskSummary 字段名核实后才写比较器", async () => {
+    renderView();
+    await screen.findAllByRole("separator");
+    expect(screen.queryAllByRole("button", { name: /排序/ })).toHaveLength(0);
   });
 });
