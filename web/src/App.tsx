@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -66,20 +75,28 @@ import { SettingsPage } from "./SettingsPage";
 import { I18nProvider, useI18n, type MessageKey } from "./i18n";
 import {
   FEATURE_SECTION,
+  clampPixels,
   preferredDirectory,
+  readPixelVar,
   rememberDirectory,
+  rememberSidebarWidth,
   rememberView,
-  restoreView
+  restoreView,
+  sortRows
 } from "./lib/uiState";
+import { TableHead, columnVarsStyle, useUiTableState } from "./TableHead";
 import type {
+  ApplyEntryReport,
   ApplyReport,
   CleanupOutcome,
   IpcError,
   IpcMeta,
   KeepPolicy,
   PlanDocument,
+  PlanEntry,
   PreflightReport,
   ProgressPhase,
+  UiLayoutState,
   UiNavigationState,
   RecoveryAction,
   StorageInfo,
@@ -147,6 +164,37 @@ const NAV_ITEMS = NAV_ENTRIES.map((entry) => ({ ...entry, Icon: NAV_ICONS[entry.
 
 function isActive(task: TaskView | null): boolean {
   return Boolean(task && !TERMINAL_STATES.includes(task.state));
+}
+
+/** 表格把手写进 `UiState.tables` 的表标识：跨语言、跨版本必须稳定。 */
+const PLAN_TABLE = "table.c09.plan";
+const PLAN_COLUMNS = ["source", "reason", "status"];
+const RESULT_TABLE = "table.c09.result";
+const RESULT_COLUMNS = ["entry", "error", "status"];
+
+/**
+ * 侧栏区间与键盘步进的回退值，与 `tokens.css` 的同名 token 同值。
+ * 真实取值以 CSS 为准（jsdom 里没有 CSS）——同 `VirtualList` 的兜底行高，
+ * 上下界的权威值是 token，不是这几个常量（见 ADR-0075）。
+ */
+const SIDEBAR_MIN_FALLBACK = 176;
+const SIDEBAR_MAX_FALLBACK = 384;
+const RESIZE_STEP_FALLBACK = 16;
+
+/**
+ * 排序取的是比较键而不是界面文案——文案随语言变，键不随语言变（设计 09）。
+ * 预览表的「状态」只有 blocked 码位与待执行两种，按码位聚组。
+ */
+function planSortKey(entry: PlanEntry, column: string): string | undefined {
+  if (column === "source") return entry.source;
+  if (column === "reason") return entry.reason;
+  return entry.blocked ? `blocked:${entry.blocked.code}` : "pending";
+}
+
+function resultSortKey(entry: ApplyEntryReport, column: string): string | undefined {
+  if (column === "entry") return entry.entryId;
+  if (column === "error") return entry.error?.code;
+  return entry.status;
 }
 
 function statusBadge(t: Translate, plan: PlanDocument, entryId: string) {
@@ -267,6 +315,82 @@ function AppShell() {
   // 设计 03 §11.2：最近目录只用于"预填 + 候选"，不参与任何业务判定。
   const [recentDirs, setRecentDirs] = useState<string[]>([]);
   const navigationRef = useRef<UiNavigationState>({});
+  // 设计 03 §11.2 的 layout/tables 把手。列宽与排序走 `useUiTableState`；
+  // 侧栏宽度只有这里用，就直接在本组件读写 layout 分节。
+  const uiTables = useUiTableState();
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
+  const layoutRef = useRef<UiLayoutState>({});
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const sidebarDrag = useRef<{ startX: number; startWidth: number; last: number } | null>(null);
+
+  /**
+   * 侧栏区间上下界读 CSS token；jsdom 量不到时退回与 token 同值的常量
+   * （同 `VirtualList` 的兜底行高——真实浏览器里以实测与 token 为准）。
+   */
+  const sidebarBounds = useCallback(() => {
+    const styles = getComputedStyle(document.documentElement);
+    return {
+      min: readPixelVar(styles, "--layout-sidebar-min") ?? SIDEBAR_MIN_FALLBACK,
+      max: readPixelVar(styles, "--layout-sidebar-max") ?? SIDEBAR_MAX_FALLBACK
+    };
+  }, []);
+
+  /** `persist=false`＝拖动中的即时值，`true`＝松手/键盘提交后落盘。 */
+  const applySidebarWidth = useCallback(
+    (px: number, persist: boolean) => {
+      const { min, max } = sidebarBounds();
+      const next = clampPixels(px, min, max);
+      setSidebarWidth(next);
+      if (!persist) return;
+      const layout = rememberSidebarWidth(layoutRef.current, next);
+      layoutRef.current = layout;
+      // UiState 可丢：写失败静默（同 navigation 分节口径）。
+      setUiState({ layout }).catch(() => undefined);
+    },
+    [sidebarBounds]
+  );
+
+  /**
+   * 侧栏当前宽度：真实浏览器量 `aside`；量不到（未挂载、jsdom 无布局）时退回
+   * `:root` 的 `--layout-sidebar-width`。两条来源都是权威值，TS 不另立。
+   */
+  const currentSidebarWidth = useCallback(() => {
+    const measured = sidebarRef.current?.getBoundingClientRect().width ?? 0;
+    if (measured > 0) return measured;
+    return readPixelVar(getComputedStyle(document.documentElement), "--layout-sidebar-width") ?? 0;
+  }, []);
+
+  const onSidebarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const width = currentSidebarWidth();
+    if (width === 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sidebarDrag.current = { startX: event.clientX, startWidth: width, last: width };
+  };
+
+  const onSidebarPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = sidebarDrag.current;
+    if (!drag) return;
+    drag.last = drag.startWidth + (event.clientX - drag.startX);
+    applySidebarWidth(drag.last, false);
+  };
+
+  const onSidebarPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = sidebarDrag.current;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    sidebarDrag.current = null;
+    if (drag) applySidebarWidth(drag.last, true);
+  };
+
+  const onSidebarKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (delta === 0) return;
+    event.preventDefault();
+    const width = currentSidebarWidth();
+    if (width === 0) return;
+    const styles = getComputedStyle(document.documentElement);
+    const step = readPixelVar(styles, "--resize-step") ?? RESIZE_STEP_FALLBACK;
+    applySidebarWidth(width + delta * step, true);
+  };
 
   useEffect(() => {
     getStorageInfo().then(setStorage).catch((value) => setError(toIpcError(value)));
@@ -283,6 +407,13 @@ function AppShell() {
         const navigation = state.navigation ?? {};
         navigationRef.current = navigation;
         setRecentDirs(navigation.recentDirectories ?? []);
+        // 上次的侧栏宽度（设计 03 §11.2 的 `layout.sidebarWidth`）：越界按 §11.3 clamp 后应用。
+        const layout = state.layout ?? {};
+        layoutRef.current = layout;
+        if (layout.sidebarWidth !== undefined) {
+          const { min, max } = sidebarBounds();
+          setSidebarWidth(clampPixels(layout.sidebarWidth, min, max));
+        }
         const last = preferredDirectory(navigation);
         // 只填空输入框：用户已经在敲的话不覆盖。
         if (last) setRoot((current) => (current.trim() ? current : last));
@@ -294,7 +425,7 @@ function AppShell() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [sidebarBounds]);
 
   useEffect(() => {
     listTasks()
@@ -468,12 +599,15 @@ function AppShell() {
     setUiState({ navigation }).catch(() => undefined);
   }, []);
 
-  /** 重置本机界面状态（设计 03 §11.3）：清掉内存里的导航与最近目录，界面立刻回到空状态。 */
+  /** 重置本机界面状态（设计 03 §11.3）：导航、最近目录、侧栏宽度与列宽/排序一起回默认。 */
   const resetUiStateMemory = useCallback(async () => {
     await resetUiState();
     navigationRef.current = {};
     setRecentDirs([]);
-  }, []);
+    layoutRef.current = {};
+    setSidebarWidth(null);
+    uiTables.forget();
+  }, [uiTables]);
 
   async function onPlan() {
     if (!root.trim()) {
@@ -769,8 +903,15 @@ function AppShell() {
 
   return (
     <div className="app-shell">
-      <div className="glass-shell">
-        <aside className="sidebar">
+      <div
+        className="glass-shell"
+        style={
+          sidebarWidth === null
+            ? undefined
+            : ({ "--layout-sidebar-width": `${sidebarWidth}px` } as CSSProperties)
+        }
+      >
+        <aside className="sidebar" ref={sidebarRef}>
           <div className="brand">
             <div className="brand-mark">B</div>
             <div>
@@ -813,6 +954,23 @@ function AppShell() {
             <div>{t("app.storage.retention")}</div>
           </div>
         </aside>
+
+        {/* 侧栏拖宽把手（设计 03 §11.2 的 layout.sidebarWidth／§11.3 的 clamp 与重置）。
+            pointer 事件＋键盘方向键两条路都要有：只有鼠标就等于键盘用户没有把手。 */}
+        <div
+          className="shell-resize"
+          role="separator"
+          aria-orientation="vertical"
+          tabIndex={0}
+          aria-label={t("layout.sidebar.resize.aria")}
+          onPointerDown={onSidebarPointerDown}
+          onPointerMove={onSidebarPointerMove}
+          onPointerUp={onSidebarPointerUp}
+          onPointerCancel={() => {
+            sidebarDrag.current = null;
+          }}
+          onKeyDown={onSidebarKeyDown}
+        />
 
         <main className="main">
           <header className="topbar">
@@ -1030,16 +1188,24 @@ function AppShell() {
                         </div>
                       </div>
 
-                      <div className="table">
-                        <div className="row row-head">
-                          <span>{t("c09.table.file")}</span>
-                          <span>{t("c09.table.reason")}</span>
-                          <span>{t("c09.table.status")}</span>
-                        </div>
-                        {/* 方案 6.2：大列表只挂窗口内的行；去重的计划可能有上万条。 */}
+                      <div
+                        className="table"
+                        style={columnVarsStyle(PLAN_COLUMNS, uiTables.widths(PLAN_TABLE))}
+                      >
+                        <TableHead
+                          tableId={PLAN_TABLE}
+                          tables={uiTables}
+                          columns={[
+                            { id: "source", label: t("c09.table.file") },
+                            { id: "reason", label: t("c09.table.reason") },
+                            { id: "status", label: t("c09.table.status") }
+                          ]}
+                        />
+                        {/* 方案 6.2：大列表只挂窗口内的行；去重的计划可能有上万条。
+                            排序只重排这里的显示数组，派发的计划序不动（方案 §7.1）。 */}
                         <VirtualList
                           label={t("c09.table.file")}
-                          items={plan.entries}
+                          items={sortRows(plan.entries, uiTables.sortOf(PLAN_TABLE), planSortKey)}
                           getKey={(entry) => entry.entryId}
                           renderRow={(entry) => (
                             <div className={`row${entry.blocked ? " blocked" : ""}`}>
@@ -1245,15 +1411,26 @@ function AppShell() {
                   )}
 
                   {applyTask?.report && (
-                    <div className="table">
-                      <div className="row row-head">
-                        <span>{t("c09.result.entry")}</span>
-                        <span>{t("c09.result.error")}</span>
-                        <span>{t("c09.result.status")}</span>
-                      </div>
+                    <div
+                      className="table"
+                      style={columnVarsStyle(RESULT_COLUMNS, uiTables.widths(RESULT_TABLE))}
+                    >
+                      <TableHead
+                        tableId={RESULT_TABLE}
+                        tables={uiTables}
+                        columns={[
+                          { id: "entry", label: t("c09.result.entry") },
+                          { id: "error", label: t("c09.result.error") },
+                          { id: "status", label: t("c09.result.status") }
+                        ]}
+                      />
                       <VirtualList
                         label={t("c09.result.entry")}
-                        items={applyTask.report.entries}
+                        items={sortRows(
+                          applyTask.report.entries,
+                          uiTables.sortOf(RESULT_TABLE),
+                          resultSortKey
+                        )}
                         getKey={(entry) => entry.entryId}
                         renderRow={(entry) => {
                           // 失败条目同样只显示码位＋本地化摘要：后端 message/detail 是技术串，

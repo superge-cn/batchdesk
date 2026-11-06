@@ -171,3 +171,17 @@
   --ambient-b: rgba(34, 199, 255, 0.24);
   --ambient-c: rgba(28, 79, 224, 0.3);
 }
+
+/* ── 界面状态把手的尺寸（设计 03 §11.2 layout/tables、§11.3 clamp）────────────
+   TODO(U)：U v1.3 未定义面板与列的可拖区间，这里先按 AGENTS「不发明新视觉值」
+   登记为占位 token 并挂 OQ-39 待 U 升版收编；数值以本文件为唯一权威，
+   TS 侧只读这些 token（读不到才退回同值常量）。 */
+:root {
+  --layout-sidebar-width: 232px;
+  --layout-sidebar-min: 176px;
+  --layout-sidebar-max: 384px;
+  --resize-handle-width: 5px;
+  --resize-step: 16px;
+  --table-column-min: 88px;
+  --table-column-max: 640px;
+}

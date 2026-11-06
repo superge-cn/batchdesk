@@ -33,6 +33,9 @@ const plan: PlanDocument = {
 
 vi.mock("./lib/ipc", () => ({
   isTauri: () => true,
+  // 列宽/排序把手会读界面状态；这些用例不测它，给一个空的稳定桩。
+  getUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
+  setUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   planOperation: vi.fn(async () => plan),
   applyPlan: vi.fn(async () => ({ taskId: "task-apply" })),
   undoPlan: vi.fn(async () => ({ taskId: "task-undo" })),

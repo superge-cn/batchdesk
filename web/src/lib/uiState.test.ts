@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   FEATURE_SECTION,
+  clampPixels,
   preferredDirectory,
+  readPixelVar,
+  rememberColumnWidth,
   rememberDirectory,
+  rememberSidebarWidth,
+  rememberSort,
   rememberView,
-  restoreView
+  restoreView,
+  sortDirectionOf,
+  sortRows
 } from "./uiState";
 
 // 设计 03 §11.2/§11.3：UiState 的 navigation 段只用于"上次目录 + 最近目录"。
@@ -86,5 +93,94 @@ describe("上次页面（设计 03 §11.2 的 lastSection/lastFeature）", () =>
     );
     expect(restoreView(undefined, ["f12"], ["c09"])).toBeNull();
     expect(restoreView({ lastSection: "nope" }, ["f12"], ["c09"])).toBeNull();
+  });
+});
+
+// 设计 03 §11.2 的 layout/tables 与 §11.3 的 clamp：这两段的"能改"全靠界面上的把手，
+// 把手的行为先钉在这里（纯函数层），组件层见 App.uiHandles.test.tsx。
+
+describe("侧栏宽度与 clamp（设计 03 §11.2/§11.3）", () => {
+  it("clampPixels 越界贴边，非数值退回下限", () => {
+    expect(clampPixels(240, 176, 384)).toBe(240);
+    expect(clampPixels(80, 176, 384)).toBe(176);
+    expect(clampPixels(4000, 176, 384)).toBe(384);
+    expect(clampPixels(Number.NaN, 176, 384)).toBe(176);
+  });
+
+  it("readPixelVar 只认 px 形态的值，其它一律当作没定义", () => {
+    const styles = (value: string) =>
+      ({ getPropertyValue: () => value }) as unknown as CSSStyleDeclaration;
+    expect(readPixelVar(styles(" 88px "), "--table-column-min")).toBe(88);
+    expect(readPixelVar(styles("2rem"), "--table-column-min")).toBeNull();
+    expect(readPixelVar(styles(""), "--table-column-min")).toBeNull();
+  });
+
+  it("rememberSidebarWidth 只动 sidebarWidth，兄弟字段原样保留", () => {
+    const layout = rememberSidebarWidth({ sidebarCollapsed: true }, 280);
+    expect(layout).toEqual({ sidebarCollapsed: true, sidebarWidth: 280 });
+  });
+});
+
+describe("列宽与排序（设计 03 §11.2 的 tables）", () => {
+  it("列宽按表按列合并，别的表与别的列不被擦掉", () => {
+    const first = rememberColumnWidth(undefined, "table.c09.plan", "source", 300);
+    const second = rememberColumnWidth(first, "table.c09.plan", "status", 96);
+    const third = rememberColumnWidth(second, "table.feature.f12", "source", 220);
+
+    expect(third["table.c09.plan"]?.columnWidths).toEqual({ source: 300, status: 96 });
+    expect(third["table.feature.f12"]?.columnWidths).toEqual({ source: 220 });
+  });
+
+  it("同列翻转方向、换列回升序，且只留最后一次排序", () => {
+    let tables = rememberSort(undefined, "table.c09.plan", "source");
+    expect(tables["table.c09.plan"]?.sort).toEqual({ column: "source", direction: "asc" });
+    tables = rememberSort(tables, "table.c09.plan", "source");
+    expect(tables["table.c09.plan"]?.sort).toEqual({ column: "source", direction: "desc" });
+    tables = rememberSort(tables, "table.c09.plan", "reason");
+    expect(tables["table.c09.plan"]?.sort).toEqual({ column: "reason", direction: "asc" });
+    expect(sortDirectionOf(tables, "table.c09.plan", "source")).toBeNull();
+    expect(sortDirectionOf(tables, "table.c09.plan", "reason")).toBe("asc");
+  });
+
+  it("换表写入排序，前一张表的列宽仍在", () => {
+    const widths = rememberColumnWidth(undefined, "table.c09.plan", "source", 300);
+    const sorted = rememberSort(widths, "table.c09.result", "status");
+    expect(sorted["table.c09.plan"]?.columnWidths).toEqual({ source: 300 });
+    expect(sorted["table.c09.result"]?.sort).toEqual({ column: "status", direction: "asc" });
+  });
+
+  it("没有排序记录时原样返回：显示序就是计划序", () => {
+    const rows = [{ name: "b" }, { name: "a" }];
+    expect(sortRows(rows, undefined, (row) => row.name)).toEqual(rows);
+  });
+
+  it("升序/降序互为反序，同值保持计划序（sort 是稳定的）", () => {
+    const rows = [
+      { entryId: "e1", reason: "duplicate" },
+      { entryId: "e2", reason: "older" },
+      { entryId: "e3", reason: "duplicate" }
+    ];
+    const key = (row: { entryId: string; reason: string }, column: string) =>
+      column === "reason" ? row.reason : row.entryId;
+
+    expect(sortRows(rows, { column: "reason", direction: "asc" }, key).map((r) => r.entryId)).toEqual(
+      ["e1", "e3", "e2"]
+    );
+    expect(sortRows(rows, { column: "reason", direction: "desc" }, key).map((r) => r.entryId)).toEqual(
+      ["e2", "e1", "e3"]
+    );
+  });
+
+  it("取不到值的行排在最后，翻转方向也不把它推到前面", () => {
+    const rows = [{ entryId: "e1" }, { entryId: "e2", target: undefined }, { entryId: "e3", target: "z" }];
+    const key = (row: { entryId: string; target?: string }, column: string) =>
+      column === "target" ? row.target : row.entryId;
+
+    expect(
+      sortRows(rows, { column: "target", direction: "asc" }, key).map((row) => row.entryId)
+    ).toEqual(["e3", "e1", "e2"]);
+    expect(
+      sortRows(rows, { column: "target", direction: "desc" }, key).map((row) => row.entryId)
+    ).toEqual(["e3", "e1", "e2"]);
   });
 });

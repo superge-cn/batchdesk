@@ -27,6 +27,7 @@ import { dryRunStatusLabel, phaseLabel, stateBadge } from "./labels";
 import type {
   IpcError,
   PlanDocument,
+  PlanEntry,
   PreviewStatus,
   ProgressPhase,
   RenamePreview,
@@ -34,6 +35,8 @@ import type {
   TaskState,
   UndoDryRun
 } from "./lib/ipc/types";
+import { TableHead, columnVarsStyle, useUiTableState } from "./TableHead";
+import { sortRows } from "./lib/uiState";
 
 type Busy = "plan" | "apply" | "undo" | null;
 
@@ -349,6 +352,11 @@ const PREVIEW_STATUS_TONES: Record<PreviewStatus, string> = {
   "too-long": "badge badge-warn",
   protected: "badge badge-danger"
 };
+
+/** 排序取比较键而不是界面文案：文案随语言变，键不随语言变（设计 09）。 */
+function featureSortKey(entry: PlanEntry, column: string): string | undefined {
+  return column === "source" ? entry.source : entry.target ?? entry.reason;
+}
 
 function statusBadge(t: Translate, status: PreviewStatus) {
   return <span className={PREVIEW_STATUS_TONES[status]}>{t(PREVIEW_STATUS_KEYS[status])}</span>;
@@ -713,6 +721,10 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
 export function FeaturePages({ view, onBack }: { view: View; onBack: () => void }) {
   const { t } = useI18n();
   const title = t(FEATURE_TITLES[view] ?? "nav.c09");
+  // 列宽/排序把手（设计 03 §11.2 的 tables）：按功能页各留一份，表 id 用功能码，
+  // 换功能页不会把上一张表的宽度带过来。
+  const uiTables = useUiTableState();
+  const previewTableId = `table.feature.${view}`;
   const [form, setForm] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<PlanDocument | null>(null);
   const [preview, setPreview] = useState<RenamePreview | null>(null);
@@ -1157,15 +1169,27 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
                   </div>
                 </div>
               )}
-              <div className="table">
-                <div className="row row-head">
-                  <span>{t("feature.table.source")}</span>
-                  <span>{t("feature.table.target")}</span>
-                </div>
-                {/* 方案 6.2：按目录处理的计划动辄上千条，只挂窗口内的行。 */}
+              <div
+                className="table"
+                style={columnVarsStyle(["source", "target"], uiTables.widths(previewTableId))}
+              >
+                <TableHead
+                  tableId={previewTableId}
+                  tables={uiTables}
+                  columns={[
+                    { id: "source", label: t("feature.table.source") },
+                    { id: "target", label: t("feature.table.target") }
+                  ]}
+                />
+                {/* 方案 6.2：按目录处理的计划动辄上千条，只挂窗口内的行。
+                    排序只重排显示，派发的计划序不动（方案 §7.1）。 */}
                 <VirtualList
                   label={t("feature.preview.list")}
-                  items={plan.entries}
+                  items={sortRows(
+                    plan.entries,
+                    uiTables.sortOf(previewTableId),
+                    featureSortKey
+                  )}
                   getKey={(entry) => entry.entryId}
                   renderRow={(entry) => (
                     <div className="row">

@@ -1,4 +1,4 @@
-import type { UiNavigationState } from "./ipc/types";
+import type { UiLayoutState, UiNavigationState, UiSortDirection, UiTableState } from "./ipc/types";
 
 /**
  * 记录一次使用的目录（设计 03 §11.2 的 `navigation.lastDirectory` / `recentDirectories`）。
@@ -71,4 +71,98 @@ export function restoreView(
   }
   if (section && topLevelIds.includes(section)) return section;
   return null;
+}
+
+/**
+ * 面板宽度 clamp（设计 03 §11.3「面板宽度 clamp」）：越界贴边，不做比例换算。
+ *
+ * 上下界不在这里写死数值：视觉尺寸属 U 的射程，TS 里抄一份 CSS 已有的数值
+ * 就是第二个权威（同 `VirtualList` 用 DOM 实测行高的理由）。
+ */
+export function clampPixels(px: number, min: number, max: number): number {
+  if (!Number.isFinite(px)) return min;
+  return Math.min(Math.max(px, min), max);
+}
+
+/** 读一个 `px` 形态的 CSS 自定义属性；读不到返回 `null`，调用方退回自身默认。 */
+export function readPixelVar(styles: CSSStyleDeclaration, name: string): number | null {
+  const raw = styles.getPropertyValue(name).trim();
+  if (!raw.endsWith("px")) return null;
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** 侧栏拖宽后的 `layout` 分节（patch 整节替换，兄弟字段必须带上）。 */
+export function rememberSidebarWidth(
+  layout: UiLayoutState | undefined,
+  px: number
+): UiLayoutState {
+  return { ...(layout ?? {}), sidebarWidth: px };
+}
+
+/** 按表与列写入列宽；其它表、其它列原样保留。 */
+export function rememberColumnWidth(
+  tables: Record<string, UiTableState> | undefined,
+  tableId: string,
+  column: string,
+  px: number
+): Record<string, UiTableState> {
+  const table = tables?.[tableId] ?? {};
+  return {
+    ...(tables ?? {}),
+    [tableId]: { ...table, columnWidths: { ...(table.columnWidths ?? {}), [column]: px } }
+  };
+}
+
+/**
+ * 列头排序（设计 03 §11.2 的 `tables[].sort`）。
+ *
+ * 口径＝常见电子表格：点同列翻转方向，换列回 `asc`。UiState 只存"最后一次排序"，
+ * 没有"取消排序"这一态——回到计划序由 §11.3 的重置入口负责，不在这里发明第三种状态。
+ */
+export function rememberSort(
+  tables: Record<string, UiTableState> | undefined,
+  tableId: string,
+  column: string
+): Record<string, UiTableState> {
+  const table = tables?.[tableId] ?? {};
+  const current = table.sort;
+  const direction: UiSortDirection =
+    current && current.column === column && current.direction === "asc" ? "desc" : "asc";
+  return { ...(tables ?? {}), [tableId]: { ...table, sort: { column, direction } } };
+}
+
+/** 该列当前的排序方向（不是当前排序列时返回 `null`）。 */
+export function sortDirectionOf(
+  tables: Record<string, UiTableState> | undefined,
+  tableId: string,
+  column: string
+): UiSortDirection | null {
+  const sort = tables?.[tableId]?.sort;
+  return sort && sort.column === column ? sort.direction : null;
+}
+
+/**
+ * 按列排序行的**显示顺序**。
+ *
+ * 只重排界面渲染的数组，不动 `PlanDocument.entries` 本身：派发顺序与"哪条被跳过"
+ * 仍由内核的计划序决定（方案 §7.1），排序是视图态不是执行态。
+ * 同值保持原序（`Array.prototype.sort` 自 ES2019 起规定稳定），取不到值的行恒在后。
+ */
+export function sortRows<T>(
+  rows: readonly T[],
+  sort: UiTableState["sort"],
+  valueOf: (row: T, column: string) => string | number | undefined
+): T[] {
+  if (!sort) return [...rows];
+  const direction = sort.direction === "desc" ? -1 : 1;
+  return [...rows].sort((left, right) => {
+    const a = valueOf(left, sort.column);
+    const b = valueOf(right, sort.column);
+    if (a === undefined && b === undefined) return 0;
+    if (a === undefined) return 1;
+    if (b === undefined) return -1;
+    if (a === b) return 0;
+    return (a < b ? -1 : 1) * direction;
+  });
 }

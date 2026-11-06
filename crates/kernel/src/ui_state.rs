@@ -199,6 +199,67 @@ mod tests {
     }
 
     #[test]
+    fn patch_accepts_table_widths_and_sort() {
+        let mut state = UiState::defaults();
+        state
+            .apply_patch(&patch(&[(
+                "tables",
+                json!({
+                    "c09.plan": {
+                        "columnWidths": {"source": 300.0, "status": 96.0},
+                        "sort": {"column": "source", "direction": "desc"}
+                    }
+                }),
+            )]))
+            .unwrap();
+        let table = state.tables.as_ref().unwrap().get("c09.plan").unwrap();
+        assert_eq!(
+            table.column_widths.as_ref().unwrap().get("source"),
+            Some(&300.0)
+        );
+        let sort = table.sort.as_ref().unwrap();
+        assert_eq!(sort.column, "source");
+        assert_eq!(sort.direction, SortDirection::Desc);
+
+        // 只给列名不给方向：容器级 default 生效，按升序收下而不是报错。
+        state
+            .apply_patch(&patch(&[(
+                "tables",
+                json!({"c09.result": {"sort": {"column": "status"}}}),
+            )]))
+            .unwrap();
+        assert_eq!(
+            state
+                .tables
+                .as_ref()
+                .unwrap()
+                .get("c09.result")
+                .unwrap()
+                .sort
+                .as_ref()
+                .unwrap()
+                .direction,
+            SortDirection::Asc
+        );
+        // 顶层浅合并＝整节替换：第二次 patch 只带 c09.result，c09.plan 就没了。
+        // 这正是调用方必须"先并再写"的理由（设计 03 §11.2／web 侧 rememberColumnWidth）。
+        assert!(!state.tables.as_ref().unwrap().contains_key("c09.plan"));
+    }
+
+    #[test]
+    fn patch_rejects_unsaved_state_inside_a_table() {
+        // §11.1 的"不保存"清单同样管得住 tables 内部：筛选/搜索/已选行不是表视图态。
+        let mut state = UiState::defaults();
+        for value in [
+            json!({"c09.plan": {"filter": "blocked"}}),
+            json!({"c09.plan": {"selectedRows": ["e1"]}}),
+        ] {
+            let error = state.apply_patch(&patch(&[("tables", value)])).unwrap_err();
+            assert_eq!(error.code, "E1002");
+        }
+    }
+
+    #[test]
     fn patch_rejects_selected_files_search_and_drafts() {
         let mut state = UiState::defaults();
         for key in [

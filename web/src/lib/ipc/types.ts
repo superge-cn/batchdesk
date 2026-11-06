@@ -298,7 +298,7 @@ export interface ConfigDocument {
   scopes: Partial<Record<ConfigScope, Record<string, unknown>>>;
 }
 
-/** 界面状态里的导航段（设计 03 §11.2）。前端目前只读写这一段。 */
+/** 界面状态里的导航段（设计 03 §11.2）。 */
 export interface UiNavigationState {
   lastSection?: string;
   lastFeature?: string;
@@ -306,16 +306,33 @@ export interface UiNavigationState {
   recentDirectories?: string[];
 }
 
+/** 面板布局（设计 03 §11.2 的 `layout`）：侧栏宽度与折叠态。 */
+export interface UiLayoutState {
+  sidebarWidth?: number;
+  sidebarCollapsed?: boolean;
+}
+
+/** 排序方向（内核 `SortDirection`，线协议小写）。 */
+export type UiSortDirection = "asc" | "desc";
+
+/** 一张表的视图态（设计 03 §11.2 的 `tables`：列宽＋排序，不含筛选）。 */
+export interface UiTableState {
+  columnWidths?: Record<string, number>;
+  sort?: { column: string; direction: UiSortDirection };
+}
+
 /**
  * 本机、可重置的界面/工作区上下文（设计 03 §11）。
  *
- * 只声明前端真正读写的字段：`window`/`layout`/`tables`/`templatePrefs` 由壳层
- * 与后续的面板宽度/列宽联动消费，现在透传即可（patch 是浅合并，未触碰的分节原样保留）。
+ * 只声明前端真正读写的字段：`window` 由壳层恢复、`templatePrefs` 由处理模板消费，
+ * 两者透传即可（patch 是浅合并，未触碰的分节原样保留）。
  */
 export interface UiState {
   uiStateVersion: number;
   updatedAt: string;
   navigation?: UiNavigationState;
+  layout?: UiLayoutState;
+  tables?: Record<string, UiTableState>;
 }
 
 // ── 处理模板（C37；设计 03 §5／§6，方案 §15）──────────────────────────

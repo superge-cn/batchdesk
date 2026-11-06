@@ -72,7 +72,7 @@ button {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: var(--layout-sidebar-width) var(--resize-handle-width) minmax(0, 1fr);
   height: calc(100vh - 2 * var(--space-4));
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-glass-shell);
@@ -528,8 +528,10 @@ button {
 }
 
 .row {
+  /* 列宽把手（设计 03 §11.2 的 tables.columnWidths）：没拖过的列继续用下面的默认轨道，
+     拖过的列由表容器上的 `--col-N` 覆盖——默认值只在这里出现一次，不在 TS 里复制。 */
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1.2fr) 84px;
+  grid-template-columns: var(--col-1, minmax(0, 1.7fr)) var(--col-2, minmax(0, 1.2fr)) var(--col-3, 84px);
   gap: var(--space-3);
   align-items: center;
   min-height: var(--space-8);
@@ -831,7 +833,8 @@ button {
     border-radius: 0;
   }
 
-  .sidebar {
+  .sidebar,
+  .shell-resize {
     display: none;
   }
 
@@ -915,4 +918,54 @@ button {
     background: var(--card);
     backdrop-filter: none;
   }
+}
+
+/* ── 界面状态把手（设计 03 §11.2 的 layout/tables）──────────────────────────
+   把手平时不显形，悬停/聚焦才着色：与选中态、悬停行抢注意力比"能拖"更重要。
+   尺寸全部走 tokens.css 里的 layout、resize、table-column 三组占位 token。 */
+.shell-resize {
+  cursor: col-resize;
+  border-inline-start: 1px solid var(--glass-border);
+  touch-action: none;
+}
+
+.col-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.col-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.col-arrow {
+  font-family: var(--font-mono);
+}
+
+.col-resize {
+  position: absolute;
+  inset-inline-end: 0;
+  inset-block: 0;
+  width: var(--resize-handle-width);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.shell-resize:hover,
+.shell-resize:focus-visible,
+.col-resize:hover,
+.col-resize:focus-visible {
+  background: var(--accent);
+  outline: none;
 }

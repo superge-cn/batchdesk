@@ -626,14 +626,20 @@ export function mockResetScope(scope: string): ScopeView {
   return scopeView(scope);
 }
 
-// —— UiState（设计 03 §11）：浏览器假数据里只保留导航段 ——
+// —— UiState（设计 03 §11）：读写全部已声明分节，透传口径与壳层一致 ——
 let uiState: UiState = { uiStateVersion: 1, updatedAt: "" };
 
 export function mockGetUiState(): UiState {
   return {
     uiStateVersion: uiState.uiStateVersion,
     updatedAt: uiState.updatedAt,
-    navigation: uiState.navigation ? { ...uiState.navigation } : undefined
+    navigation: uiState.navigation ? { ...uiState.navigation } : undefined,
+    layout: uiState.layout ? { ...uiState.layout } : undefined,
+    tables: uiState.tables
+      ? Object.fromEntries(
+          Object.entries(uiState.tables).map(([id, table]) => [id, { ...table }])
+        )
+      : undefined
   };
 }
 
