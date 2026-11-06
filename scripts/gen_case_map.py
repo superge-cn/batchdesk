@@ -655,7 +655,7 @@ add("C02",
         3: ("✅", CI, "kernel `binary` 2 项＋plan_c02 UTF-16/未确认 E3001 单测", ""),
         4: ("◐", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", "条目边界取消已测（content-rewriter 臂）；单条内部 mid-stream 取消未做（流式重写中途不中断）"),
         5: ("⛔", MANUAL_CARRIER, "FsAdapter::rewrite_atomic_with 流式（设计 04 v1.8）"
-            "＋C-2 整档与子档实测 `fixtures/bench/measure.py c2rw --case c02`（结果行 R-12、R-13、R-18）",
+            "＋C-2 整档与子档实测 `fixtures/bench/measure.py c2rw --case c02`（结果行 R-12、R-13、R-18；合块后同体积复测 R-20／R-25）",
             "**C-2 已实测并在 2026-11-07 复测（Linux 预跑，`fixtures/bench/results.md` R-12／R-13／R-18／R-20）**："
             "计划段整档 10.3–15.2 秒做完全量换行计数（实测 79,017,693 条 LF，峰值 RSS 3.9–4.4 MiB 不随体积增长＝§9.1 第③子句成立）；"
             "**改写段整档复测＝R-20：中位 33.485 秒／63.1 MiB/s**，而合块前（R-18）同一档同一命令是 904.269 秒／2.3 MiB/s——27 倍。"
@@ -705,7 +705,7 @@ add("C03",
             "仍留的边界只有一条：**界定不出的正则（无界量词／锚点／`\\b`／分组量化／零宽）计划段与改写段都仍整段读，"
             "内存 O(文件)**——ADR-0064 划的同一条闸门，要测它需要先决定左邻上下文的读法（引入 `regex-automata` 或改判定口径），"
             "属新切片而非本批欠账。剩余缺口＝Windows 实机日按同一夹具重测（Linux 预跑不作验收证据，仍 ⛔）；"
-            "另外 R-14／R-15／R-16 是修复前的子档读数，引用时要带「合块前」限定"),
+            "另外 R-14／R-15／R-16 是修复前的子档读数，同体积后继复测＝R-26／R-27／R-28；轮次 5 也第一次量化出 ADR-0079 的时间代价（计划段 plain 0.198→0.534 秒、cell 1.997→3.842 秒，换来峰值 67 MiB→4.4 MiB 与 307 MiB→5.6 MiB）——引用「流式化」时不得说成「更快」"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply", "本功能部分失败注入未测"),

@@ -16,7 +16,12 @@
 
   **两条如实的局限**：① 本机 `/proc/self/stat` 不导出 sysc/syscw（逐字段增量反查过），所以**没有**"数系统调用"的单测——写一条永真断言就是本项目禁止的假绿；合块的效果只由同夹具复测说话，缓冲引入的风险才由单测守。② 复测窗口 loadavg 5.7–14.9，不是静默窗口；与 R-10／R-18 的比较方向仍是有利的（C01 持平按噪声读，C02 的 27 倍解释不了是扰动）。
 
-  验证：`cargo test --workspace --all-features` 654 项、壳层 59 项全绿；`cargo fmt --all --check`、`cargo fmt --manifest-path src-tauri/Cargo.toml --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 退出码 0；`check_scope.py`、`check_docs.py` exit 0（映射表 296 条、状态分布不变 ✅175／◐89／⛔32，Linux 预跑仍不改判，ADR-0051）；夹具校验器的快速路径经 600 组随机对账（含自叠加与超长数字串）与逐步提交、整段一次性替换三方相等。Rust 侧零依赖改动，`cargo deny check` 本地仍受无网络限制（curl 28），由 CI deny job 实跑。
+  **同体积子档复测（轮次 5，R-25～R-28）**：合块与流式改造后的第一轮读数只在整档，而 R-13～R-16 那组「修复前」基准是子档——体积不同就不能直接比。本轮按同一体积复测四条：'
+ '**C02 256 MiB 4.3→89.5 MiB/s（20.7 倍）**、C03 plain 64 MiB 4.9→49.3（10.1 倍）、regex 64 MiB 3.9→23.5（6.0 倍）、cell 32 MiB 5.6→8.1（1.45 倍，这条臂是 CPU 主导，'
+ '合块帮不上多少）。顺带把 **ADR-0079 的时间代价**量化出来（此前只写在 ADR 的"代价只是多一遍读"里，没有数值）：计划段 plain 0.198→0.534 秒、cell 1.997→3.842 秒，'
+ '即同一体积上计划段慢了 2.7／1.9 倍，换到的是峰值 67 MiB→4.4 MiB 与 307 MiB→5.6 MiB。**流式化不等于更快，引用时说清换的是什么。**
+
+  验证：`cargo test --workspace --all-features` **660 项**（kernel 430／platform 108／apply_flow 77／语料断言 24／CLI 7＋集成 14）＋桌面壳 **53 项**全绿，合计 Rust 713 条，逐条见 `docs/testing/执行记录/2026-11-07-inventory.tsv`；`cargo fmt --all --check`、`cargo fmt --manifest-path src-tauri/Cargo.toml --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 退出码 0；`check_scope.py`、`check_docs.py` exit 0（映射表 296 条、状态分布不变 ✅175／◐89／⛔32，Linux 预跑仍不改判，ADR-0051）；夹具校验器的快速路径经 600 组随机对账（含自叠加与超长数字串）与逐步提交、整段一次性替换三方相等。Rust 侧零依赖改动，`cargo deny check` 本地仍受无网络限制（curl 28），由 CI deny job 实跑。
 
 - **C01／C02／C03 的 C-2 档数值测出来了，代价是测出两处实现缺口（2026-11-06，`fixtures/bench/results.md` R-09…R-18）**。上一批把 W5 剩下的三行写成「夹具调参数即可测」，这次真去测了：`fixtures/bench/measure.py` 加 `c2rw` 场景（就地改写五臂 `c01｜c02｜c03-plain｜c03-regex｜c03-cell`、C-2 集前缀子档 `--size-mib`、只跑计划段的 `--plan-only`），改写类一律在数据集之外的工作副本上做（就地改写会覆盖源）。读数：**C01 整档**（`--source gb18030 --target utf-8`，2,214,592,512 字节）计划段中位 0.014 秒、改写段 24.317 秒＝86.9 MiB/s、全程峰值 RSS 4.37 MiB——§9.1「超大文件内存占用恒定」第③子句成立，产物 sha256 与源逐字节相同（ASCII 子集）；**C02 整档**计划段 6.114 秒（7,901.7 万行全量换行计数、峰值 3.9 MiB 恒定），改写段见 R-18，256 MiB 子档 4.3 MiB/s；**C03** 按模式分别记的三臂只到 64／32 MiB 子档，改写段 3.9–5.6 MiB/s、峰值 4.2–4.9 MiB。
 
