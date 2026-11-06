@@ -57,4 +57,3 @@ web/.probe/entry-*.mjs
 web/.probe/*.log
 ctrl.log
 warn.log
-ignore 探针日志
