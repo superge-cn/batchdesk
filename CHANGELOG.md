@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+- **C-2 数据集增 GB18030 编码变体、多字节吞吐转正式档（[OQ-42](docs/OPEN-QUESTIONS.md) 收编，2026-11-07）**：T v1.13 附录 C 的 C-2 构造说明增编码两变体；`gen_c2.py --encoding gb18030` 固化生成（幂等＋自校验）。方案 v1.20 §9.1 把大文件吞吐的分母口径定为**源字节与产物字节双分母分别记录、分别判定**。整档 2 GiB 配对实测（results.md R-31/R-32/R-33）：GB18030 多字节转码源口径 22.6 MiB/s／产物口径 31.6 MiB/s（×1.399 扩展），同窗口 ASCII 对照 84.0 MiB/s；实测同时修正了上轮「倍数跨窗口稳定」的结论——倍数只在安静窗口之间可比，可跨窗口引用的是多字节臂绝对速率带（22.6–28.7 MiB/s）与扩展比。
+
+- **处理模板「一键套用」接通（OQ-41 裁决②，[ADR-0080](docs/adr/0080-OQ41裁决二与套用映射表.md)，2026-11-07）**：模板库可套用的模板（17/24 个功能）现在能填路径槽位后生成**预览计划**并显式执行——判定来自新命令 `describeRecipe`，与 `loadRecipe` 同源；变换正文不随计划保存的七个功能（f06/f07/c08/f11/c12/c13/c14）如实显示不可套用原因（后续登记 OQ-43）。配方 schema 升 **v5**：采样窗口/字节等请求侧技术口径随模板存档（进模板、不进快照，方案 v1.20 §15.2.1），旧模板自动迁移、套用时按缺省补。顺带修复：f04/f06 模板保存/导出曾把输出绝对路径带出本机（不变量 13 泄漏，计划参数键 `target→output`）；c10 压缩模板不再被误当解压分流（压缩计划补 `mode`）。
+
 - **C01 的「GB18030 多字节分支没测」这句账面话是半对的，本轮把它拆开**（[OQ-42](docs/OPEN-QUESTIONS.md)，2026-11-07；`fixtures/bench/results.md` R-29／R-30，`fixtures/bench/measure.py` 新增 `--gb-multibyte` 一臂；Rust 零改动）。
 
   **原来怎么写**：C01-EXE-05 的缺口写的是「GB18030 多字节解码分支未压到，需新增数据集构造」。  **实测核下来**：多字节解码的**正确性**并不空白——`cli::tests::transcode_rewriter_streams_identically_to_whole_file_transcode` 用 >64 KiB 的 GB18030 双字节输入断言跨块与整段 `transcode` 逐字节一致＋BOM 只写一次，`corpus::k01_…` 断言 GBK 源判为 GB18030 且替换字符为 0，`apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry` 钉住非法序列计数走 detail。真正空白的只有一件事：方案 §9.1 的**吞吐数值从来没在多字节输入上量过**——C-2 数据集是纯 ASCII，`c01 --source gb18030` 在它上面只走 1:1 子集，R-30 的计划段 reason 串当场写明「sample is pure ASCII… defaulting to UTF-8」，这就是那句混淆的机制来源。
