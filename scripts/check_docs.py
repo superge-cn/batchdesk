@@ -852,6 +852,116 @@ def check_recipe_feature_table(errors: list[str]) -> None:
         )
 
 
+def check_recipe_apply_tables(errors: list[str]) -> None:
+    """套用通道两张表：壳层与浏览器 mock 必须逐键相等（OQ-41②，ADR-0080）。
+
+    动因：`describeRecipe` 的两个数据面在两处各写一份——壳层
+    `recipe_apply::FEATURE_PATH_SLOTS`（路径槽位）与 `FEATURE_PARAM_MAP` 的 refuse
+    （正文缺失拒绝清单），浏览器 mock 的 `APPLY_SLOTS`／`REFUSED_FEATURES`。
+    mock 比壳层宽松，Playwright 就会走一条真机不存在的通路（点了必报错）；
+    比壳层严格则浏览器里少一个本可用的按钮。两处漂移只能靠机器拦。
+    c10 压缩模式的槽位是按快照 `mode` 动态分流的（`C10_COMPRESS_SLOTS`），
+    静态表核对只覆盖解压基态；压缩臂由壳层单测覆盖。
+    """
+    shell = ROOT / "src-tauri" / "src" / "recipe_apply.rs"
+    mock = ROOT / "web" / "src" / "lib" / "ipc" / "mock.ts"
+    if not (shell.exists() and mock.exists()):
+        errors.append("找不到 recipe_apply.rs／mock.ts：配方套用表核对无法进行")
+        return
+    shell_text = shell.read_text(encoding="utf-8")
+
+    slots_anchor = shell_text.find("pub const FEATURE_PATH_SLOTS")
+    slots_text = shell_text[slots_anchor:] if slots_anchor >= 0 else ""
+    shell_slots = {}
+    for match in re.finditer(
+        r"FeaturePaths \{\s*feature: \"([a-z0-9]+)\",\s*required: &\[([^\]]*)\],"
+        r"\s*outputs: &\[([^\]]*)\],\s*via_source_paths: (true|false)",
+        slots_text,
+    ):
+        feature, required, outputs, _via = match.groups()
+
+        def parse_slots(text: str) -> list[tuple[str, bool]]:
+            items: list[tuple[str, bool]] = []
+            for kind, key in re.findall(r"(one|many)\(\"([a-z]+)\"\)", text):
+                items.append((key, kind == "many"))
+            return items
+
+        shell_slots[feature] = (parse_slots(required), parse_slots(outputs))
+
+    param_anchor = shell_text.find("pub const FEATURE_PARAM_MAP")
+    param_text = shell_text[param_anchor:] if param_anchor >= 0 else ""
+    shell_refused = set(
+        match.group(2)
+        for match in re.finditer(
+            r"FeatureParamMap \{\s*([^{}]*?)\.\.m\(\"([a-z0-9]+)\"\)", param_text, re.DOTALL
+        )
+        if "refuse: Some(" in match.group(1)
+    )
+
+    mock_text = mock.read_text(encoding="utf-8")
+    # 不能用 _paired_block：锚点后第一个花括号是类型注解的，不是对象字面量，
+    # 直接按赋值行取到 `};` 的整段再逐条解析。
+    apply_anchor = re.search(
+        r"const APPLY_SLOTS[^\n]*= \{(.*?)\n\};", mock_text, re.DOTALL
+    )
+    mock_slots = {}
+    if apply_anchor:
+        for match in re.finditer(
+            r"([a-z][a-z0-9]+): \{ required: (\[\[.*?\]\]|\[\]), outputs: (\[\[.*?\]\]|\[\]) \}",
+            apply_anchor.group(1),
+        ):
+            feature, required, outputs = match.groups()
+
+            def parse_ts_slots(text: str) -> list[tuple[str, bool]]:
+                return [
+                    (key, many == "true")
+                    for key, many in re.findall(r"\"([a-z]+)\"\s*,\s*(true|false)", text)
+                ]
+
+            mock_slots[feature] = (parse_ts_slots(required), parse_ts_slots(outputs))
+
+    refused_match = re.search(
+        r"const REFUSED_FEATURES[^\n]*= \[([^\]]*)\]", mock_text
+    )
+    mock_refused = set()
+    if refused_match:
+        mock_refused = set(re.findall(r"\"([a-z0-9]+)\"", refused_match.group(1)))
+
+    # 自校：解析缩水说明写法变了（探测器失效＝没有正例）
+    if len(shell_slots) < 24 or len(mock_slots) < 24:
+        errors.append(
+            f"配方套用表核对自校失败：解析结果异常（壳层槽位 {len(shell_slots)} 项／mock 槽位 "
+            f"{len(mock_slots)} 项，期望各 ≥24）——锚点或写法变了"
+        )
+        return
+    if len(shell_refused) != 7 or len(mock_refused) != 7:
+        errors.append(
+            f"配方套用表核对自校失败：拒绝清单解析异常（壳层 {len(shell_refused)} 项／"
+            f"mock {len(mock_refused)} 项，期望各 7）——锚点或写法变了"
+        )
+        return
+
+    if shell_slots.keys() != mock_slots.keys():
+        only_shell = sorted(set(shell_slots) - set(mock_slots))
+        only_mock = sorted(set(mock_slots) - set(shell_slots))
+        if only_shell:
+            errors.append(f"配方套用表漂移：壳层有槽位而 mock 没有的功能 → {'、'.join(only_shell)}")
+        if only_mock:
+            errors.append(f"配方套用表漂移：mock 有槽位而壳层没有的功能 → {'、'.join(only_mock)}")
+    for feature in sorted(set(shell_slots) & set(mock_slots)):
+        if shell_slots[feature] != mock_slots[feature]:
+            errors.append(
+                f"配方套用表漂移：{feature} 的槽位不一致 → "
+                f"壳层 {shell_slots[feature]}／mock {mock_slots[feature]}"
+            )
+    if shell_refused != mock_refused:
+        errors.append(
+            "配方拒绝清单漂移：壳层 refuse 与 mock REFUSED_FEATURES 不一致 → "
+            f"仅壳层 {'、'.join(sorted(shell_refused - mock_refused))}／"
+            f"仅 mock {'、'.join(sorted(mock_refused - shell_refused))}"
+        )
+
+
 def main() -> int:
     errors: list[str] = []
     check_required_docs(errors)
@@ -866,6 +976,7 @@ def main() -> int:
     check_table_arity(errors)
     check_kind_routing(errors)
     check_recipe_feature_table(errors)
+    check_recipe_apply_tables(errors)
     check_assertion_claims(errors)
     check_design_index_versions(errors)
 
