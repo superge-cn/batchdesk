@@ -73,7 +73,6 @@ apply_flow::f13_regex_capture_plan_apply_and_undo	ok
 apply_flow::f13_rejects_invalid_regex_and_missing_capture_references	ok
 apply_flow::k08_utf16_csv_parts_each_start_with_a_bom	ok
 apply_flow::k08_utf16_csv_parts_without_header_still_start_with_a_bom	ok
-apply_flow::read_only_rename_target_is_skipped_without_failing_the_task	ok
 apply_flow::temp_dirs_are_unique_for_parallel_tests	ok
 archive_cancel::cancel_before_the_first_entry_touches_nothing	ok
 archive_cancel::cancel_between_items_keeps_extracted_files_and_stays_undoable	ok
@@ -441,11 +440,13 @@ kernel::preview::tests::each_conflict_kind_is_labelled_with_its_own_kind	ok
 kernel::preview::tests::non_rename_kinds_are_rejected_with_e1002	ok
 kernel::preview::tests::normal_rows_count_as_to_process	ok
 kernel::preview::tests::two_phase_entries_collapse_into_one_mapping_row	ok
+kernel::recipe::tests::content_rejects_scripts_and_nested_objects	ok
 kernel::recipe::tests::empty_steps_are_rejected	ok
 kernel::recipe::tests::migration_from_v3_binds_unique_features_and_leaves_many_to_many_unbound	ok
 kernel::recipe::tests::migration_never_overwrites_an_explicit_feature	ok
 kernel::recipe::tests::missing_schema_version_is_e1001	ok
 kernel::recipe::tests::newer_schema_version_is_rejected_with_e1007	ok
+kernel::recipe::tests::sampling_zero_is_rejected_and_unknown_keys_are_denied	ok
 kernel::recipe::tests::script_parameters_are_rejected	ok
 kernel::recipe::tests::single_step_binding_is_the_apply_gate	ok
 kernel::recipe::tests::step_count_and_duplicate_ids_are_enforced	ok
@@ -454,7 +455,11 @@ kernel::recipe::tests::strip_paths_covers_every_step_and_reports_each_key_once	o
 kernel::recipe::tests::v1_recipe_is_wrapped_into_a_single_step	ok
 kernel::recipe::tests::v2_recipe_keeps_metadata_and_wraps_params	ok
 kernel::recipe::tests::v3_recipe_round_trips_and_strips_paths	ok
+kernel::recipe::tests::v4_payload_migrates_to_v5_with_sampling_absent	ok
 kernel::recipe::tests::v4_round_trip_keeps_feature_and_omits_the_key_when_absent	ok
+kernel::recipe::tests::v5_payload_migrates_to_v6_with_content_absent	ok
+kernel::recipe::tests::v5_round_trips_sampling_and_omits_the_block_when_absent	ok
+kernel::recipe::tests::v6_round_trips_content_and_strips_paths_from_it	ok
 kernel::recipe::tests::validate_rejects_malformed_feature_codes	ok
 kernel::regex_rename::tests::capture_groups_rewrite_full_names	ok
 kernel::regex_rename::tests::case_only_change_uses_two_phase	ok
@@ -586,7 +591,8 @@ platform::fs::tests::case_sensitivity_follows_the_host_platform	ok
 platform::fs::tests::content_hash_matches_blake3_and_rejects_unknown_algorithm	ok
 platform::fs::tests::copy_range_atomic_writes_only_the_requested_slice	ok
 platform::fs::tests::copy_ranges_atomic_writes_the_prefix_once_before_all_ranges	ok
-platform::fs::tests::extended_path_is_identity_on_unix	ok
+platform::fs::tests::extended_path_normalizes_before_prefixing_and_keeps_relative_paths	ok
+platform::fs::tests::extended_path_prefixes_drive_and_unc_paths	ok
 platform::fs::tests::name_rules_follow_the_host_platform	ok
 platform::fs::tests::open_read_stream_pulls_bytes_on_demand_and_reports_missing_files	ok
 platform::fs::tests::quarantine_rename_restores_the_file	ok
@@ -614,7 +620,6 @@ platform::oplog::tests::purge_before_removes_only_expired_records	ok
 platform::oplog::tests::schema_migrates_once_and_round_trips_records	ok
 platform::preflight::tests::available_space_reads_a_positive_value_for_a_temp_directory	ok
 platform::preflight::tests::default_margin_constants_match_the_baseline	ok
-platform::preflight::tests::long_paths_are_always_supported_outside_windows	ok
 platform::preflight::tests::non_network_paths_are_not_probed	ok
 platform::preflight::tests::path_check_light_reads_the_attribute_bit_without_probing_writes	ok
 platform::preflight::tests::path_check_reads_metadata_without_error_for_missing_paths	ok
@@ -631,8 +636,10 @@ platform::scan::tests::full_mode_with_window_only_full_hashes_quick_survivors	ok
 platform::scan::tests::quick_hash_prunes_unique_same_size_files	ok
 platform::scan::tests::quick_hash_samples_head_and_tail_then_full_hash_separates	ok
 platform::scan::tests::scans_and_hashes_duplicate_files	ok
+platform::scan::tests::scans_long_paths_beyond_the_win32_limit	ok
 platform::scan::tests::scans_nested_directories	ok
 platform::scan::tests::skips_hidden_files_and_directories_by_default	ok
+platform::scan::tests::windows_identity_uses_volume_and_file_index	ok
 platform::text::tests::counts_overlong_lines_against_caller_threshold	ok
 platform::text::tests::empty_file_has_no_lines	ok
 platform::text::tests::estimate_adds_last_line_without_newline_when_complete	ok
@@ -659,12 +666,20 @@ security_config::production_csp_keeps_ipc_reachable_for_the_shell	ok
 security_config::production_csp_keeps_only_the_style_exception_it_needs	ok
 security_config::window_does_not_expose_the_global_tauri_object	ok
 shell::recipe_apply::tests::a_template_that_still_carries_paths_is_not_silently_overwritten	ok
+shell::recipe_apply::tests::c03_snapshot_becomes_a_valid_request_after_mapping	ok
 shell::recipe_apply::tests::c09_uses_the_source_paths_channel_instead_of_params	ok
+shell::recipe_apply::tests::c10_max_ratio_is_parsed_into_a_number	ok
 shell::recipe_apply::tests::c10_slots_follow_the_mode_in_the_snapshot	ok
+shell::recipe_apply::tests::content_features_refuse_without_content_and_apply_with_it	ok
 shell::recipe_apply::tests::every_feature_in_the_feature_table_has_path_slots	ok
 shell::recipe_apply::tests::every_registered_feature_has_slots_and_no_duplicates	ok
+shell::recipe_apply::tests::f04_encoding_lands_on_target_after_rename	ok
+shell::recipe_apply::tests::f05_rows_rename_and_auto_delimiter_are_normalized	ok
 shell::recipe_apply::tests::load_recipe_builds_the_same_route_call_as_plan_operation	ok
 shell::recipe_apply::tests::missing_and_extra_slots_are_both_rejected_by_name	ok
+shell::recipe_apply::tests::older_c10_compress_template_is_refused_until_re_saved	ok
+shell::recipe_apply::tests::path_slots_and_param_maps_cover_the_same_features	ok
+shell::recipe_apply::tests::sampling_defaults_fill_and_template_values_win	ok
 shell::recipe_apply::tests::slot_shapes_are_strict_about_single_and_list_values	ok
 shell::recipe_apply::tests::slots_come_from_the_route_not_from_names	ok
 shell::recipe_apply::tests::unbound_and_multi_step_recipes_are_rejected_before_paths	ok
@@ -696,6 +711,7 @@ shell::tasks::tests::the_archive_password_never_reaches_the_task_snapshot	ok
 shell::tasks::tests::undo_tasks_report_job_undo_while_kind_stays_the_plan_code	ok
 shell::tasks::tests::zip_compress_plan_executes_through_the_desktop_queue_and_undoes	ok
 shell::tests::c09_slot_goes_to_source_paths_and_not_into_params	ok
+shell::tests::csv_and_ops_sampling_defaults_land_on_their_routes	ok
 shell::tests::every_slot_table_feature_has_a_landing_test	ok
 shell::tests::f11_facts_probe_every_parent_position_and_flag_files	ok
 shell::tests::manifest_archive_and_zip_slots_land_on_the_route_struct_fields	ok
@@ -704,6 +720,7 @@ shell::tests::protected_snapshot_comparison_sees_canonical_changes	ok
 shell::tests::rewrite_and_ops_slots_land_on_the_route_struct_fields	ok
 shell::tests::shell_only_routes_keep_their_own_slots	ok
 shell::tests::split_and_csv_slots_land_on_the_route_struct_fields	ok
+shell::tests::template_sampling_values_win_over_defaults	ok
 shell::window_state::tests::a_rect_on_the_secondary_monitor_is_restored_including_negative_offsets	ok
 shell::window_state::tests::a_rect_still_inside_a_monitor_is_restored_where_it_was	ok
 shell::window_state::tests::an_off_screen_rect_is_centered_on_the_primary_monitor	ok
@@ -720,7 +737,7 @@ vitest::App.navigation.test.tsx::功能视图导航可达 侧栏每一项都渲�
 vitest::App.navigation.test.tsx::功能视图导航可达 默认视图是 C09 工作台，且能回到它	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 「任务与撤销」是能点开的真实视图，不是 disabled 占位	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 「设置」是能点开的真实视图：五组配置与语言选择都在	ok
-vitest::App.navigation.test.tsx::功能视图导航可达 「处理模板」是能点开的真实视图：列表出得来，未裁决的部分不给假按钮	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 「处理模板」是能点开的真实视图：列表出得来，可套用的模板给真按钮	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检落地前不派发；期间界面仍可操作；落地瞬间参数已变则拒绝派发	ok
 vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检阻断时不派发执行（E2004 前移为执行前阻断，零副作用）	ok
 vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §2／§3） 失败条目显示码位＋本地化摘要，不显示后端 message／detail 原文	ok
@@ -740,6 +757,13 @@ vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） �
 vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 没有记录时不预填、也不写候选（空状态由用户自己选）	ok
 vitest::App.uiState.test.tsx::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 启动时回到上次的功能页	ok
 vitest::App.uiState.test.tsx::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 切换页面时写回 lastSection	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 已知码位给出本地化摘要与建议动作，不再把后端英文原文当主文案	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 同一码位在英文下给英文文案	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 未收录的码位退回后端原文而不是空白，并标记未本地化	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 设计 06 §2 的码表已全量收口：55 个码位、每码两段	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 每个收录码位在中英两个语言包里都有 summary 与 action，且文案不为空	ok
+vitest::errors.test.tsx::错误横幅 渲染码位、本地化摘要与建议动作，且关闭按钮可用	ok
+vitest::errors.test.tsx::错误横幅 未收录码位时仍显示码位与后端原文，不出现 raw key	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 生成计划→执行→执行中可取消（调用 cancelTask）	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 partial-failed 后出现「重试失败项」并调用 retryTask	ok
 vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 回滚预演的条目状态用本地化文案，不露出枚举原词（09 §2）	ok
@@ -756,10 +780,19 @@ vitest::FeaturePages.table.test.tsx::功能页预览表的把手（设计 03 §1
 vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 用计划里实际出现的动作存模板，参数快照取 plan.params	ok
 vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 计划含多种动作时拒绝保存，不挑一个把另一部分语义丢掉	ok
 vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 空计划不给存：没有条目就没有动作可存	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 采样口径进模板不进快照（v5，OQ-41）：表单当前值存进 sampling，快照保持计划形状	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 变换正文进模板不进快照（v6，OQ-43②）：规则按行拆数组、递归开关落布尔	ok
 vitest::FeaturePages.virtual.test.tsx::功能页计划预览的窗口化（方案 6.2） 3000 条计划只渲染窗口内的行，DOM 行数不随条目数线性增长	ok
 vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 类别标题走设计 06 §2A 的界面文案，不露出内核 slug	ok
 vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 界面没跟上的类别显示成缺陷，而不是伪装成一条正常文案	ok
 vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 对照：计划没有 warnings 时不得凭空出现集中报告块	ok
+vitest::i18n.test.tsx::i18n 取词与插值 整句模板按参数插值，缺参数时保留占位符而不是渲染 undefined	ok
+vitest::i18n.test.tsx::i18n 取词与插值 同一 key 在两个语言包里给出各自语言的文案	ok
+vitest::i18n.test.tsx::i18n 取词与插值 中英文的占位符集合一致（I18N-01 的静态前提，运行期再兜一次）	ok
+vitest::i18n.test.tsx::语言与主题的运行期行为 切换语言即时改变文案与 document.lang，并写 general.language	ok
+vitest::i18n.test.tsx::语言与主题的运行期行为 切换主题即时落 dataset，并写 general.theme	ok
+vitest::i18n.test.tsx::语言与主题的运行期行为 没有 Provider 时按默认中文取词，组件单挂也不炸	ok
+vitest::i18n.test.tsx::语言包完整性 渲染出的界面里没有裸露的资源 key（I18N-07：不显示 raw key）	ok
 vitest::SettingsPage.test.tsx::设置页 按设计 03 的五组渲染，并逐项标出生效值来源	ok
 vitest::SettingsPage.test.tsx::设置页 改动字段即写 ConfigDocument 的对应 scope	ok
 vitest::SettingsPage.test.tsx::设置页 语言切换即时生效并写 general.language	ok
@@ -784,26 +817,15 @@ vitest::TemplatesPage.test.tsx::处理模板视图 导入高版本模板：错�
 vitest::TemplatesPage.test.tsx::处理模板视图 导出把模板 JSON 摊在可复制的文本框里	ok
 vitest::TemplatesPage.test.tsx::模板的功能码绑定（OQ-36 裁决①，schema v4） 绑定过就写明是哪个功能，而不是只报动作名	ok
 vitest::TemplatesPage.test.tsx::模板的功能码绑定（OQ-36 裁决①，schema v4） 没绑定的如实说「未绑定」，不假装可以套用	ok
+vitest::TemplatesPage.test.tsx::模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080） 可套用的模板：填路径槽位生成预览计划，只出计划不执行	ok
+vitest::TemplatesPage.test.tsx::模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080） 「执行此计划」显式走 applyPlan，不静默执行	ok
+vitest::TemplatesPage.test.tsx::模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080） 正文缺失的模板：不给套用按钮，原因如实展示（OQ-43 的七类）	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 2000 条只挂窗口内的行，未渲染的条目不在 DOM 里	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 占位高度等于 条数 × 行高，滚动条比例因此真实	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 滚动后窗口跟着位移：新窗口渲染、旧窗口从 DOM 摘除	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 滚到底部能看到最后一条（大列表末页不被裁掉）	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 空列表不渲染任何行，占位高度为 0	ok
 vitest::VirtualList.test.tsx::VirtualList 的窗口化 行序号与集合大小对辅助技术可见（aria-posinset/aria-setsize）	ok
-vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 已知码位给出本地化摘要与建议动作，不再把后端英文原文当主文案	ok
-vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 同一码位在英文下给英文文案	ok
-vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 未收录的码位退回后端原文而不是空白，并标记未本地化	ok
-vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 设计 06 §2 的码表已全量收口：55 个码位、每码两段	ok
-vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 每个收录码位在中英两个语言包里都有 summary 与 action，且文案不为空	ok
-vitest::errors.test.tsx::错误横幅 渲染码位、本地化摘要与建议动作，且关闭按钮可用	ok
-vitest::errors.test.tsx::错误横幅 未收录码位时仍显示码位与后端原文，不出现 raw key	ok
-vitest::i18n.test.tsx::i18n 取词与插值 整句模板按参数插值，缺参数时保留占位符而不是渲染 undefined	ok
-vitest::i18n.test.tsx::i18n 取词与插值 同一 key 在两个语言包里给出各自语言的文案	ok
-vitest::i18n.test.tsx::i18n 取词与插值 中英文的占位符集合一致（I18N-01 的静态前提，运行期再兜一次）	ok
-vitest::i18n.test.tsx::语言与主题的运行期行为 切换语言即时改变文案与 document.lang，并写 general.language	ok
-vitest::i18n.test.tsx::语言与主题的运行期行为 切换主题即时落 dataset，并写 general.theme	ok
-vitest::i18n.test.tsx::语言与主题的运行期行为 没有 Provider 时按默认中文取词，组件单挂也不炸	ok
-vitest::i18n.test.tsx::语言包完整性 渲染出的界面里没有裸露的资源 key（I18N-07：不显示 raw key）	ok
 vitest::uiState.test.ts::最近目录（设计 03 §11.2） 新目录置顶，重复目录被提到最前而不是出现两次	ok
 vitest::uiState.test.ts::最近目录（设计 03 §11.2） 只动 lastDirectory 与 recentDirectories，兄弟字段原样保留	ok
 vitest::uiState.test.ts::最近目录（设计 03 §11.2） 空目录不写入，也不把已有记录弄坏	ok
@@ -842,4 +864,5 @@ playwright::rename-preview.spec.ts::预览→执行链跑通：C05 标注逐项�
 playwright::settings-i18n.spec.ts::设置页可达，切到英文后整页换语言且关键操作不被遮挡	ok
 playwright::stale-plan.spec.ts::C09 工作台：改保留策略后执行入口关闭（勾选确认后仍关闭）	ok
 playwright::stale-plan.spec.ts::F12 功能页：改前缀后执行/撤销/回滚预演全部关闭	ok
-playwright::templates.spec.ts::模板库可达：列表出得来，导入高版本被拒并给出错误码，不提供假的套用入口	ok
+playwright::templates.spec.ts::模板库可达：列表出得来，导入高版本被拒并给出错误码	ok
+playwright::templates.spec.ts::套用模板：填路径槽位生成预览计划，执行是显式按钮	ok

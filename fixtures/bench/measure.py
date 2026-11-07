@@ -44,7 +44,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-BIN = REPO / "target" / "release" / "batchdesk"
+BIN = REPO / "target" / "release" / ("batchdesk.exe" if os.name == "nt" else "batchdesk")
 C1_ROOT = REPO / "fixtures" / "bench" / "C-1-目录树10万" / "out"
 C2_SRC = REPO / "fixtures" / "bench" / "C-2-超大单文件" / "out" / "big_file.txt"
 
@@ -110,15 +110,64 @@ C2RW_CASES = {
 
 
 
+def _win_rss_kib(pid: int) -> int | None:
+    """Windows 下的 WorkingSet 采样（KiB）；进程已退出时返回 None（ADR-0082）。
+
+    WorkingSetSize 与 Linux VmRSS 同为「驻留物理内存」口径，但不完全等价（含可换页内核-
+    用户共享页的差异）；结果行的 RSS 列在 Windows 上按此口径记录，不做跨平台直接比较。
+    """
+    import ctypes
+
+    class ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = [
+            ("cb", ctypes.c_uint32),
+            ("PageFaultCount", ctypes.c_uint32),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        counters = ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        getter = getattr(kernel32, "K32GetProcessMemoryInfo", None)
+        if getter is None:
+            getter = ctypes.windll.psapi.GetProcessMemoryInfo
+        if not getter(handle, ctypes.byref(counters), counters.cb):
+            return None
+        return counters.WorkingSetSize // 1024
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def sample_rss(pid: int, holder: dict, stop: threading.Event, limit_kib: int) -> None:
     peak = 0
     samples: list[int] = []
-    path = f"/proc/{pid}/status"
+    if os.name == "nt":
+        def read_kib() -> int | None:
+            return _win_rss_kib(pid)
+    else:
+        path = f"/proc/{pid}/status"
+
+        def read_kib() -> int | None:
+            try:
+                with open(path, encoding="ascii") as fh:
+                    return next((int(line.split()[1]) for line in fh if line.startswith("VmRSS:")), 0)
+            except (FileNotFoundError, ProcessLookupError):
+                return None
     while not stop.is_set():
-        try:
-            with open(path, encoding="ascii") as fh:
-                kib = next((int(line.split()[1]) for line in fh if line.startswith("VmRSS:")), 0)
-        except (FileNotFoundError, ProcessLookupError):
+        kib = read_kib()
+        if kib is None:
             break
         peak = max(peak, kib)
         samples.append(kib)
@@ -180,7 +229,10 @@ def run(cmd: list[str], out_path: Path, rss_limit_mib: int, allow_breach: bool =
 
 
 def workdir(tag: str) -> Path:
-    d = Path("/tmp") / "batchdesk-bench" / tag
+    # 缺省 /tmp 保持 Linux 既有行为；Windows 上 /tmp 解析为「当前盘根」，可能落进小容量系统盘，
+    # 允许用 BATCHDESK_BENCH_DIR 显式指到大盘（ADR-0082）。
+    root = Path(os.environ.get("BATCHDESK_BENCH_DIR", "/tmp"))
+    d = root / "batchdesk-bench" / tag
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     return d

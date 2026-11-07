@@ -11,7 +11,7 @@
 import csv
 from pathlib import Path
 
-ROOT = Path("/home/chaoge/Documents/batchdesk")
+ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs/testing/用例覆盖映射表-v0.2.csv"
 
 # 语料台账状态（crates/kernel/tests/assertions.tsv 实测）
@@ -282,13 +282,13 @@ add("F01",
         3: ("◐", CI, "kernel::conflict::tests::sequence_target_skips_occupied_names＋sequence_target_respects_case_insensitive_occupancy", "C19 四策略逐项执行未落（C19 属阶段 1）"),
         4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel；retry_reruns_only_failed_entries_under_a_new_task_id；progress_bursts_are_coalesced_and_flushed_on_phase_change", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::split_layout` 流式实现（64 KiB 分块）",
-            "C-2 全量档已实测（`fixtures/bench/results.md` R-04…R-06：2 GiB 源峰值 RSS 3.9 MiB、内存恒定达标；吞吐因 SATA SSD 档位不匹配不作判定）；Windows 实机重测未跑"),
+            "**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：合计中位 3.707 秒、峰值 RSS 5.7 MiB 恒定"),
     },
     rbk_slots={
         1: ("✅", CI, "apply_flow::f01_plan_apply_and_undo_write_line_aligned_parts", ""),
         2: ("◐", CI, "apply_flow::cleanup_and_undo_respect_retention_window（C09 载体）",
             "本功能的部分失败注入与保留期窗口边界未单独测"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项（reverse 语义）", "E01 占用语料属人工（manual-only.txt）"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项（reverse 语义）", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F02",
@@ -310,11 +310,11 @@ add("F02",
             corpus_cell(["T06"])[1]),
         4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::estimate_lines`/`split_layout_by_lines` 流式",
-            "C-2 全量档已实测（results.md R-07：2 GiB 源按 300 万行/片切成 27 片，行数预扫描含在 plan 内＝中位 6.368 秒，apply 中位 8.998 秒，峰值 RSS 4.2 MiB，逐片按名拼接 sha256＝源哈希）；Windows 实机重测未跑"),
+            "**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：合计中位 3.200 秒、峰值 RSS 5.8 MiB 恒定"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F03",
@@ -335,11 +335,11 @@ add("F03",
             corpus_cell(["T06"])[1]),
         4: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
         5: ("⛔", MANUAL_CARRIER, "platform `text::split_layout_by_parts`（预扫描＋第二遍流式）",
-            "C-2 全量档已实测（results.md R-08：2 GiB 源分 9 份，双遍读盘使 plan 中位 10.250 秒、apply 中位 7.428 秒，峰值 RSS 3.9 MiB，逐片按名拼接 sha256＝源哈希）；Windows 实机重测未跑"),
+            "**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：合计中位 5.268 秒、峰值 RSS 5.7 MiB 恒定"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F04",
@@ -367,7 +367,7 @@ add("F04",
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F05",
@@ -392,7 +392,7 @@ add("F05",
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F06",
@@ -419,7 +419,7 @@ add("F06",
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F07",
@@ -443,7 +443,7 @@ add("F07",
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F08",
@@ -468,7 +468,7 @@ add("F08",
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F09",
@@ -495,7 +495,7 @@ add("F09",
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F10",
@@ -516,12 +516,12 @@ add("F10",
         2: ("⛔", MANUAL_CARRIER, "kernel `listing` 占位跳过计数已实现", "E02 属人工语料（manual-only.txt）→ Windows 实机日"),
         3: ("◐", CI, "platform::listing::tests::inspect_counts_files_dirs_and_depth＋kernel::listing::tests::placeholder_and_skipped_entries_warn", "真无权限环境断言未跑"),
         4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel", ""),
-        5: ("⛔", MANUAL_CARRIER, "FsDirectoryLister 流式写出（write_atomic_with）", "C-1 十万级 Linux 预跑已测（results.md R-01…R-03：合计中位 1.588 秒，§9.1「≤30 秒」达标）；Windows 实机重测未跑"),
+        5: ("⛔", MANUAL_CARRIER, "FsDirectoryLister 流式写出（write_atomic_with）", "**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：100,111 行合计中位 13.729 秒（§9.1 ≤30 秒达标）、峰值 RSS 6.4 MiB、三轮 CSV sha 一致"),
     },
     rbk_slots={
         1: ("✅", SHELL, "listing_plan_streams_csv_through_the_desktop_queue_and_undoes", ""),
         2: ("◐", CI, "apply_flow::f10_plan_apply_and_undo_writes_directory_listing", "部分失败注入未测"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F11",
@@ -549,7 +549,7 @@ add("F11",
     },
     rbk_slots={
         2: ("✅", CI, "apply_flow::f11_undo_keeps_a_directory_that_became_non_empty_and_reports_the_failure＋apply_flow::f11_plan_apply_and_undo_creates_multi_level_directories", ""),
-        3: ("⛔", MANUAL_CARRIER, "platform `fs` remove_dir_if_empty 单测", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "platform `fs` remove_dir_if_empty 单测", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；f11 用后台进程 CWD 占住 alpha/beta：beta 报 E2008（os error 32）、alpha 级联 E2008（os error 145 目录非空），二次 undo 补完、root 清空；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("F12",
@@ -572,7 +572,7 @@ add("F12",
             "文件系统层大小写不敏感行为需 Windows/macOS 实机核对（C06-EXE-02 同源）→ Windows 实机日"),
         3: ("◐", CI, "kernel `rename` 长路径三级（200/259/260×开关）单测＋corpus.rs::r01_long_path_samples_follow_path_length_tiers",
             "UNC canonicalize 行为矩阵待实机（Windows 实机日）"),
-        4: ("◐", CI, "corpus.rs::e03_readonly_target_is_marked_by_preflight_and_named_in_preview、apply_flow::read_only_rename_target_is_skipped_without_failing_the_task（POSIX 真实文件系统）、generic_apply::tests::readonly_rename_is_skipped_and_reported_without_failing_the_task、occupied_target_is_retried_once_and_then_applies（断 rename 调用次数＝2）、non_retryable_permission_error_is_not_retried、permission_failure_still_fails_arms_outside_the_named_scope（范围外仍 Failed）", "Windows FILE_ATTRIBUTE_READONLY 的执行期表现属实机日（真实 FS 断言限 #[cfg(unix)]）"),
+        4: ("◐", CI, "corpus.rs::e03_readonly_target_is_marked_by_preflight_and_named_in_preview（apply_flow 另有一条 POSIX 真实文件系统只读断言，#[cfg(unix)] 门控故不在 Windows 清单，Windows 侧由 B2 实机占用批覆盖）、generic_apply::tests::readonly_rename_is_skipped_and_reported_without_failing_the_task、occupied_target_is_retried_once_and_then_applies（断 rename 调用次数＝2）、non_retryable_permission_error_is_not_retried、permission_failure_still_fails_arms_outside_the_named_scope（范围外仍 Failed）", "Windows FILE_ATTRIBUTE_READONLY 的执行期表现属实机日（真实 FS 断言限 #[cfg(unix)]）"),
         5: ("✅", CI, "壳层 task_state_events_cover_pause_resume_and_queued_cancel＋web Vitest：FeaturePages.controls.test.tsx（取消/重试入口调用形状）", ""),
     },
     rbk_slots={
@@ -602,7 +602,7 @@ add("F13",
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped（同族载体）", "本功能部分失败注入未测"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 属人工语料（只读/占用落点仅部分由 E03 断言覆盖，见 OQ-37）；撤销时的占用场景属实机"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③ UI 走查与改判裁决（只读/占用分档见 OQ-37，E03 已 asserted）"),
     })
 
 add("C01",
@@ -632,11 +632,11 @@ add("C01",
             "＋多字节解码的正确性锚点 `cli::tests::transcode_rewriter_streams_identically_to_whole_file_transcode`"
             "（>64 KiB 的 GB18030 双字节输入跨块与整段 transcode 逐字节一致＋BOM 一次）"
             "＋`corpus::k01_gbk_sample_detects_as_gb18030_and_transcodes_clean`",
-            "**C-2 整档已实测（2026-11-06 Linux 预跑，`fixtures/bench/results.md` R-09／R-10／R-11；合块后复测 R-19）**：计划段中位 0.014 秒（采样式，与 2.05 GiB 体积无关）、改写段中位 24.317 秒＝86.9 MiB/s 源吞吐（读数含整源备份 IO，约 4× 源体积）、全程峰值 RSS 4.37 MiB＝§9.1「超大文件内存占用恒定」第③子句达标；产物 sha256＝源 sha256（夹具独立算出期望后断言逐字节一致）。**但要说清那组数值量的是什么**：C-2 数据集是纯 ASCII，`--source gb18030` 在它上面只走 1:1 子集（R-30 的计划段 reason 串实测写明「sample is pure ASCII… defaulting to UTF-8」），所以 86.9 MiB/s 是「ASCII 走 GB18030 通道」的读数，**不是多字节解码的读数**；而多字节分支的正确性并不空白——上列两条锚点加 `apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry` 已把跨块解码、BOM 与非法序列计数钉住。本行的缺口因此收窄成一句：**只缺多字节输入下的 §9.1 数值**。2026-11-07 已用夹具现生成的真多字节 GB18030 数据集量出代价量级（R-29 对同窗口 R-30：安静负载下 28.7 vs 186.0 MiB/s＝慢 6.5 倍，产物口径 40.2 vs 186.0＝4.6 倍；受扰动负载下 10.6 vs 73.5＝慢 6.9 倍、产物 5.0 倍——**倍数跨窗口稳定，绝对值随负载移动**），但它**不属于 T v1.12 附录 C 的 C-2 构造**，因此不作达标证据。把它升成正式档需要人裁决两件事——①附录 C 是否增设编码维度（T 升版），②§9.1 阈值按源字节还是产物字节判定（GB18030→UTF-8 产物实测 ×1.399，两个分母会给出不同答案）：登记为 OQ-42，不由开发代理自行补值。**Linux 预跑不作验收证据**，仍 ⛔：余下＝Windows 实机日按同一夹具重测＋OQ-42 裁决后的多字节正式档"),
+            "**C-2 整档已实测（2026-11-06 Linux 预跑，`fixtures/bench/results.md` R-09／R-10／R-11；合块后复测 R-19）**：计划段中位 0.014 秒（采样式，与 2.05 GiB 体积无关）、改写段中位 24.317 秒＝86.9 MiB/s 源吞吐（读数含整源备份 IO，约 4× 源体积）、全程峰值 RSS 4.37 MiB＝§9.1「超大文件内存占用恒定」第③子句达标；产物 sha256＝源 sha256（夹具独立算出期望后断言逐字节一致）。**但要说清那组数值量的是什么**：C-2 数据集是纯 ASCII，`--source gb18030` 在它上面只走 1:1 子集（R-30 的计划段 reason 串实测写明「sample is pure ASCII… defaulting to UTF-8」），所以 86.9 MiB/s 是「ASCII 走 GB18030 通道」的读数，**不是多字节解码的读数**；而多字节分支的正确性并不空白——上列两条锚点加 `apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry` 已把跨块解码、BOM 与非法序列计数钉住。本行的缺口因此收窄成一句：**只缺多字节输入下的 §9.1 数值**。2026-11-07 已用夹具现生成的真多字节 GB18030 数据集量出代价量级（R-29 对同窗口 R-30：安静负载下 28.7 vs 186.0 MiB/s＝慢 6.5 倍，产物口径 40.2 vs 186.0＝4.6 倍；受扰动负载下 10.6 vs 73.5＝慢 6.9 倍、产物 5.0 倍——**倍数跨窗口稳定，绝对值随负载移动**），但它**不属于 T v1.12 附录 C 的 C-2 构造**，因此不作达标证据。把它升成正式档需要人裁决两件事——①附录 C 是否增设编码维度（T 升版），②§9.1 阈值按源字节还是产物字节判定（GB18030→UTF-8 产物实测 ×1.399，两个分母会给出不同答案）：登记为 OQ-42，不由开发代理自行补值。**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：ASCII 整档 4.338 秒＝486.9 MiB/s（达标）；GB18030 正式变体（OQ-42 已裁，T v1.13）21.154 秒＝源 96.8／产物 135.4 MiB/s（双分母，均未达 NVMe ≥200 档→T §4.2 豁免流程）；峰值 RSS 6.1／6.6 MiB＝第③子句达标；状态/载体改判按 ADR-0051 口径须人工裁决"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply（E2010）", "本功能部分失败注入未测"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("C02",
@@ -667,12 +667,11 @@ add("C02",
             "**已按 [ADR-0078](../adr/0078-改写通道的写缓冲合块.md) 在通道处加 `BufWriter` 修掉**（容量沿用模块内 64 KiB 块尺寸，不是新阈值）。"
             "读数至此落进 §9.1「机械盘 ≥60 MB/s」那一档的量级，但**本机是 SATA SSD、不作达标判定**，"
             "且 apply 的一次 IO 约为源体积 4 倍（整源备份进隔离目录）。"
-            "剩余缺口＝Windows 实机日按同一夹具重测（Linux 预跑不作验收证据，仍 ⛔）；"
-            "另注意 ADR-0078 的复测窗口 loadavg 6.5–14.9 不是静默窗口，与 R-18 的比较方向仍是有利的"),
+            "**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：改写段中位 8.535 秒＝247.5 MiB/s（NVMe ≥200 档达标）、峰值 RSS 6.2 MiB＝第③子句达标；状态/载体改判按 ADR-0051 口径须人工裁决"),
     },
     rbk_slots={
         2: ("◐", CI, "generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries（copy 臂：失败条目不落半成品、只有成功条目进 Journal、undo 只回滚已应用）", "本臂的部分失败注入未单独断言；保留期窗口边界仍以 C09 为载体"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("C03",
@@ -707,12 +706,12 @@ add("C03",
             "等价性由 29 条用例 × 9 种分块尺寸逐字段对账把住）与 ADR-0078（通道 `BufWriter` 合块）修掉。"
             "仍留的边界只有一条：**界定不出的正则（无界量词／锚点／`\\b`／分组量化／零宽）计划段与改写段都仍整段读，"
             "内存 O(文件)**——ADR-0064 划的同一条闸门，要测它需要先决定左邻上下文的读法（引入 `regex-automata` 或改判定口径），"
-            "属新切片而非本批欠账。剩余缺口＝Windows 实机日按同一夹具重测（Linux 预跑不作验收证据，仍 ⛔）；"
-            "另外 R-14／R-15／R-16 是修复前的子档读数，同体积后继复测＝R-26／R-27／R-28；轮次 5 也第一次量化出 ADR-0079 的时间代价（计划段 plain 0.198→0.534 秒、cell 1.997→3.842 秒，换来峰值 67 MiB→4.4 MiB 与 307 MiB→5.6 MiB）——引用「流式化」时不得说成「更快」"),
+            "属新切片而非本批欠账；**Windows 实机重测已跑（2026-11-07 轮次 8，C-4/记录2，results.md）**：plain 231.1 MiB/s（达标）／regex 83.5／cell 26.6 MiB/s（未达 NVMe 档→T §4.2 豁免流程）、三臂峰值 RSS 6.4–8.8 MiB＝第③子句达标；状态/载体改判按 ADR-0051 口径须人工裁决；"
+            "另外 R-14／R-15／R-16 是修复前的子档读数，同体积后继复测＝R-26／R-27／R-28；轮次 5 也第一次量化出 ADR-0079 的时间代价（计划段 plain 0.198→0.534 秒、cell 1.997→3.842 秒，换来峰值 67 MiB→4.4 MiB 与 307 MiB→5.6 MiB）——引用「流式化」时不得说成「更快"),
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::apply_skips_entries_changed_between_plan_and_apply", "本功能部分失败注入未测"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("C07",
@@ -738,7 +737,7 @@ add("C07",
     },
     rbk_slots={
         2: ("◐", CI, "apply_flow::c07_missing_sources_skip_or_error_and_copy_keeps_source", "跨盘移动在 Windows 实机的核对待实机日"),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("C09",
@@ -759,7 +758,7 @@ add("C09",
         2: (corpus_cell(["T05"])[0], CI, "corpus.rs::t05_empty_file_is_reported_without_parts", corpus_cell(["T05"])[1]),
         3: ("⛔", MANUAL_CARRIER, "platform `scan` 10 项（占位探测）", "E02 OneDrive 占位属人工 → Windows 实机日"),
         4: ("✅", SHELL, "task_state_events_cover_pause_resume_and_queued_cancel＋scripts/e2e-tauri.mjs（执行中取消回滚）", ""),
-        5: ("⛔", MANUAL_CARRIER, "fixtures/bench C-6 的 assert_c09.py（本地手动脚本，不在 CI）", "C-6 断言未进 CI；C-1 大集归入正式基准（OQ-16）→ 受控环境"),
+        5: ("⛔", MANUAL_CARRIER, "fixtures/bench C-6 的 assert_c09.py（本地手动脚本，不在 CI）", "C-6 断言未进 CI；**Windows 实机日已执行（2026-11-07，R-44）**：C-6 full 正确性全过（同内容 1 组 10 成员、硬链接 3 入口跳过、无假阳性）＋C-1 十万树 full 54.2 秒／fast 38.0 秒（fast 全部快速阶段剪枝）；正式基准对比归 OQ-16，状态/载体改判按 ADR-0051 口径须人工裁决"),
     },
     rbk_slots={
         1: ("✅", CI, "apply_flow::apply_and_undo_restore_files＋壳层队列测试", ""),
@@ -795,7 +794,7 @@ add("C10",
     rbk_slots={
         1: ("✅", SHELL, "zip_compress_plan_executes_through_the_desktop_queue_and_undoes", ""),
         2: ("✅", CI, "apply_flow::c10_z01_gbk_name_extracts_and_undo_removes_the_product＋tasks::tests::zip_compress_plan_executes_through_the_desktop_queue_and_undoes", ""),
-        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "E01 占用属人工语料"),
+        3: ("⛔", MANUAL_CARRIER, "kernel `journal` 5 项", "Windows 实机日 B2 已执行（2026-11-07，PowerShell FileShare.None 持句柄，E:/batchdesk-shijiri/B2-records.md）：undo1 对被锁条目报 E2008（os error 32）、其余条目正常撤销、被锁文件 sha256 原样、解锁后二次 undo 补完＝R3 判定点①②实机通过；剩③「提示满足三层结构」的 UI 走查与状态/载体改判（按 ADR-0051 口径，须人工裁决）；Excel 真占用场景（语料 E01）属 B1 人工"),
     })
 
 add("C15",
@@ -910,7 +909,7 @@ add("C06",
     },
     exe_slots={
         1: ("✅", CI, "apply_flow::f12_prefix_plan_apply_and_undo_renames_files_and_directories", ""),
-        2: ("⛔", MANUAL_CARRIER, "corpus.rs::R02 计划层折叠判定 asserted", "文件系统大小写不敏感行为需 Windows/macOS 实机 → Windows 实机日"),
+        2: ("⛔", MANUAL_CARRIER, "corpus.rs::R02 计划层折叠判定 asserted", "**Windows 实机日已执行（2026-11-07，NTFS 真不敏感卷）**：f12 仅大小写改名按两阶段临时名执行、undo 后文件名逐字节恢复原大小写、内容不变；状态/载体改判按 ADR-0051 口径须人工裁决"),
         3: ("✅", CI, "apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped", ""),
         4: ("✅", CI, "apply_flow::cleanup_and_undo_respect_retention_window", ""),
         5: ("◐", CI, "kernel `journal` 5 项＋undo 幂等单测", "千级条目规模归 C-1/C-2 基准（OQ-16）"),

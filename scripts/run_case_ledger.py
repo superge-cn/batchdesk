@@ -25,6 +25,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -54,10 +55,13 @@ BINARY_LABEL = {
 
 def run(cmd: list[str], cwd: Path) -> str:
     print(f"$ {' '.join(cmd)}", flush=True)
+    # Windows 的 npm/pnpm 装的是 .cmd shim，CreateProcess 只追加 .exe——用 shutil.which
+    # 一次性解析到真实可执行文件；POSIX 下 which 原样返回，行为不变。
+    resolved = shutil.which(cmd[0]) or cmd[0]
     # cargo 的 "Running …" 行进 stderr、libtest 的结果行进 stdout；
     # 两者必须按顺序合并才能把测试名归到正确的测试目标上。
     proc = subprocess.run(
-        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        [resolved] + cmd[1:], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout[-4000:] + "\n")
@@ -82,7 +86,8 @@ def parse_cargo(text: str) -> dict[str, str]:
     for line in text.splitlines():
         match = RUNNING_LINE.search(line)
         if match:
-            artifact = match.group(1).split("/")[-1]
+            # Windows 的括号内路径是反斜杠（且带盘符与 .exe），按两种分隔符统一取末段。
+            artifact = re.split(r"[/\\]", match.group(1))[-1]
             stem = artifact.rsplit("-", 1)[0] if "-" in artifact else artifact
             label = BINARY_LABEL.get(stem, stem)
             continue
@@ -133,8 +138,10 @@ def collect_playwright(offline: bool) -> list[dict]:
         return []
     env = dict(os.environ, PLAYWRIGHT_JSON_OUTPUT_NAME=str(out))
     print("$ pnpm exec playwright test --reporter=json", flush=True)
+    # 与 run() 同口径：Windows 下 pnpm 是 .cmd shim，需 shutil.which 解析（CreateProcess 只追加 .exe）。
+    pw_pnpm = shutil.which("pnpm") or "pnpm"
     proc = subprocess.run(
-        ["pnpm", "exec", "playwright", "test", "--reporter=json"],
+        [pw_pnpm, "exec", "playwright", "test", "--reporter=json"],
         cwd=ROOT / "web",
         env=env,
         capture_output=True,
@@ -433,8 +440,8 @@ def write_summary(ledger_rows: list[list[str]], counts: dict[str, int], tiers: d
         "",
         f"> 状态：启用｜本轮实测：{started}｜提交 `{head}`｜实测清单：[`执行记录/{inventory_name}`](执行记录/{inventory_name})",
         ">",
-        "> 权威：实例矩阵取 TC v0.4 §3；阶段归属与阶段 0 出口口径取 **T v1.12** §2.2／§4；"
-        "预览与执行两段式、强制力位置取 **产品方案 v1.19** §7.1／§8.5。本文件不自立任何判定标准。",
+        "> 权威：实例矩阵取 TC v0.4 §3；阶段归属与阶段 0 出口口径取 **T v1.13** §2.2／§4；"
+        "预览与执行两段式、强制力位置取 **产品方案 v1.21** §7.1／§8.5。本文件不自立任何判定标准。",
         ">",
         "",
         "**这份台账回答一个问题**：映射表里每条实例写的自动化锚点，**这次真的跑过吗、名字还在吗**。",

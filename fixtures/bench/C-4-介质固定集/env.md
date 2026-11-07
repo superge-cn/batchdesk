@@ -20,7 +20,20 @@
 
 ## 记录 2
 
-（复制上表继续填写）
+| 项 | 值 | 备注 |
+|---|---|---|
+| 记录日期 | 2026-11-07 | 本轮 Windows 实机日（检查清单 v0.2 §9·B4）用此记录 |
+| 主机标识 | `WIN75K7S16U0E2E` | 仅主机名，无个人信息 |
+| 操作系统与版本 | Windows 11 专业版 10.0.26200（Build 26200） | **Windows／NTFS**：MVP 平台范围（方案 11.6-13）内的验收环境 |
+| 介质类型 | NVMe SSD（`Get-PhysicalDisk` BusType=NVMe，MediaType=SSD） | 对应 §9.1：大文件吞吐的 ≥200 MB/s 档（NVMe）在本机**适用**；目录清单的 SSD 档同样适用 |
+| 介质型号 | Samsung SSD 990 EVO Plus 1TB（Disk 0，分区 E: 432 GB） | PowerShell `Get-PhysicalDisk`／`Get-Partition` 实测 |
+| 文件系统 | NTFS（E:，`Get-Volume` Healthy） | 大小写不敏感卷：W3（C06-EXE-02 折叠恢复）在本机可判定；长路径前缀语义与 Linux 不同 |
+| 测试前磁盘剩余空间 | 82.3 GB（`fsutil volume diskfree e:` ＝ 88,372,109,312 字节） | 覆盖 C-1（约 395 MiB）＋C-2 双变体（2 GiB×2＋GB 期望产物 ≈3 GiB）＋工作副本，满足 §9.1 的 S01 安全余量判定式 |
+| 磁盘压缩 | 未启用（`compact /s:E:\` 无压缩文件） | NTFS 压缩默认关闭，实测一致 |
+| 索引服务 | **WSearch Running（Automatic）＋ SysMain Running（Automatic）** | 与记录 1 的「索引已关闭」不同：Windows 默认开启，是本轮的既知扰动源；正式读数要求安静窗口（手册 §3），必要时先暂停两服务再跑并在此备注 |
+| 实时杀软 | **在运行**：360 安全套装＋360 杀毒（SecurityCenter2 productState 335872）；Windows Defender 在注册列表（productState 393472，实时防护状态未单独确认） | §9.1 的「批量写每 100 项暂停 200 ms」节流在本机是**真实生效场景**；杀软对 release 二进制与产物文件的逐次扫描会拉长首轮——预热轮丢弃可吸收大部分；正式读数建议把基准目录加入杀软排除并在此备注 |
+| CPU／RAM | AMD Ryzen 7 5800U（8 核 16 线程）／15.3 GB | 内存采样口径见 ADR-0082（WorkingSetSize，Windows 侧） |
+| 内存采样口径 | `GetProcessMemoryInfo` 的 WorkingSetSize（ADR-0082） | 与记录 1 的 VmRSS 同为驻留物理内存口径但不等价，两平台读数不做直接比较 |
 
 ## 使用要求
 
