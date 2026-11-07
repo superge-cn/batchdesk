@@ -369,6 +369,15 @@ export interface TemplateStep {
    * 套用时模板值优先、没存由壳层映射表按缺省补（ADR-0080）。
    */
   sampling?: RecipeSampling;
+  /**
+   * 变换正文（schema v6 新增，OQ-43 裁决②）：进模板、**不进快照**。
+   *
+   * f06/f07/c08/c12/c13/c14 的请求侧语义（来源列/列选择/规则/条件/排序键/
+   * 拆分合并规格）从不进 plan.params，保存时把界面当前值存进这里；
+   * 套用时由壳层映射表按功能键白名单注入请求（未知键拒绝）。值只允许
+   * 标量或标量数组；路径/脚本键同快照一起被剔除/拒绝（不变量 13）。
+   */
+  content?: Record<string, unknown>;
   /** 参数快照：不含源路径/输出目录/脚本（不变量 13，内核与壳层各兜一层）。 */
   paramsSnapshot: Record<string, unknown>;
   source: StepSource;
@@ -416,6 +425,8 @@ export interface SaveRecipeInput {
   feature?: string;
   /** 单步模板的采样口径存档（v5，OQ-41 裁决；保存时从当前表单采集，表单没这项就不传）。 */
   sampling?: RecipeSampling;
+  /** 单步模板的变换正文存档（v6，OQ-43 裁决②；保存时从当前表单采集）。 */
+  content?: Record<string, unknown>;
 }
 
 /** 一个路径槽位的形状（`describeRecipe` 出参；`many`＝多值，填列表）。 */

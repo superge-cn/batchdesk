@@ -719,6 +719,58 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
   ]
 };
 
+/// v6 变换正文（OQ-43②，ADR-0081）：f06/f07/c08/c12/c13/c14 的请求侧语义
+/// （来源列/列选择/规则/条件/排序键/拆分合并规格）从不进 plan.params，保存时
+/// 从表单采集进 `content` 块——取值形态与上方 plan 构造分支一致（同一批
+/// split/Number 规则），路径键由内核 strip_paths 兜底剔除，白名单外的键由
+/// 壳层拒绝（不静默丢）。
+function contentFromForm(
+  view: View,
+  form: Record<string, string>
+): Record<string, unknown> | undefined {
+  const content: Record<string, unknown> = {};
+  if (view === "f06") {
+    // 界面用「来源列名是否填了」表达开关（与 plan 构造一致）：填了＝要来源列
+    content.sourceColumn = Boolean(form.sourceColumnName);
+    if (form.sourceColumnName) content.sourceColumnName = form.sourceColumnName;
+  } else if (view === "f07") {
+    content.columns = form.columns
+      ? form.columns.split(",").map((value) => value.trim()).filter(Boolean)
+      : [];
+    content.columnIndexes = form.columnIndexes
+      ? form.columnIndexes
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      : [];
+  } else if (view === "c08") {
+    content.rules = form.rules ? form.rules.split("\n").filter(Boolean) : [];
+    content.recursive = form.recursive === "yes";
+  } else if (view === "c12") {
+    if (form.column) content.column = form.column;
+    if (form.columnIndex) content.columnIndex = Number(form.columnIndex);
+    content.op = form.op;
+    content.value = form.value ?? "";
+    content.filterMode = form.filterMode === "drop" ? "drop" : "keep";
+  } else if (view === "c13") {
+    content.sortColumns = splitList(form.sortColumns);
+    content.sortColumnIndexes = splitNumbers(form.sortColumnIndexes);
+    content.order = form.order === "desc" ? "desc" : "asc";
+    if (form.externalChunkRows) content.externalChunkRows = Number(form.externalChunkRows);
+  } else if (view === "c14") {
+    if (form.splitColumn) content.splitColumn = form.splitColumn;
+    if (form.splitColumnIndex) content.splitColumnIndex = Number(form.splitColumnIndex);
+    if (form.splitSeparator) content.splitSeparator = form.splitSeparator;
+    if (form.splitRegex) content.splitRegex = form.splitRegex;
+    content.mergeColumns = splitList(form.mergeColumns);
+    content.mergeColumnIndexes = splitNumbers(form.mergeColumnIndexes);
+    if (form.mergeJoinWith !== undefined) content.mergeJoinWith = form.mergeJoinWith;
+    if (form.mergeName) content.mergeName = form.mergeName;
+  }
+  return Object.keys(content).length > 0 ? content : undefined;
+}
+
+
 export function FeaturePages({ view, onBack }: { view: View; onBack: () => void }) {
   const { t } = useI18n();
   const title = t(FEATURE_TITLES[view] ?? "nav.c09");
@@ -970,6 +1022,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
         // 采样口径进模板不进快照（v5，OQ-41 裁决）：快照保持计划形状，
         // 采样窗口/字节从当前表单采集——套用时模板值优先、没存由壳层按缺省补。
         sampling: samplingFromForm(),
+        // 变换正文进模板不进快照（v6，OQ-43 裁决②）：六个功能的请求侧语义
+        // 从当前表单采集，套用时注入请求（白名单外拒绝）。
+        content: contentFromForm(view, form),
         // 功能码在保存这一刻是**已知**的（就是当前页），不记下来就得事后反推——
         // 而 `split`/`edit-content`/`rename` 这些动作对应多个功能码，反推必然靠猜（OQ-36 裁决①）。
         feature: view

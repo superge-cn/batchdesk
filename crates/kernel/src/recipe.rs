@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::error::KernelError;
 use crate::plan::PlanAction;
 
-pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 5;
+pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 6;
 
 /// 多步骤上限沿用 F15 单束上限（方案 §15.1，不新增数值）。
 pub const MAX_RECIPE_STEPS: usize = 10;
@@ -47,6 +47,9 @@ pub const PATH_PARAM_KEYS: &[&str] = &[
     "sourceroot",
     "targetroot",
     "unclassifieddir",
+    // f06 相对来源列的基准目录（2026-11-07 补，ADR-0081）：它是路径不是参数，
+    // 不在名单里就会随 v6 正文块/快照保存进模板
+    "basedir",
     // 输出
     "output",
     "outputdir",
@@ -98,6 +101,16 @@ pub struct TemplateStep {
     /// `None`（v4 及更早模板）＝套用通道按映射表的缺省补（见壳层 `FEATURE_PARAM_MAP`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<RecipeSampling>,
+    /// 变换正文（v6 新增，OQ-43 裁决②：**进模板、不进快照**）。
+    ///
+    /// f06/f07/c08/c12/c13/c14 六个功能的规则/列选择/条件/排序键/拆分合并规格
+    /// 从不进 `plan.params`（计划只存计数），参数快照（计划形状）因此无法回放；
+    /// 保存时把界面当前值存进这块（**请求侧**语义），套用时由壳层映射表按功能的
+    /// 键白名单注入请求（未知键拒绝，不静默丢——方案 §15.2.4）。值只允许标量或
+    /// 标量数组（validate 拒绝嵌套对象）；路径类键与脚本键同快照一起被剔除/拒绝
+    /// （不变量 13）。`None`＝v5 及更早模板或该功能不需要正文。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Map<String, Value>>,
 }
 
 /// 采样类技术口径的可选存档（v5，OQ-41 裁决）。三个键都可选：只存该功能
@@ -228,6 +241,7 @@ impl RecipeDocument {
                 source: StepSource::Original,
                 feature,
                 sampling: None,
+                content: None,
             }],
             match_: None,
             source_format: None,
@@ -296,20 +310,43 @@ impl RecipeDocument {
                     }
                 }
             }
+            if let Some(content) = &step.content {
+                if let Some(key) = script_key(content) {
+                    return Err(KernelError::invalid_params(format!(
+                        "template content must not contain scripts (found {key})"
+                    )));
+                }
+                for (key, value) in content {
+                    if !content_value_is_plain(value) {
+                        return Err(KernelError::invalid_params(format!(
+                            "content {key} must be a scalar or an array of scalars (step {})",
+                            step.step_id
+                        )));
+                    }
+                }
+            }
         }
         Ok(())
     }
 
-    /// 逐个步骤剔除路径类参数，返回被剔除的键（去重后按出现顺序）。
+    /// 逐个步骤剔除路径类参数（快照与 v6 正文块都剔），返回被剔除的键（去重后按出现顺序）。
     ///
     /// 保存与导入两条路都走它：**模板永不保存路径**是不变量 13 的硬要求，
     /// 只靠调用方（界面）自觉会把"导入一份别人存的模板"变成路径入口。
+    /// 正文块是请求侧表单值，路径键同样不许进（如 f06 的 `baseDir`）。
     pub fn strip_paths(&mut self) -> Vec<String> {
         let mut removed = Vec::new();
         for step in &mut self.steps {
             for key in strip_path_params(&mut step.params_snapshot) {
                 if !removed.contains(&key) {
                     removed.push(key);
+                }
+            }
+            if let Some(content) = &mut step.content {
+                for key in strip_path_params(content) {
+                    if !removed.contains(&key) {
+                        removed.push(key);
+                    }
                 }
             }
         }
@@ -376,6 +413,23 @@ fn script_key(params: &Map<String, Value>) -> Option<&str> {
         .map(|key| key.as_str())
 }
 
+/// 正文块的值形态门：只允许标量或标量数组。
+///
+/// 嵌套对象既不是任何路由参数的形状，也会把「模板是声明式数据」的边界
+/// （方案 §15.2.4）变成任意 JSON 容器——在保存/导入侧就拒掉。
+fn content_value_is_plain(value: &Value) -> bool {
+    match value {
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => true,
+        Value::Array(items) => items.iter().all(|item| {
+            matches!(
+                item,
+                Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null
+            )
+        }),
+        Value::Object(_) => false,
+    }
+}
+
 /// 导入前的路径剔除：移除源路径/输出目录类参数，返回被剔除的键。
 pub fn strip_path_params(params: &mut Map<String, Value>) -> Vec<String> {
     let mut removed = Vec::new();
@@ -397,6 +451,9 @@ pub fn strip_path_params(params: &mut Map<String, Value>) -> Vec<String> {
 ///
 /// v4→v5 没有可补的字段：`sampling` 从 v5 起才在保存时采集，旧模板留 `None`，
 /// 套用时由壳层映射表按该功能的缺省补（迁移不猜采样值）。
+///
+/// v5→v6 同理：`content`（变换正文）从 v6 起才在保存时采集，旧模板留 `None`——
+/// 需要正文的六个功能在套用时如实拒绝并提示重存（迁移不猜正文，ADR-0081）。
 ///
 /// 低版本（1/2）迁移；高于 `CURRENT_RECIPE_SCHEMA_VERSION` → E1007（不猜测语义）。
 pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelError> {
@@ -439,6 +496,13 @@ pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelErro
             v4.strip_paths();
             v4.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
             Ok(v4)
+        }
+        5 => {
+            let mut v5: RecipeDocument =
+                serde_json::from_value(payload).map_err(recipe_parse_error)?;
+            v5.strip_paths();
+            v5.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
+            Ok(v5)
         }
         CURRENT_RECIPE_SCHEMA_VERSION => {
             let mut current: RecipeDocument =
@@ -488,6 +552,7 @@ impl RecipeV1 {
                 source: StepSource::Original,
                 feature: feature_for_action(self.kind).map(str::to_string),
                 sampling: None,
+                content: None,
             }],
             match_: Some(RecipeMatch::default()),
             source_format: None,
@@ -516,6 +581,7 @@ impl RecipeDocumentV2 {
                 source: StepSource::Original,
                 feature: feature_for_action(self.kind).map(str::to_string),
                 sampling: None,
+                content: None,
             }],
             match_: self.match_,
             source_format: self.source_format,
@@ -586,6 +652,7 @@ mod tests {
             source: StepSource::Previous,
             feature: None,
             sampling: None,
+            content: None,
         });
         assert_eq!(
             recipe.strip_paths(),
@@ -896,6 +963,7 @@ mod tests {
             source: StepSource::Previous,
             feature: Some("c11".to_string()),
             sampling: None,
+            content: None,
         });
         let error = multi.single_step_binding().unwrap_err();
         assert_eq!(error.code, "E1002");
@@ -1016,5 +1084,102 @@ mod tests {
             "createdAt": "2026-11-07T00:00:00Z"
         });
         assert!(migrate_recipe_value(payload).is_err());
+    }
+    #[test]
+    fn v6_round_trips_content_and_strips_paths_from_it() {
+        let mut params = Map::new();
+        params.insert("target".to_string(), json!("utf-8"));
+        let mut bound = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8M",
+            "归档模板（带规则正文）",
+            PlanAction::Move,
+            params.clone(),
+            "2026-11-07T00:00:00Z",
+            Some("c08".to_string()),
+        );
+        let mut content = Map::new();
+        content.insert("rules".to_string(), json!(["docs|ext:pdf", "imgs|ext:png"]));
+        bound.steps[0].content = Some(content);
+        bound.validate().unwrap();
+        let json = serde_json::to_value(&bound).unwrap();
+        assert_eq!(
+            json["steps"][0]["content"]["rules"],
+            json!(["docs|ext:pdf", "imgs|ext:png"])
+        );
+        let back: RecipeDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(back, bound);
+
+        // 正文块同样受不变量 13 约束：路径键剔除（f06 的 baseDir 是路径不是参数）
+        let mut with_path = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8N",
+            "带 baseDir 的合并模板",
+            PlanAction::Merge,
+            params,
+            "2026-11-07T00:00:00Z",
+            Some("f06".to_string()),
+        );
+        let mut content = Map::new();
+        content.insert("sourceColumn".to_string(), json!(true));
+        content.insert("baseDir".to_string(), json!("/leaked/root"));
+        with_path.steps[0].content = Some(content);
+        assert_eq!(with_path.strip_paths(), vec!["baseDir".to_string()]);
+        let content = with_path.steps[0].content.as_ref().unwrap();
+        assert!(content.contains_key("sourceColumn"));
+        assert!(!content.contains_key("baseDir"));
+    }
+
+    #[test]
+    fn v5_payload_migrates_to_v6_with_content_absent() {
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8P",
+            "schemaVersion": 5,
+            "name": "v5 的排序模板",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "csv-sort",
+                "paramsSnapshot": {"order": "asc"},
+                "source": "original",
+                "feature": "c13"
+            }],
+            "createdAt": "2026-11-07T00:00:00Z"
+        });
+        let migrated = migrate_recipe_value(payload).unwrap();
+        assert_eq!(migrated.schema_version, CURRENT_RECIPE_SCHEMA_VERSION);
+        assert_eq!(migrated.steps[0].content, None);
+        assert!(migrated.validate().is_ok());
+    }
+
+    #[test]
+    fn content_rejects_scripts_and_nested_objects() {
+        let mut recipe = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8Q",
+            "正文里塞脚本",
+            PlanAction::Move,
+            Map::new(),
+            "2026-11-07T00:00:00Z",
+            Some("c08".to_string()),
+        );
+        let mut content = Map::new();
+        content.insert("rules".to_string(), json!(["ok"]));
+        content.insert("script".to_string(), json!("rm -rf /"));
+        recipe.steps[0].content = Some(content);
+        let error = recipe.validate().unwrap_err();
+        assert_eq!(error.code, "E1002");
+        assert!(error.message.contains("script"), "{error:?}");
+
+        // 嵌套对象不是任何路由参数的形状：保存/导入侧就拒，不开任意 JSON 容器的口子
+        let mut nested = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8R",
+            "正文里塞对象",
+            PlanAction::Move,
+            Map::new(),
+            "2026-11-07T00:00:00Z",
+            Some("c08".to_string()),
+        );
+        let mut content = Map::new();
+        content.insert("rules".to_string(), json!([{"a": 1}]));
+        nested.steps[0].content = Some(content);
+        let error = nested.validate().unwrap_err();
+        assert!(error.message.contains("scalar"), "{error:?}");
     }
 }

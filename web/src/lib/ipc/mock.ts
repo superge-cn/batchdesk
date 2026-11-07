@@ -765,6 +765,7 @@ export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
           kind: input.kind ?? "rename",
           feature: input.feature ?? inferFeature(input.kind ?? "rename"),
           sampling: input.sampling,
+          content: input.content,
           paramsSnapshot: stripPaths(input.paramsSnapshot ?? {}),
           source: "original"
         }
@@ -799,12 +800,21 @@ export function mockExportRecipe(recipeId: string): RecipeExportPayload {
 }
 
 /**
- * 「正文不随计划保存」的功能码（OQ-41②，ADR-0080）：变换正文（归档规则/清单文本/
- * 过滤条件/排序键/拆分合并规格/来源列语义/列选择）在计划参数里只剩计数，
- * 映射表补不出来 ⇒ 一键套用语义上不可行。浏览器 mock 与壳层
- * `recipe_apply::FEATURE_PARAM_MAP` 的 refuse 清单同源，由 check_docs.py 逐码核对。
+ * 需要变换正文的功能码与键集（v6，OQ-43 裁决②，ADR-0081）：这些功能的请求侧
+ * 语义（规则/列选择/条件/排序键/拆分合并规格/来源列开关）从不进 plan.params，
+ * 模板没有正文就回放不了——describe 据此判定可套用与否（缺正文＝提示重存）。
+ * 键集与壳层 `recipe_apply::FEATURE_PARAM_MAP` 的 content 声明同源，
+ * 由 check_docs.py 逐码核对。f11 不在清单：清单**文件**是路径槽位、路由重读
+ * 其内容（ADR-0081 §2 纠偏，OQ-43 登记时误列）。
  */
-const REFUSED_FEATURES = ["f06", "f07", "c08", "f11", "c12", "c13", "c14"];
+const CONTENT_KEYS: Record<string, { required: string[]; optional: string[]; any: string[][] }> = {
+  f06: { required: ["sourceColumn"], optional: ["sourceColumnName", "sourceColumnRelative"], any: [] },
+  f07: { required: [], optional: [], any: [["columns", "columnIndexes"]] },
+  c08: { required: ["rules"], optional: ["recursive"], any: [] },
+  c12: { required: ["value"], optional: ["column", "op", "filterMode"], any: [["column", "columnIndex"]] },
+  c13: { required: [], optional: ["order", "externalChunkRows"], any: [["sortColumns", "sortColumnIndexes"]] },
+  c14: { required: [], optional: ["splitColumnIndex", "splitSeparator", "splitRegex", "mergeColumnIndexes", "mergeJoinWith", "mergeName"], any: [["splitColumn", "mergeColumns"]] }
+};
 
 /**
  * 浏览器夹具的槽位表（`describeRecipe` 出参用）。与壳层
@@ -877,11 +887,21 @@ export function mockLoadRecipe(recipeId: string, pathParams: Record<string, unkn
     );
   }
   const step = mockGetRecipe(recipeId).steps[0];
+  // 正文白名单外的键拒绝（与壳层同语义，方案 §15.2.4 不静默丢）
+  const contentSpec2 = CONTENT_KEYS[spec.feature];
+  if (contentSpec2 && step.content) {
+    const declared = new Set([...contentSpec2.required, ...contentSpec2.any.flat()]);
+    for (const key of Object.keys(step.content)) {
+      if (!declared.has(key)) {
+        fail("E1002", `loadRecipe: ${spec.feature} has no content key ${key}`);
+      }
+    }
+  }
   // PlanOperationInput 的 kind 字段在类型上只写了 "c09"（C09 形状先行），
   // mockPlan 运行时本就按非 c09 分支给最小夹具——与既有用法一致，这里显式收窄。
   return mockPlan({
     kind: step.kind as "c09",
-    params: { ...step.paramsSnapshot, ...pathParams } as PlanOperationInput["params"],
+    params: { ...step.paramsSnapshot, ...(step.content ?? {}), ...pathParams } as PlanOperationInput["params"],
     sourcePaths: []
   });
 }
@@ -908,15 +928,24 @@ export function mockDescribeRecipe(recipeId: string): RecipeApplySpec {
     };
   }
   const feature = step.feature;
-  if (REFUSED_FEATURES.includes(feature)) {
-    return {
-      ...base,
-      applicable: false,
-      reason:
-        "transformation content is not carried in plan params; reconfigure on the feature page",
-      required: [],
-      outputs: []
-    };
+  const contentSpec = CONTENT_KEYS[feature];
+  if (contentSpec) {
+    // 缺正文＝回放不了该功能的变换语义：如实拒绝并提示重存（v6 起保存通道采集正文）
+    const content = (step.content ?? {}) as Record<string, unknown>;
+    const has = (key: string) =>
+      content[key] !== undefined && content[key] !== null;
+    const missingRequired = contentSpec.required.filter((key) => !has(key));
+    const anyMissed = contentSpec.any.some((group) => !group.some(has));
+    if (missingRequired.length > 0 || anyMissed) {
+      return {
+        ...base,
+        applicable: false,
+        reason:
+          "transformation content is not stored in this template; re-save it from the feature page (schema v6)",
+        required: [],
+        outputs: []
+      };
+    }
   }
   const slots = APPLY_SLOTS[feature];
   if (!slots) {

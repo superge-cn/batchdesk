@@ -659,5 +659,6 @@
   "templates.preview.entries": "Plan entries ({total})",
   "templates.preview.execute": "Run this plan",
   "templates.preview.warning": "Warning",
-  "templates.stepSampling": "Sampling: {sampling}"
+  "templates.stepSampling": "Sampling: {sampling}",
+  "templates.stepContent": "Content: {count} entries"
 }

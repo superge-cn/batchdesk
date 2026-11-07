@@ -853,11 +853,11 @@ def check_recipe_feature_table(errors: list[str]) -> None:
 
 
 def check_recipe_apply_tables(errors: list[str]) -> None:
-    """套用通道两张表：壳层与浏览器 mock 必须逐键相等（OQ-41②，ADR-0080）。
+    """套用通道两张表：壳层与浏览器 mock 必须逐键相等（OQ-41②/OQ-43②，ADR-0080/0081）。
 
     动因：`describeRecipe` 的两个数据面在两处各写一份——壳层
-    `recipe_apply::FEATURE_PATH_SLOTS`（路径槽位）与 `FEATURE_PARAM_MAP` 的 refuse
-    （正文缺失拒绝清单），浏览器 mock 的 `APPLY_SLOTS`／`REFUSED_FEATURES`。
+    `recipe_apply::FEATURE_PATH_SLOTS`（路径槽位）与 `FEATURE_PARAM_MAP` 的 content
+    声明（需要正文的功能与键集），浏览器 mock 的 `APPLY_SLOTS`／`CONTENT_KEYS`。
     mock 比壳层宽松，Playwright 就会走一条真机不存在的通路（点了必报错）；
     比壳层严格则浏览器里少一个本可用的按钮。两处漂移只能靠机器拦。
     c10 压缩模式的槽位是按快照 `mode` 动态分流的（`C10_COMPRESS_SLOTS`），
@@ -890,13 +890,16 @@ def check_recipe_apply_tables(errors: list[str]) -> None:
 
     param_anchor = shell_text.find("pub const FEATURE_PARAM_MAP")
     param_text = shell_text[param_anchor:] if param_anchor >= 0 else ""
-    shell_refused = set(
-        match.group(2)
-        for match in re.finditer(
-            r"FeatureParamMap \{\s*([^{}]*?)\.\.m\(\"([a-z0-9]+)\"\)", param_text, re.DOTALL
-        )
-        if "refuse: Some(" in match.group(1)
-    )
+    # v6（OQ-43②，ADR-0081）：静态 refuse 清单已被 content 声明取代——
+    # 核对对象改为「需要正文的功能集」与每功能的正文键集。
+    shell_content: dict[str, set[str]] = {}
+    for match in re.finditer(
+        r"FeatureParamMap \{\s*([^{}]*?)\.\.m\(\"([a-z0-9]+)\"\)", param_text, re.DOTALL
+    ):
+        body, feature = match.group(1), match.group(2)
+        keys = set(re.findall(r'\"([a-zA-Z]+)\", ContentReq::', body))
+        if keys:
+            shell_content[feature] = keys
 
     mock_text = mock.read_text(encoding="utf-8")
     # 不能用 _paired_block：锚点后第一个花括号是类型注解的，不是对象字面量，
@@ -920,12 +923,20 @@ def check_recipe_apply_tables(errors: list[str]) -> None:
 
             mock_slots[feature] = (parse_ts_slots(required), parse_ts_slots(outputs))
 
-    refused_match = re.search(
-        r"const REFUSED_FEATURES[^\n]*= \[([^\]]*)\]", mock_text
+    content_match = re.search(
+        r"const CONTENT_KEYS[^\n]*= \{(.*?)\n\};", mock_text, re.DOTALL
     )
-    mock_refused = set()
-    if refused_match:
-        mock_refused = set(re.findall(r"\"([a-z0-9]+)\"", refused_match.group(1)))
+    mock_content: dict[str, set[str]] = {}
+    if content_match:
+        # 六个条目都是单行（门禁锚点按行解析，多行会静默漏配——自校数量兜底）
+        for match in re.finditer(
+            r"([a-z][a-z0-9]+): \{ required: \[([^\]]*)\](?:, optional: \[([^\]]*)\])?, any: (\[.*?\]) \}",
+            content_match.group(1),
+        ):
+            feature, required, optional, any_ = match.groups()
+            keys = set(re.findall(r'\"([a-zA-Z]+)\"', f"{required} {optional or ''} {any_}"))
+            if keys:
+                mock_content[feature] = keys
 
     # 自校：解析缩水说明写法变了（探测器失效＝没有正例）
     if len(shell_slots) < 24 or len(mock_slots) < 24:
@@ -934,10 +945,10 @@ def check_recipe_apply_tables(errors: list[str]) -> None:
             f"{len(mock_slots)} 项，期望各 ≥24）——锚点或写法变了"
         )
         return
-    if len(shell_refused) != 7 or len(mock_refused) != 7:
+    if len(shell_content) != 6 or len(mock_content) != 6:
         errors.append(
-            f"配方套用表核对自校失败：拒绝清单解析异常（壳层 {len(shell_refused)} 项／"
-            f"mock {len(mock_refused)} 项，期望各 7）——锚点或写法变了"
+            f"配方套用表核对自校失败：正文键集解析异常（壳层 {len(shell_content)} 个功能／"
+            f"mock {len(mock_content)} 个，期望各 6）——锚点或写法变了"
         )
         return
 
@@ -954,12 +965,19 @@ def check_recipe_apply_tables(errors: list[str]) -> None:
                 f"配方套用表漂移：{feature} 的槽位不一致 → "
                 f"壳层 {shell_slots[feature]}／mock {mock_slots[feature]}"
             )
-    if shell_refused != mock_refused:
+    if shell_content.keys() != mock_content.keys():
         errors.append(
-            "配方拒绝清单漂移：壳层 refuse 与 mock REFUSED_FEATURES 不一致 → "
-            f"仅壳层 {'、'.join(sorted(shell_refused - mock_refused))}／"
-            f"仅 mock {'、'.join(sorted(mock_refused - shell_refused))}"
+            "配方正文键集漂移：需要正文的功能集不一致 → "
+            f"仅壳层 {'、'.join(sorted(set(shell_content) - set(mock_content)))}／"
+            f"仅 mock {'、'.join(sorted(set(mock_content) - set(shell_content)))}"
         )
+    for feature in sorted(set(shell_content) & set(mock_content)):
+        if shell_content[feature] != mock_content[feature]:
+            errors.append(
+                f"配方正文键集漂移：{feature} 的 content 键不一致 → "
+                f"仅壳层 {'、'.join(sorted(shell_content[feature] - mock_content[feature]))}／"
+                f"仅 mock {'、'.join(sorted(mock_content[feature] - shell_content[feature]))}"
+            )
 
 
 def main() -> int:

@@ -659,5 +659,6 @@
   "templates.preview.entries": "计划条目（{total}）",
   "templates.preview.execute": "执行此计划",
   "templates.preview.warning": "警告",
-  "templates.stepSampling": "采样：{sampling}"
+  "templates.stepSampling": "采样：{sampling}",
+  "templates.stepContent": "正文：{count} 项"
 }

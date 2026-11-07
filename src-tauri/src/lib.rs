@@ -1459,6 +1459,28 @@ mod tests {
         sampling: Option<kernel::recipe::RecipeSampling>,
         path_params: &[(&str, serde_json::Value)],
     ) -> serde_json::Value {
+        slots_of_full(feature, snapshot_pairs, sampling, None, path_params)
+    }
+
+    fn slots_of_content(
+        feature: &str,
+        content: &[(&str, serde_json::Value)],
+        path_params: &[(&str, serde_json::Value)],
+    ) -> serde_json::Value {
+        let mut content_map = serde_json::Map::new();
+        for (key, value) in content {
+            content_map.insert((*key).to_string(), value.clone());
+        }
+        slots_of_full(feature, &[], None, Some(content_map), path_params)
+    }
+
+    fn slots_of_full(
+        feature: &str,
+        snapshot_pairs: &[(&str, serde_json::Value)],
+        sampling: Option<kernel::recipe::RecipeSampling>,
+        content: Option<serde_json::Map<String, serde_json::Value>>,
+        path_params: &[(&str, serde_json::Value)],
+    ) -> serde_json::Value {
         use kernel::plan::PlanAction;
         use kernel::recipe::RecipeDocument;
         let mut snapshot = serde_json::Map::new();
@@ -1478,6 +1500,7 @@ mod tests {
             Some(feature.to_string()),
         );
         document.steps[0].sampling = sampling;
+        document.steps[0].content = content;
         let invocation = recipe_apply::build_invocation(&document, &object)
             .unwrap_or_else(|error| panic!("{feature} 槽位注入失败：{error}"));
         invocation.params
@@ -1516,22 +1539,44 @@ mod tests {
         );
         assert_eq!(parsed.output, "/out/all.txt");
 
-        // f06…f09 → CsvPlanParams{files, output / outputDir}
-        // f06 只要 `output`（plan_csv.rs:215 明写 requires output），
-        // f07–f09 才是 output/outputDir 二选一（plan_csv.rs:115-134）。
-        // f06/f07 是「正文缺失」拒绝功能（OQ-41②），到不了槽位注入——
-        // 它们的槽位表保留给 OQ-43，这里只断言 describe 如实预声明。
-        for feature in ["f06", "f07"] {
-            let document = RecipeDocument::from_single_step(
-                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
-                "正文缺失",
-                PlanAction::CsvExtract,
-                serde_json::Map::new(),
-                "2026-11-07T00:00:00Z",
-                Some(feature.to_string()),
+        // f06/f07（OQ-43② 后可套用）：正文键必须真的落进路由字段——
+        // f06 的 sourceColumn 是 bool（计划展示串 String 已被 drop，否则反序列化硬失败），
+        // f07 的 columnIndexes 是 Vec（计划展示串 `columns` 已被 drop）。
+        {
+            let params = slots_of_content(
+                "f06",
+                &[
+                    ("sourceColumn", json!(true)),
+                    ("sourceColumnName", json!("来源文件")),
+                ],
+                &[
+                    ("files", json!(["/in/a.csv"])),
+                    ("output", json!("/out/all.csv")),
+                ],
             );
-            let spec = recipe_apply::describe(&document);
-            assert!(!spec.applicable, "{feature} 应当被预声明为不可套用");
+            let parsed: plan_csv::CsvPlanParams = serde_json::from_value(params).unwrap();
+            assert!(parsed.source_column, "f06 的 sourceColumn 没落进 bool 字段");
+            assert_eq!(
+                parsed.source_column_name.as_deref(),
+                Some("来源文件"),
+                "f06 的 sourceColumnName 槽"
+            );
+            assert!(
+                parsed.columns.is_empty(),
+                "f06 的计划展示键 columns 应被 drop"
+            );
+        }
+        {
+            let params = slots_of_content(
+                "f07",
+                &[("columnIndexes", json!([2]))],
+                &[
+                    ("files", json!(["/in/a.csv"])),
+                    ("outputDir", json!("/out")),
+                ],
+            );
+            let parsed: plan_csv::CsvPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(parsed.column_indexes, vec![2], "f07 的 columnIndexes 槽");
         }
         for feature in ["f08", "f09"] {
             let params = slots_of(
@@ -1645,20 +1690,78 @@ mod tests {
         assert_eq!(parsed.files, vec!["/a.csv".to_string()]);
         assert_eq!(parsed.output.as_deref(), Some("/b.csv"));
 
-        // c14 原来在这里做列数槽断言；同 f06/f07——拆分/合并规格不随计划保存，
-        // OQ-41② 后是「正文缺失」拒绝功能，到不了槽位注入（见
-        // content_free_features_refuse_with_reason），OpPlanParams 的槽位键保留给 OQ-43。
+        // c12/c13/c14（OQ-43② 后可套用）：条件/排序键/拆分合并规格只能来自 v6 正文，
+        // 注入的键必须落进 OpPlanParams 的对应字段；c12 的计划键 `mode`（keep|drop）
+        // 还要改名进路由的 `filterMode`。
         {
-            let document = RecipeDocument::from_single_step(
-                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
-                "c14 列拆分",
-                PlanAction::CsvColumns,
-                serde_json::Map::new(),
-                "2026-11-07T00:00:00Z",
-                Some("c14".to_string()),
+            let params = slots_of_content(
+                "c12",
+                &[
+                    ("column", json!("qty")),
+                    ("value", json!("10")),
+                    ("op", json!("eq")),
+                ],
+                &[("files", json!(["/a.csv"])), ("output", json!("/b.csv"))],
             );
-            let spec = recipe_apply::describe(&document);
-            assert!(!spec.applicable, "c14 应当被预声明为不可套用");
+            let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(parsed.column.as_deref(), Some("qty"), "c12 的条件列槽");
+            assert_eq!(parsed.value.as_deref(), Some("10"), "c12 的条件值槽");
+            assert_eq!(parsed.op.as_deref(), Some("eq"), "c12 的比较符槽");
+        }
+        {
+            // 计划键 `mode`（keep|drop）改名进路由的 `filterMode`：正文只给
+            // 条件列与值，快照带 mode——落地后 filter_mode 应当是改名来的 keep。
+            let params = slots_of_full(
+                "c12",
+                &[("mode", json!("keep"))],
+                None,
+                Some(serde_json::from_value(json!({"column": "qty", "value": "10"})).unwrap()),
+                &[("files", json!(["/a.csv"])), ("output", json!("/b.csv"))],
+            );
+            let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(
+                parsed.filter_mode.as_deref(),
+                Some("keep"),
+                "c12 的 mode 没改名进 filterMode"
+            );
+        }
+        {
+            let params = slots_of_content(
+                "c13",
+                &[
+                    ("sortColumns", json!(["id", "ts"])),
+                    ("order", json!("desc")),
+                ],
+                &[("files", json!(["/a.csv"])), ("outputDir", json!("/out"))],
+            );
+            let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(
+                parsed.sort_columns,
+                vec!["id".to_string(), "ts".to_string()],
+                "c13 的排序键槽"
+            );
+            assert_eq!(parsed.order.as_deref(), Some("desc"));
+        }
+        {
+            let params = slots_of_content(
+                "c14",
+                &[
+                    ("splitColumn", json!("tags")),
+                    ("splitSeparator", json!(";")),
+                ],
+                &[("files", json!(["/a.csv"])), ("outputDir", json!("/out"))],
+            );
+            let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(
+                parsed.split_column.as_deref(),
+                Some("tags"),
+                "c14 的拆分列槽"
+            );
+            assert_eq!(
+                parsed.split_separator.as_deref(),
+                Some(";"),
+                "c14 的分隔符槽"
+            );
         }
     }
 
@@ -1679,21 +1782,20 @@ mod tests {
         assert_eq!(parsed.source_root, "/src");
         assert_eq!(parsed.target_root, "/dst");
 
-        // c08 原来在这里做槽位落地断言；OQ-41② 落地后它是「正文缺失」拒绝功能
-        // （归档规则不随计划保存，映射表补不出），build_invocation 在槽位注入前就拒绝，
-        // 槽位键落在哪已不影响行为——拒绝口径由 content_free_features_refuse_with_reason
-        // 覆盖，槽位表保留是为 OQ-43（正文进模板）裁决后能直接接上。
+        // c08（OQ-43② 后可套用）：归档规则只能来自 v6 正文（计划只存 ruleCount），
+        // 注入的 `rules` 必须落进 ArchivePlanParams 的必填 Vec 字段。
         {
-            let document = RecipeDocument::from_single_step(
-                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
-                "c08 归档",
-                PlanAction::Move,
-                serde_json::Map::new(),
-                "2026-11-07T00:00:00Z",
-                Some("c08".to_string()),
+            let params = slots_of_content(
+                "c08",
+                &[("rules", json!(["docs|ext:pdf", "imgs|ext:png"]))],
+                &[("sourceRoot", json!("/src")), ("targetRoot", json!("/dst"))],
             );
-            let spec = recipe_apply::describe(&document);
-            assert!(!spec.applicable, "c08 应当被预声明为不可套用");
+            let parsed: plan_manifest::ArchivePlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(
+                parsed.rules,
+                vec!["docs|ext:pdf".to_string(), "imgs|ext:png".to_string()],
+                "c08 的 rules 正文槽"
+            );
         }
 
         // c10 解压 → archive + outputDir；压缩 → sources + output
@@ -1757,21 +1859,16 @@ mod tests {
         assert_eq!(parsed.file, "/a.csv");
         assert_eq!(parsed.output_dir, "/out");
 
-        // f11 原来在这里做槽位落地断言；同 c08——清单正文不随计划保存，现在是
-        // 「正文缺失」拒绝功能（content_free_features_refuse_with_reason 覆盖），
-        // F11ShellParams{list, root} 的槽位表保留给 OQ-43。
-        {
-            let document = RecipeDocument::from_single_step(
-                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
-                "f11 建目录",
-                PlanAction::CreateDir,
-                serde_json::Map::new(),
-                "2026-11-07T00:00:00Z",
-                Some("f11".to_string()),
-            );
-            let spec = recipe_apply::describe(&document);
-            assert!(!spec.applicable, "f11 应当被预声明为不可套用");
-        }
+        // f11（ADR-0081 §2 纠偏后可套用）：清单**文件**与建档根都是路径槽位，
+        // 路由重读清单内容——快照没有正文不影响回放，恢复原有的槽位落地断言。
+        let params = slots_of(
+            "f11",
+            &[],
+            &[("list", json!("/list.csv")), ("root", json!("/data"))],
+        );
+        let parsed: F11ShellParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.list, "/list.csv", "f11 的清单槽");
+        assert_eq!(parsed.root, "/data", "f11 的建档根槽");
 
         let params = slots_of("f12", &[], &[("dir", json!("/data"))]);
         let parsed: F12ShellParams = serde_json::from_value(params).unwrap();

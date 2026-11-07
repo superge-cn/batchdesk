@@ -1,6 +1,6 @@
 # 03 配置 Schema 与迁移契约
 
-> 状态：已评审·实现冻结 v1.8（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36；2026-11-06 §11 补实现记录之三：`layout.sidebarWidth` 与 `tables` 的列宽/排序首次有界面把手，契约条文未变） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
+> 状态：已评审·实现冻结 v1.9（2026-10-27 评审；2026-10-28 增量修订，用户确认；2026-11-05 §7 补实现状态：六条模板命令已接界面、保存时剔除路径参数、`loadRecipe` 仍阻塞于 OQ-36；2026-11-06 §11 补实现记录之三：`layout.sidebarWidth` 与 `tables` 的列宽/排序首次有界面把手，契约条文未变） ｜ 适用：crates/kernel（类型）、src-tauri（存储）、web/（设置区） ｜ 日期：2026-10-27
 >
 > 上游：[01-内核接口与IPC契约](01-内核接口与IPC契约.md)（命令名与错误结构）、[02-Web双通道传输契约](02-Web双通道传输契约.md)（Web 存储形态）。
 > 权威：方案 §4.5（三档优先级/存储位置/版本迁移/安全默认值）、§6.7（设置区分组）、§7.3（参数配置）、§4.6／§9.6（日志双轨与保留）、§9.5（配方与配置带版本、位图配置驱动）、§8.5（授权数据单独加密）、§13.8（跨形态只经配方导出迁移）、§15（处理模板与持久化扩展）。
@@ -168,7 +168,7 @@ interface RecipeDocumentV2 {
 }
 ```
 
-### 5.2 RecipeDocument v3／v4／v5（Phase B：单步/多步统一）
+### 5.2 RecipeDocument v3／v4／v5／v6（Phase B：单步/多步统一）
 
 ```ts
 interface RecipeDocumentV3 {
@@ -193,6 +193,12 @@ interface TemplateStep {
     sampleBlocks?: number;          //   套用时存档值优先，未存由壳层映射表按界面缺省补（ADR-0080）；
     sampleBytes?: number;           //   值 ≥1；只存该功能实际用到的键
   }
+  content?: Record<string, unknown>; // v6 新增（OQ-43 裁决②，方案 §15.2.1）：变换正文——
+                                     //   f06/f07/c08/c12/c13/c14 的请求侧语义（规则/列选择/
+                                     //   条件/排序键/拆分合并规格/来源列开关）从不进 plan.params，
+                                     //   保存时从界面采集、套用时按功能键白名单注入请求（未知键
+                                     //   拒绝）；值只允许标量或标量数组，路径/脚本键同快照剔除/拒绝；
+                                     //   f11 不在其列（清单文件是路径槽位，ADR-0081 §2 纠偏）
 }
 ```
 
@@ -210,14 +216,14 @@ interface TemplateStep {
 2. **幂等与原子**：迁移在内存完成、整体原子落盘（临时文件 + 改名，§4.3 习惯）；失败保留原文件并报 E5010，不得写半截。
 3. **首次读写兜底**：文件不存在 → 生成全默认档；文件损坏 → 保留损坏副本 `config.corrupt.<ts>.json`，回默认档并报 E5009（不静默清空）。
 4. **降级策略**：旧版本读到更高 `configVersion` → 只读模式 + 提示升级，不猜测字段语义。
-5. **模板迁移**：同规则独立执行，`schemaVersion` 与 `configVersion` 互不耦合；v1→v2 升元数据（match/description/时间戳，match 为空），v2→v3 把 `kind/paramsSnapshot` 包成 `steps[0]`（`source="original"`），v3→v4 补 `feature`（只补动作→功能码**唯一**的项，一对多保持未绑定），v4→v5 **无字段可补**（`sampling` 从 v5 起才在保存时采集，旧模板留空＝套用时按缺省补，迁移不猜值）；未知字段不猜测。
+5. **模板迁移**：同规则独立执行，`schemaVersion` 与 `configVersion` 互不耦合；v1→v2 升元数据（match/description/时间戳，match 为空），v2→v3 把 `kind/paramsSnapshot` 包成 `steps[0]`（`source="original"`），v3→v4 补 `feature`（只补动作→功能码**唯一**的项，一对多保持未绑定），v4→v5 **无字段可补**（`sampling` 从 v5 起才在保存时采集，旧模板留空＝套用时按缺省补，迁移不猜值），v5→v6 同理（`content` 从 v6 起才采集；需要正文的功能对旧模板如实拒绝并提示重存，迁移不猜正文，ADR-0081）；未知字段不猜测。
 6. **UiState 不迁移**：`uiStateVersion` 不兼容或文件损坏时仅重置 UI 状态（回默认布局），不触碰 ConfigDocument/任务/日志。
 
 ### 6.2 迁移函数注册（kernel 内、纯函数）
 
 ```rust
 pub const CURRENT_CONFIG_VERSION: u32 = 1;          // v1 schema 起步；schema 演进时 +1 并注册迁移函数
-pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 5;   // 与 configVersion 互不耦合（§6.1-5）；v4=feature、v5=sampling
+pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 6;   // 与 configVersion 互不耦合（§6.1-5）；v4=feature、v5=sampling、v6=content
 pub const CURRENT_UI_STATE_VERSION: u32 = 1;         // UiState 独立版本，不兼容即重置
 
 pub type MigrationFn = fn(ConfigDocument) -> Result<ConfigDocument, KernelError>;
@@ -255,6 +261,7 @@ pub fn migration_chain() -> &'static [(u32, MigrationFn)];  // [(1, m1_to_2), (2
 - `saveRecipe` 落盘前对每个步骤剔除路径参数（`RecipeDocumentV3::strip_paths`）：模板不保存源路径/输出目录（不变量 13），此前只有导入路径会剔除。名单按本仓库参数名真实语义校正——`source`／`target` 是**编码**不是路径，旧表把 `source` 当路径会让模板丢编码。
 - **OQ-36 已裁并落地（①）**：schema v4 记 `feature`，保存时记当前功能页、迁移时只补唯一映射、界面如实显示绑定与未绑定；两处副本（内核推断表↔浏览器 mock）由 `check_docs.py` 的配方功能码表核对盯住（含自校）。
 - **`loadRecipe` 已实现（OQ-40 裁决①）**：入参 `{recipeId, pathParams}`，壳层按路径槽位表把文件集写进该功能认的键，再走与 `planOperation` 同一条路由、不进队列（ADR-0077 §2）。
+- **OQ-43 已裁并落地（②，v1.9）**：`RecipeDocument` v6 增 `content` 变换正文块——六功能的规则/列选择/条件/排序键/拆分合并规格进模板不进快照，套用时按功能键白名单注入（未知键拒绝、覆盖快照同名键）；缺正文的旧模板如实拒绝并提示重存；**f11 纠偏为可套用**（清单文件是路径槽位，登记时误列）；两处副本（壳层 content 声明↔浏览器 mock CONTENT_KEYS）由 check_docs 配方套用表核对盯住。见 [ADR-0081](../adr/0081-OQ43裁决二正文进模板.md)。
 - **OQ-41 已裁并落地（②）**：快照保持「计划自带那份」；壳层新增逐功能**参数映射表**（改名/补采样缺省/剔 `auto` 字面量/maxRatio 数值化），17 个功能可一键套用；f06/f07/c08/f11/c12/c13/c14 七个功能的变换正文不随计划保存（计划只存计数），映射补不出正文——**如实拒绝**并由 `describeRecipe` 预声明，界面不给按钮；c11 整行去重可套用、按键列拒绝；c10 旧压缩模板（无 `mode`）拒绝并提示重存。后续如需覆盖七类，走「正文进模板」的单独裁决（OQ-43）。槽位表与拒绝清单的两处副本（壳层↔浏览器 mock）由 `check_docs.py` 的配方套用表核对盯住。见 [ADR-0080](../adr/0080-OQ41裁决二与套用映射表.md)。
 
 ## 8. 授权数据的边界（§8.5 / §9.5）
@@ -330,6 +337,8 @@ interface UiState {
 | v1.7 | 2026-11-06 | OQ-40 裁决①落地：§7 命令表 `loadRecipe` 入参改为 `{recipeId, pathParams}`（路径槽位表逐条取自路由结构体，见 ADR-0077），实现状态由「未实现」改为「已实现但受形状差异限制」；新登记 OQ-41——参数快照（计划形状）与路由请求形状在 c01/c02/c03 上不一致。 |
 
 | v1.8 | 2026-11-07 | OQ-41 裁决②落地：§5.2 增 **RecipeDocument v5**——`TemplateStep` 增 `sampling`（采样类技术口径，进模板**不进快照**，方案 §15.2.1 由产品方案 v1.20 收编），`CURRENT_RECIPE_SCHEMA_VERSION` 4→5，v4→v5 迁移无字段可补（迁移不猜采样值）；**§6.2 的常量行由 3 直接更正为 5**（v1.6 只更了 §5.2、漏了本行，本批钉住）；§7 命令表新增 `describeRecipe`（套用面静态评估，与 `loadRecipe` 同源判定）；`loadRecipe` 行改写——快照形状≠请求形状由逐功能**参数映射表**闭合（17 功能可套用／7 功能正文缺失如实拒绝，c11 按键列拒绝、c10 旧压缩模板拒绝重存），OQ-41 关闭。实现见 [ADR-0080](../adr/0080-OQ41裁决二与套用映射表.md)。 |
+
+| v1.9 | 2026-11-07 | OQ-43 裁决②落地：§5.2 增 **RecipeDocument v6**——`TemplateStep` 增 `content`（变换正文，进模板不进快照，值只允许标量/标量数组，路径键 `basedir` 顺带补进剔除名单），`CURRENT_RECIPE_SCHEMA_VERSION` 5→6，v5→v6 迁移无字段可补；六功能（f06/f07/c08/c12/c13/c14）套用由正文补齐，**f11 纠偏为可套用**（清单文件是路径槽位，ADR-0080 §2 登记时误列）；壳层映射表的静态 refuse 被 content 键白名单（Required/Optional/any 组）取代，未知键拒绝。实现见 [ADR-0081](../adr/0081-OQ43裁决二正文进模板.md)。 |
 | v1.6 | 2026-11-06 | OQ-36 裁决①落地：§5.2 补 **RecipeDocument v4**——`TemplateStep` 增 `feature`（功能码），`CURRENT_RECIPE_SCHEMA_VERSION` 3→4；迁移只补**动作→功能码唯一**的 11 项，一对多动作保持 `None`＝**不可套用**（不猜功能）；§7 的 `loadRecipe` 阻塞理由随之改写：功能码已不是缺口，缺的是**输入通道**（模板按不变量 13 不存路径，只给 `recipeId` 产不出计划），登记为 OQ-40 待裁决。实现见 [ADR-0076](../adr/0076-配方v4记功能码与套用通道缺口.md)。 |
 | v1.5 | 2026-11-06 | 无契约变更：§11.2 的 `layout.sidebarWidth`／`tables.columnWidths`／`tables.sort` 首次接界面把手（侧栏拖宽、列宽拖拽、列头排序），§11.3 的「面板宽度 clamp」与「重置回默认」随之有了真实用户路径；实现口径与占位 token 见 [ADR-0075](../adr/0075-界面状态把手的尺寸来源与排序语义.md)，尺寸终值挂 [OQ-39](../OPEN-QUESTIONS.md)。 |
 

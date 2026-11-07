@@ -376,6 +376,11 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                                 .join(", ")
                             })}`
                           : ""}
+                        {step.content
+                          ? ` · ${t("templates.stepContent", {
+                              count: Object.keys(step.content).length
+                            })}`
+                          : ""}
                         {step.source === "previous" ? ` · ${t("templates.stepPrevious")}` : ""}
                       </span>
                     </li>

@@ -238,10 +238,19 @@ impl SamplingField {
     }
 }
 
-/// 一个功能的「快照→请求」参数映射（OQ-41 裁决②，[ADR-0080](../docs/adr/0080-*.md)）。
+/// 正文块的一个键：模板 `content` 里允许出现的键与必填性（v6，OQ-43 裁决②）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentReq {
+    /// 缺了就拒绝（模板没有正文＝回放不了该功能的变换语义，提示重存）。
+    Required,
+    /// 有就注入、没有由快照/路由缺省兜底。
+    Optional,
+}
+
+/// 一个功能的「快照→请求」参数映射（OQ-41 裁决②＋OQ-43 裁决②，[ADR-0080](../docs/adr/0080-*.md)／[ADR-0081](../docs/adr/0081-*.md)）。
 ///
 /// 快照保持「计划自带那份」（ADR-0072）不动；这张表负责把它变成路由要的请求形状。
-/// 四类处理全部**声明式**，逐类有防漂移断言（见 `lib.rs` 的
+/// 各类处理全部**声明式**，逐类有防漂移断言（见 `lib.rs` 的
 /// `*_slots_land_on_the_route_struct_fields`），依据逐条实测自内核计划生成器与壳层路由结构体：
 /// - `renames`：计划键 → 路由键。同名不同义的键（f04/f06 旧 `target`）已在内核侧改名
 ///   （ADR-0080），这里只剩纯改名；
@@ -249,24 +258,30 @@ impl SamplingField {
 ///   `Delimiter::parse` 不认、只认具体分隔符或缺省——剔除即回到"自动"语义；
 /// - `parse_f64`：计划把数值格式化成串（c10 的 `maxRatio`），路由要 `f64`；
 ///   解析失败就报错，不猜；
-/// - `sampling`：路由必填但计划从不携带的采样键（`plan_c01/c02/c03`、
+/// - `drop`：计划展示键与路由字段**类型冲突**（f06/f07 的 `columns` 展示串对路由
+///   的 `Vec`、f06 的 `sourceColumn` 展示串对路由的 `bool`）——喂回去就是反序列化
+///   硬失败，剔除后由 `content` 注入请求侧真值；
+/// - `content`：v6 正文键白名单（`Required`＝缺了拒绝并提示重存；`Optional`＝有就
+///   注入且**覆盖**快照同名键）。未知键拒绝（不静默丢，方案 §15.2.4）；
+/// - `content_any`：「至少一个」组（f07 的列名或列序号……）；
+/// - `sampling`：路由必填但计划不携带的采样键（`plan_c01/c02/c03`、
 ///   `scan_options` 都不写它们）。`Some(缺省)`＝必填，模板 `sampling` 块优先、
 ///   否则用缺省；`None`＝可选转发（路由自己有 serde 默认）。缺省值 4096 取自
 ///   界面既有占位（web `FeaturePages` 的 `|| 4096`），**不是**方案 §5.2 的数值
 ///   （§5.2 明写不设数值窗口）。
-/// - `refuse`：计划只存计数、变换正文不在参数里的功能（c08 规则、f11 清单、
-///   c12 条件、c13 排序键、c14 拆分/合并规格、f06 来源列语义、f07 列选择）——
-///   映射表补不出正文，一键套用语义上不可行，如实声明拒绝原因，
-///   由 `describeRecipe` 预声明、界面不给按钮（同 ADR-0072「不给假按钮」）。
-///   要覆盖它们需要把请求侧正文也存进模板（≈OQ-40 被否的②路线），登记 OQ-43 待裁决。
+///
+/// OQ-43② 之前的静态 `refuse` 已被 content 机制取代：v5 及更早模板没有正文，
+/// 在 assess 里按 `content`/`content_any` 的必填性拒绝并提示重存。
 #[derive(Clone, Copy, Debug)]
 pub struct FeatureParamMap {
     pub feature: &'static str,
     pub renames: &'static [(&'static str, &'static str)],
     pub unset_if: &'static [(&'static str, &'static str)],
     pub parse_f64: &'static [&'static str],
+    pub drop: &'static [&'static str],
+    pub content: &'static [(&'static str, ContentReq)],
+    pub content_any: &'static [&'static [&'static str]],
     pub sampling: &'static [(&'static str, SamplingField, Option<u64>)],
-    pub refuse: Option<&'static str>,
 }
 
 const fn m(feature: &'static str) -> FeatureParamMap {
@@ -275,8 +290,10 @@ const fn m(feature: &'static str) -> FeatureParamMap {
         renames: &[],
         unset_if: &[],
         parse_f64: &[],
+        drop: &[],
+        content: &[],
+        content_any: &[],
         sampling: &[],
-        refuse: None,
     }
 }
 
@@ -294,12 +311,32 @@ const UI_SAMPLING_DEFAULT: u64 = 4096;
 ///   ADR-0080 改名后）；路由 `MergeParams.target` 是**编码**，计划键 `targetEncoding`。
 /// - f05：`csv.rs:686` 写 `targetBytes|rowsPerPart/outputDir/keepHeader/delimiter`；
 ///   路由 `F05ShellParams.rows`，`delimiter="auto"` 要剔除。
+/// - f06：`csv_merge.rs:754` 写 `output/targetEncoding/invalid/delimiter/hasHeader/
+///   columns(列数 Number)/strict/sourceColumn(解析结果 String|Null)/fileCount`；
+///   路由 `CsvPlanParams.sourceColumn` 是 **bool**（请求侧开关）——计划展示串必须
+///   drop 后由 content 注入；`sourceColumnRelative=true` 需要 `baseDir`（路径），
+///   模板不存路径 ⇒ 该形态拒绝（ADR-0081 §4）。
+/// - f07：`csv_extract.rs:232` 写 `columns`（**逗号连接的展示串**）；路由要
+///   `Vec<String>`/`Vec<u64>` ⇒ drop 后由 content 注入列名或列序号。
 /// - f08/f09：`csv_rows.rs:225`／`csv_range.rs:310` 写 `targetEncoding/...`；
 ///   路由 `CsvPlanParams.target`（编码）＋运行时必填 `sampleWindow`（plan_csv.rs:145）。
 /// - f10：`listing.rs:207` 写 `format/includeFiles/includeDirs/targetEncoding`；
 ///   路由 f10 分支不读 `target`，改名只为键面对齐（无害）。
-/// - c11：`csv_dedup.rs:197` 写 `key`（"row"/"columns"）；路由按键列去重需要
-///   `keyColumns`，计划不携带 ⇒ 整行去重可套用、按键列拒绝（build 里按快照判）。
+/// - f11：路由 `F11ShellParams{list, root}` 都是路径槽位——清单**文件**由调用方
+///   现选、路由重读其内容，快照里没有正文不影响回放（ADR-0081 §2 纠偏：
+///   OQ-43 登记时把 f11 误列为"正文缺失"，实测为可套用）。
+/// - c08：`c08.rs:295` 只写 `ruleCount/fileCount/unmatchedKept`；路由
+///   `ArchivePlanParams.rules`（serde 必填）只能来自 content。
+/// - c11：`csv_dedup.rs:197` 写 `key`（"row"/"columns"）；按键列去重需要
+///   `keyColumns`，本轮不在 OQ-43② 范围 ⇒ 整行去重可套用、按键列拒绝（build 里按快照判）。
+/// - c12：`csv_filter.rs:313` 写 `target/invalid/op/mode(keep|drop)`；路由要
+///   `column|columnIndex`＋`value`（计划不存）与 `filterMode`（计划的 `mode` 改名）。
+/// - c13：`csv_sort.rs:335` 写 `order/targetEncoding/invalid/hasHeader`；路由要
+///   `sortColumns|sortColumnIndexes`（计划不存），`targetEncoding→target` 改名。
+/// - c14：`csv_columns.rs:430` 写 `mode(split|merge)/targetEncoding/invalid/hasHeader`；
+///   路由要拆分规格（`splitColumn|splitColumnIndex`＋`splitSeparator` XOR
+///   `splitRegex`）或合并规格（`mergeColumns|mergeColumnIndexes`＋`mergeJoinWith`），
+///   全部来自 content。
 /// - c10：`archive.rs:427` 写 `maxTotalBytes/maxRatio(String)`；路由要 `f64`。
 ///   压缩计划的 `mode` 已由 ADR-0080 补进内核。
 pub const FEATURE_PARAM_MAP: &[FeatureParamMap] = &[
@@ -317,17 +354,32 @@ pub const FEATURE_PARAM_MAP: &[FeatureParamMap] = &[
         ..m("f05")
     },
     FeatureParamMap {
-        refuse: Some(
-            "merged output's source-column semantics are not carried in plan params; \
-             reconfigure on the feature page",
-        ),
+        renames: &[("targetEncoding", "target")],
+        drop: &["columns", "sourceColumn"],
+        content: &[
+            ("sourceColumn", ContentReq::Required),
+            ("sourceColumnName", ContentReq::Optional),
+            ("sourceColumnRelative", ContentReq::Optional),
+        ],
+        sampling: &[(
+            "sampleWindow",
+            SamplingField::Window,
+            Some(UI_SAMPLING_DEFAULT),
+        )],
         ..m("f06")
     },
     FeatureParamMap {
-        refuse: Some(
-            "column selections are not carried in plan params; \
-             reconfigure on the feature page",
-        ),
+        drop: &["columns"],
+        content: &[
+            ("columns", ContentReq::Optional),
+            ("columnIndexes", ContentReq::Optional),
+        ],
+        content_any: &[&["columns", "columnIndexes"]],
+        sampling: &[(
+            "sampleWindow",
+            SamplingField::Window,
+            Some(UI_SAMPLING_DEFAULT),
+        )],
         ..m("f07")
     },
     FeatureParamMap {
@@ -352,13 +404,7 @@ pub const FEATURE_PARAM_MAP: &[FeatureParamMap] = &[
         renames: &[("targetEncoding", "target")],
         ..m("f10")
     },
-    FeatureParamMap {
-        refuse: Some(
-            "the directory list text is not carried in plan params; \
-             reconfigure on the feature page",
-        ),
-        ..m("f11")
-    },
+    m("f11"),
     m("f12"),
     FeatureParamMap {
         renames: &[("platformPrior", "prior")],
@@ -394,10 +440,11 @@ pub const FEATURE_PARAM_MAP: &[FeatureParamMap] = &[
     m("c04"),
     m("c07"),
     FeatureParamMap {
-        refuse: Some(
-            "archive rules are not carried in plan params; \
-             reconfigure on the feature page",
-        ),
+        content: &[
+            ("rules", ContentReq::Required),
+            // recursive 是请求侧开关，计划参数里没有（c08.rs 只写 ruleCount/fileCount）
+            ("recursive", ContentReq::Optional),
+        ],
         ..m("c08")
     },
     FeatureParamMap {
@@ -413,24 +460,57 @@ pub const FEATURE_PARAM_MAP: &[FeatureParamMap] = &[
         ..m("c11")
     },
     FeatureParamMap {
-        refuse: Some(
-            "filter conditions are not carried in plan params; \
-             reconfigure on the feature page",
-        ),
+        renames: &[("mode", "filterMode")],
+        content: &[
+            ("column", ContentReq::Optional),
+            ("columnIndex", ContentReq::Optional),
+            ("op", ContentReq::Optional),
+            ("value", ContentReq::Required),
+            ("filterMode", ContentReq::Optional),
+        ],
+        content_any: &[&["column", "columnIndex"]],
+        sampling: &[(
+            "sampleWindow",
+            SamplingField::Window,
+            Some(UI_SAMPLING_DEFAULT),
+        )],
         ..m("c12")
     },
     FeatureParamMap {
-        refuse: Some(
-            "sort keys are not carried in plan params; \
-             reconfigure on the feature page",
-        ),
+        renames: &[("targetEncoding", "target")],
+        content: &[
+            ("sortColumns", ContentReq::Optional),
+            ("sortColumnIndexes", ContentReq::Optional),
+            ("order", ContentReq::Optional),
+            // 外排分片行数是请求侧口径，计划参数里没有
+            ("externalChunkRows", ContentReq::Optional),
+        ],
+        content_any: &[&["sortColumns", "sortColumnIndexes"]],
+        sampling: &[(
+            "sampleWindow",
+            SamplingField::Window,
+            Some(UI_SAMPLING_DEFAULT),
+        )],
         ..m("c13")
     },
     FeatureParamMap {
-        refuse: Some(
-            "split/merge column specs are not carried in plan params; \
-             reconfigure on the feature page",
-        ),
+        renames: &[("targetEncoding", "target")],
+        content: &[
+            ("splitColumn", ContentReq::Optional),
+            ("splitColumnIndex", ContentReq::Optional),
+            ("splitSeparator", ContentReq::Optional),
+            ("splitRegex", ContentReq::Optional),
+            ("mergeColumns", ContentReq::Optional),
+            ("mergeColumnIndexes", ContentReq::Optional),
+            ("mergeJoinWith", ContentReq::Optional),
+            ("mergeName", ContentReq::Optional),
+        ],
+        content_any: &[&["splitColumn", "mergeColumns"]],
+        sampling: &[(
+            "sampleWindow",
+            SamplingField::Window,
+            Some(UI_SAMPLING_DEFAULT),
+        )],
         ..m("c14")
     },
 ];
@@ -447,6 +527,14 @@ pub struct RecipeInvocation {
     pub kind: String,
     pub params: Value,
     pub source_paths: Vec<String>,
+}
+
+/// 正文键判定：存在且非 null 才算有（Null 与缺失等价，Required 不被 Null 骗过）。
+fn content_has(content: Option<&Map<String, Value>>, key: &str) -> bool {
+    content
+        .and_then(|c| c.get(key))
+        .map(|value| !value.is_null())
+        .unwrap_or(false)
 }
 
 fn is_compress(snapshot: &Map<String, Value>) -> bool {
@@ -478,10 +566,36 @@ pub fn assess(document: &RecipeDocument) -> Result<ApplyAssessment, String> {
         .ok_or_else(|| format!("feature {feature} has no registered path slots in this shell"))?;
     let param_map = param_map_for(&feature)
         .ok_or_else(|| format!("feature {feature} has no registered param map in this shell"))?;
-    // 变换正文不在计划参数里的功能：映射表补不出正文，套用＝要么报错要么静默
-    // 出错的输出，如实拒绝（OQ-43 登记了"正文进模板"这个后续裁决项）。
-    if let Some(reason) = param_map.refuse {
-        return Err(reason.to_string());
+    // v6 正文（OQ-43 裁决②）：需要正文的功能在模板没有对应键时如实拒绝——
+    // v5 及更早模板没有正文块，重存即可修（保存通道现在采集正文，ADR-0081）。
+    let content = step.content.as_ref();
+    for (key, req) in param_map.content {
+        if *req == ContentReq::Required && !content_has(content, key) {
+            return Err(format!(
+                "transformation content ({key}) is required for {feature} and is not stored in this template; re-save it from the feature page (schema v6)"
+            ));
+        }
+    }
+    for group in param_map.content_any {
+        if !group.iter().any(|key| content_has(content, key)) {
+            return Err(format!(
+                "transformation content for {feature} needs one of ({}); re-save the template from the feature page (schema v6)",
+                group.join(", ")
+            ));
+        }
+    }
+    // f06 相对来源列需要 baseDir（路径）：模板按不变量 13 不存路径 ⇒ 该形态
+    // 套不了。保存侧界面会提示；这里按正文如实拒绝，不喂给路由一个含糊报错。
+    if feature == "f06"
+        && content
+            .and_then(|c| c.get("sourceColumnRelative"))
+            .map(|value| value == &Value::Bool(true))
+            .unwrap_or(false)
+    {
+        return Err(
+            "relative source-column labels need baseDir, and templates never store paths; re-save without sourceColumnRelative or apply from the feature page"
+                .to_string(),
+        );
     }
     // c10 旧压缩模板：`mode` 是 ADR-0080 之后才随压缩计划保存的。没有 mode 但带
     // `compression` 的快照是旧版压缩模板，槽位分流会把它当解压处理——拒绝并让
@@ -527,6 +641,7 @@ fn apply_param_map(
     params: &mut Map<String, Value>,
     map: &FeatureParamMap,
     sampling: Option<&RecipeSampling>,
+    content: Option<&Map<String, Value>>,
 ) -> Result<(), String> {
     for (from, to) in map.renames {
         if let Some(value) = params.remove(*from) {
@@ -536,6 +651,26 @@ fn apply_param_map(
     for (key, literal) in map.unset_if {
         if params.get(*key).and_then(Value::as_str) == Some(*literal) {
             params.remove(*key);
+        }
+    }
+    for key in map.drop {
+        params.remove(*key);
+    }
+    // v6 正文注入：白名单外的键拒绝（不静默丢，方案 §15.2.4）；注入**覆盖**
+    // 快照同名键——正文是保存时刻的请求侧真值。
+    if let Some(content) = content {
+        for key in content.keys() {
+            if !map.content.iter().any(|(declared, _)| declared == key) {
+                let declared: Vec<&str> = map.content.iter().map(|(k, _)| *k).collect();
+                return Err(format!(
+                    "{} has no content key {key}; declared keys are {}",
+                    map.feature,
+                    declared.join(", ")
+                ));
+            }
+        }
+        for (key, value) in content {
+            params.insert(key.clone(), value.clone());
         }
     }
     for key in map.parse_f64 {
@@ -686,7 +821,12 @@ pub fn build_invocation(
         return Err("c09 requires exactly one source directory".to_string());
     }
 
-    apply_param_map(&mut params, assessment.param_map, step.sampling.as_ref())?;
+    apply_param_map(
+        &mut params,
+        assessment.param_map,
+        step.sampling.as_ref(),
+        step.content.as_ref(),
+    )?;
 
     Ok(RecipeInvocation {
         kind: assessment.feature,
@@ -1145,39 +1285,92 @@ mod tests {
     }
 
     #[test]
-    fn content_free_features_refuse_with_reason() {
-        // 七个"计划只存计数、正文不在参数里"的功能：一律拒，且报的是同一条
-        // describe 会给的原因——界面预声明不给按钮（OQ-43 登记后续裁决）。
-        let cases = [
-            ("f06", PlanAction::Merge),
-            ("f07", PlanAction::CsvExtract),
-            ("c08", PlanAction::Move),
-            ("f11", PlanAction::CreateDir),
-            ("c12", PlanAction::CsvFilter),
-            ("c13", PlanAction::CsvSort),
-            ("c14", PlanAction::CsvColumns),
+    fn content_features_refuse_without_content_and_apply_with_it() {
+        // OQ-43 裁决②：六个功能需要 v6 正文——v5 及更早模板（无正文块）拒绝并
+        // 提示重存（重存即可修：保存通道现在采集正文）；带正文则套用，注入的键
+        // 落进请求（「真的落在路由结构体字段上」由 lib.rs 的防漂移断言逐功能验证）。
+        let cases: &[(&str, PlanAction, serde_json::Value)] = &[
+            ("f06", PlanAction::Merge, json!({"sourceColumn": true})),
+            ("f07", PlanAction::CsvExtract, json!({"columns": ["name"]})),
+            ("c08", PlanAction::Move, json!({"rules": ["docs|ext:pdf"]})),
+            (
+                "c12",
+                PlanAction::CsvFilter,
+                json!({"column": "qty", "value": "10", "op": "eq"}),
+            ),
+            ("c13", PlanAction::CsvSort, json!({"sortColumns": ["id"]})),
+            (
+                "c14",
+                PlanAction::CsvColumns,
+                json!({"splitColumn": "tags", "splitSeparator": ";"}),
+            ),
         ];
-        for (feature, kind) in cases {
-            let document = recipe(feature, kind, Map::new());
-            let error = build_invocation(&document, &Map::new()).unwrap_err();
+        // 各功能最小路径槽位（正文用例只证"正文齐了就能套"，槽位落地在 lib.rs）
+        let paths: &[(&str, serde_json::Value)] = &[
+            (
+                "f06",
+                json!({"files": ["/in/a.csv"], "output": "/out/m.csv"}),
+            ),
+            ("f07", json!({"files": ["/in/a.csv"], "outputDir": "/out"})),
+            ("c08", json!({"sourceRoot": "/src", "targetRoot": "/dst"})),
+            (
+                "c12",
+                json!({"files": ["/in/a.csv"], "output": "/out/f.csv"}),
+            ),
+            ("c13", json!({"files": ["/in/a.csv"], "outputDir": "/out"})),
+            ("c14", json!({"files": ["/in/a.csv"], "outputDir": "/out"})),
+        ];
+        for (feature, kind, content) in cases {
+            let without = recipe(feature, *kind, Map::new());
+            let error = build_invocation(&without, &Map::new()).unwrap_err();
             assert!(
-                error.contains("not carried in plan params"),
-                "{feature} 的拒绝原因应当指明正文缺失：{error}"
+                error.contains("re-save"),
+                "{feature} 缺正文时应当提示重存：{error}"
             );
-            let spec = describe(&document);
-            assert!(!spec.applicable, "{feature} 不应给出套用面");
-            assert!(spec.reason.is_some());
+
+            let mut content_map = Map::new();
+            for (key, value) in content.as_object().unwrap() {
+                content_map.insert(key.clone(), value.clone());
+            }
+            let mut with = recipe(feature, *kind, Map::new());
+            with.steps[0].content = Some(content_map);
+            let path_object: Map<String, Value> =
+                serde_json::from_value(paths.iter().find(|(f, _)| f == feature).unwrap().1.clone())
+                    .unwrap();
+            build_invocation(&with, &path_object)
+                .unwrap_or_else(|error| panic!("{feature} 带正文应当可套用：{error}"));
         }
 
-        // c11 条件拒绝：整行去重可套用，按键列拒绝。
-        let by_row = recipe(
-            "c11",
-            PlanAction::CsvDedup,
-            object(&[("key", json!("row")), ("target", json!("utf-8"))]),
-        );
-        let spec = describe(&by_row);
-        assert!(spec.applicable, "整行去重的模板应当可套用");
+        // f11 纠偏（ADR-0081 §2）：清单**文件**是路径槽位、路由重读其内容，
+        // 快照没有正文不影响回放——OQ-43 登记时误列为"正文缺失"，现更正为可套用。
+        let f11 = recipe("f11", PlanAction::CreateDir, Map::new());
+        let invocation = build_invocation(
+            &f11,
+            &object(&[("list", json!("/lists/dirs.csv")), ("root", json!("/data"))]),
+        )
+        .unwrap();
+        assert_eq!(invocation.params["list"], json!("/lists/dirs.csv"));
 
+        // f06 相对来源列需要 baseDir（路径）：模板不存路径 ⇒ 该形态拒绝。
+        let mut relative = recipe("f06", PlanAction::Merge, Map::new());
+        relative.steps[0].content = Some(object(&[
+            ("sourceColumn", json!(true)),
+            ("sourceColumnRelative", json!(true)),
+        ]));
+        let error = build_invocation(&relative, &Map::new()).unwrap_err();
+        assert!(error.contains("baseDir"), "{error}");
+
+        // 正文白名单外的键拒绝（不静默丢，方案 §15.2.4）
+        let mut stray = recipe("c08", PlanAction::Move, Map::new());
+        stray.steps[0].content = Some(object(&[("rules", json!(["a"])), ("oops", json!(1))]));
+        let error = build_invocation(
+            &stray,
+            &object(&[("sourceRoot", json!("/src")), ("targetRoot", json!("/dst"))]),
+        )
+        .unwrap_err();
+        assert!(error.contains("no content key oops"), "{error}");
+
+        // c11 按键列去重仍拒绝（键列不在本轮 OQ-43② 的六功能清单里）
         let by_columns = recipe(
             "c11",
             PlanAction::CsvDedup,

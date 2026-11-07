@@ -161,4 +161,35 @@ describe("功能页的「存为处理模板」", () => {
     expect(call.paramsSnapshot).toEqual(nextPlan.params);
     expect(call.paramsSnapshot).not.toHaveProperty("sampleWindow");
   });
+
+  it("变换正文进模板不进快照（v6，OQ-43②）：规则按行拆数组、递归开关落布尔", async () => {
+    // c08 的归档规则从不进 plan.params（计划只存 ruleCount）——保存时从表单
+    // 采集进 content；paramsSnapshot 仍是计划形状。
+    nextPlan = {
+      ...splitPlan,
+      kind: "c08",
+      params: { ruleCount: 2, fileCount: 3, unmatchedKept: 0 },
+      entries: [{ ...splitPlan.entries[0], action: "move", reason: "archived" }]
+    };
+    const page = render(<FeaturePages view="c08" onBack={() => undefined} />);
+    await userEvent.click(screen.getByRole("button", { name: /生成计划预览/ }));
+    await waitFor(() => expect(page.getByTestId("save-template")).toBeInTheDocument());
+
+    await userEvent.click(page.getByTestId("save-template"));
+    await userEvent.type(page.getByLabelText("模板名称"), "归档模板");
+    const rulesBox = page.getByLabelText(/规则链/);
+    await userEvent.clear(rulesBox);
+    await userEvent.paste("images|ext:jpg,png\nlogs|name:log");
+    await userEvent.type(page.getByLabelText(/递归 yes/), "yes");
+    await userEvent.click(page.getByTestId("save-template-submit"));
+
+    await waitFor(() => expect(saveRecipe).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(saveRecipe).mock.calls[0][0];
+    expect(call.content).toEqual({
+      rules: ["images|ext:jpg,png", "logs|name:log"],
+      recursive: true
+    });
+    expect(call.paramsSnapshot).toEqual(nextPlan.params);
+    expect(call.paramsSnapshot).not.toHaveProperty("rules");
+  });
 });
