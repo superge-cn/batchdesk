@@ -863,13 +863,31 @@ fn getRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<RecipeDocu
         .map_err(IpcError::from)
 }
 
+/// 静态评估一份模板的「一键套用」面（OQ-41 裁决②落地后的入口）。
+///
+/// 界面据此决定给不给「套用」按钮：能套＝拿到槽位表去渲染输入框；
+/// 不能套（未绑定/多步/正文不在计划参数里/旧压缩模板）＝拿到原因如实展示，
+/// **不渲染按钮**——同 ADR-0072 的「不给假按钮」。判定与 `loadRecipe` 的
+/// `build_invocation` 同源（`recipe_apply::assess`），不会出现 describe 说能套、
+/// loadRecipe 却报错的两套口径。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn describeRecipe(
+    state: State<'_, AppState>,
+    recipe_id: String,
+) -> Result<recipe_apply::RecipeApplySpec, IpcError> {
+    let document = config_store(&state)
+        .get_recipe(&recipe_id)
+        .map_err(IpcError::from)?;
+    Ok(recipe_apply::describe(&document))
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecipePage {
     items: Vec<RecipeDocument>,
     total: usize,
 }
-
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 fn listRecipes(
@@ -1396,6 +1414,7 @@ pub fn run() {
             setUiState,
             resetUiState,
             loadRecipe,
+            describeRecipe,
             saveRecipe,
             getRecipe,
             listRecipes,
@@ -1427,7 +1446,17 @@ mod tests {
         feature: &str,
         // 快照里带上该路由**必填的非路径字段**（如 `target` 编码、`rules` 规则），
         // 否则解结构体失败的是这些字段，而不是我要证的槽位键——断言就失去针对性了。
+        // 采样键不在此列：计划快照从不带它们（OQ-41），由映射表补，见 slots_of_sampling。
         snapshot_pairs: &[(&str, serde_json::Value)],
+        path_params: &[(&str, serde_json::Value)],
+    ) -> serde_json::Value {
+        slots_of_sampling(feature, snapshot_pairs, None, path_params)
+    }
+
+    fn slots_of_sampling(
+        feature: &str,
+        snapshot_pairs: &[(&str, serde_json::Value)],
+        sampling: Option<kernel::recipe::RecipeSampling>,
         path_params: &[(&str, serde_json::Value)],
     ) -> serde_json::Value {
         use kernel::plan::PlanAction;
@@ -1440,14 +1469,15 @@ mod tests {
         for (key, value) in path_params {
             object.insert((*key).to_string(), value.clone());
         }
-        let document = RecipeDocument::from_single_step(
+        let mut document = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
             "漂移核对",
             PlanAction::Split,
-            snapshot.clone(),
+            snapshot,
             "2026-11-06T00:00:00Z",
             Some(feature.to_string()),
         );
+        document.steps[0].sampling = sampling;
         let invocation = recipe_apply::build_invocation(&document, &object)
             .unwrap_or_else(|error| panic!("{feature} 槽位注入失败：{error}"));
         invocation.params
@@ -1489,16 +1519,28 @@ mod tests {
         // f06…f09 → CsvPlanParams{files, output / outputDir}
         // f06 只要 `output`（plan_csv.rs:215 明写 requires output），
         // f07–f09 才是 output/outputDir 二选一（plan_csv.rs:115-134）。
-        for feature in ["f06", "f07", "f08", "f09"] {
-            let output_slot = if feature == "f06" {
-                ("output", json!("/out/all.csv"))
-            } else {
-                ("outputDir", json!("/out"))
-            };
+        // f06/f07 是「正文缺失」拒绝功能（OQ-41②），到不了槽位注入——
+        // 它们的槽位表保留给 OQ-43，这里只断言 describe 如实预声明。
+        for feature in ["f06", "f07"] {
+            let document = RecipeDocument::from_single_step(
+                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+                "正文缺失",
+                PlanAction::CsvExtract,
+                serde_json::Map::new(),
+                "2026-11-07T00:00:00Z",
+                Some(feature.to_string()),
+            );
+            let spec = recipe_apply::describe(&document);
+            assert!(!spec.applicable, "{feature} 应当被预声明为不可套用");
+        }
+        for feature in ["f08", "f09"] {
             let params = slots_of(
                 feature,
                 &[],
-                &[("files", json!(["/in/a.csv"])), output_slot],
+                &[
+                    ("files", json!(["/in/a.csv"])),
+                    ("outputDir", json!("/out")),
+                ],
             );
             let parsed: plan_csv::CsvPlanParams = serde_json::from_value(params).unwrap();
             assert_eq!(
@@ -1506,19 +1548,11 @@ mod tests {
                 vec!["/in/a.csv".to_string()],
                 "{feature} 的 files 槽"
             );
-            if feature == "f06" {
-                assert_eq!(
-                    parsed.output.as_deref(),
-                    Some("/out/all.csv"),
-                    "f06 的 output 槽"
-                );
-            } else {
-                assert_eq!(
-                    parsed.output_dir.as_deref(),
-                    Some("/out"),
-                    "{feature} 的 outputDir 槽"
-                );
-            }
+            assert_eq!(
+                parsed.output_dir.as_deref(),
+                Some("/out"),
+                "{feature} 的 outputDir 槽"
+            );
         }
 
         // f10 → 同一个结构体的 roots（**不是 root**，写错就永远是空列表）
@@ -1533,24 +1567,33 @@ mod tests {
 
     #[test]
     fn rewrite_and_ops_slots_land_on_the_route_struct_fields() {
-        // c01/c02 → files（**不是 file**）。这两个路由还有必填的非路径字段
-        // （`sampleWindow`／`sampleBytes` 没有 serde 默认值），真实计划快照里带着它们，
-        // 所以测试也照实带上——不然失败的是这些字段，槽位断言就失去针对性了。
+        // c01/c02 → files（**不是 file**）。采样键（sampleWindow/sampleBytes）计划快照
+        // **从不携带**（OQ-41 实测），映射表按缺省补——这里不带任何采样键，正好证明
+        // 补出来的键真的落在路由字段上。
         for feature in ["c01", "c02"] {
             let snapshot: &[(&str, serde_json::Value)] = if feature == "c01" {
-                &[("target", json!("utf-8")), ("sampleWindow", json!(65536))]
+                &[
+                    ("target", json!("utf-8")),
+                    ("platformPrior", json!("windows")),
+                ]
             } else {
-                &[("target", json!("crlf")), ("sampleBytes", json!(65536))]
+                &[("target", json!("crlf"))]
             };
             let params = slots_of(feature, snapshot, &[("files", json!(["/in/a.txt"]))]);
             let files = if feature == "c01" {
-                serde_json::from_value::<plan_kinds::TranscodeParams>(params)
-                    .unwrap()
-                    .files
+                let parsed: plan_kinds::TranscodeParams = serde_json::from_value(params).unwrap();
+                // platformPrior→prior 的改名也要落地：先验丢了，检测就会偏离原计划
+                assert_eq!(
+                    parsed.prior.as_deref(),
+                    Some("windows"),
+                    "c01 的 platformPrior 没改名进 prior"
+                );
+                assert_eq!(parsed.sample_window, 4096, "c01 的 sampleWindow 缺省没补上");
+                parsed.files
             } else {
-                serde_json::from_value::<plan_kinds::LineEndingsParams>(params)
-                    .unwrap()
-                    .files
+                let parsed: plan_kinds::LineEndingsParams = serde_json::from_value(params).unwrap();
+                assert_eq!(parsed.sample_bytes, 4096, "c02 的 sampleBytes 缺省没补上");
+                parsed.files
             };
             assert_eq!(
                 files,
@@ -1559,27 +1602,29 @@ mod tests {
             );
         }
 
-        // c03 **实证一条已知不匹配**（不是把它绕过去）：
-        // 内核计划参数存的是 `replace`（replace_content.rs:349），
-        // 而壳层路由要的字段是 `replacement`（plan_kinds.rs ReplaceParams），界面也发 `replacement`。
-        // ADR-0072 定的是「参数快照＝计划自带的那份」，于是 c03 的快照喂回路由时**必然缺 `replacement`**。
-        // 这条断言钉住"现在会失败"这个事实；待人类裁快照形状（见 OPEN-QUESTIONS OQ-41）。
+        // c03：OQ-41 钉住的「计划形状 ≠ 请求形状」三类差异，裁决②后由映射表闭合——
+        // replace→replacement 改名、sampleBytes 缺省、platformPrior→prior。
+        // 这条断言曾经钉住"现在会失败"（OQ-41 未裁时），现改为钉住"映射后确实成立"。
         let snapshot = &[
             ("mode", json!("plain")),
             ("find", json!("a")),
             ("replace", json!("b")),
-            ("sampleBytes", json!(65536)),
+            ("platformPrior", json!("windows")),
+            ("delimiter", json!("auto")),
         ];
         let params = slots_of("c03", snapshot, &[("files", json!(["/in/a.txt"]))]);
-        match serde_json::from_value::<plan_kinds::ReplaceParams>(params) {
-            Ok(_) => {
-                panic!("c03 的快照形状与请求形状居然一致了——那 OQ-41 就该关掉，这条断言要一起改")
-            }
-            Err(error) => assert!(
-                error.to_string().contains("replacement"),
-                "c03 的失败原因应当就是缺 `replacement`，实际：{error}"
-            ),
-        }
+        let parsed: plan_kinds::ReplaceParams = serde_json::from_value(params).unwrap();
+        assert_eq!(
+            parsed.replacement, "b",
+            "c03 的 replace 没改名进 replacement"
+        );
+        assert_eq!(parsed.sample_bytes, 4096, "c03 的 sampleBytes 缺省没补上");
+        assert_eq!(
+            parsed.prior.as_deref(),
+            Some("windows"),
+            "c03 的 platformPrior 没改名进 prior"
+        );
+        assert!(parsed.delimiter.is_none(), "c03 的 auto 分隔符没被剔除");
 
         // c04/c11…c14 → OpPlanParams.dir / files / output
         let params = slots_of("c04", &[], &[("dir", json!("/data"))]);
@@ -1600,14 +1645,21 @@ mod tests {
         assert_eq!(parsed.files, vec!["/a.csv".to_string()]);
         assert_eq!(parsed.output.as_deref(), Some("/b.csv"));
 
-        // c14 的列数槽与 files 同结构体（顺带证明没把非路径键当成槽位）
-        let params = slots_of(
-            "c14",
-            &[],
-            &[("files", json!(["/a.csv"])), ("outputDir", json!("/out"))],
-        );
-        let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
-        assert_eq!(parsed.output_dir.as_deref(), Some("/out"));
+        // c14 原来在这里做列数槽断言；同 f06/f07——拆分/合并规格不随计划保存，
+        // OQ-41② 后是「正文缺失」拒绝功能，到不了槽位注入（见
+        // content_free_features_refuse_with_reason），OpPlanParams 的槽位键保留给 OQ-43。
+        {
+            let document = RecipeDocument::from_single_step(
+                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+                "c14 列拆分",
+                PlanAction::CsvColumns,
+                serde_json::Map::new(),
+                "2026-11-07T00:00:00Z",
+                Some("c14".to_string()),
+            );
+            let spec = recipe_apply::describe(&document);
+            assert!(!spec.applicable, "c14 应当被预声明为不可套用");
+        }
     }
 
     #[test]
@@ -1627,15 +1679,22 @@ mod tests {
         assert_eq!(parsed.source_root, "/src");
         assert_eq!(parsed.target_root, "/dst");
 
-        // c08 → sourceRoot / targetRoot（线协议名是 camelCase，写 source_root 就永远为空）
-        let params = slots_of(
-            "c08",
-            &[("rules", json!(["docs|ext:pdf"]))],
-            &[("sourceRoot", json!("/src")), ("targetRoot", json!("/dst"))],
-        );
-        let parsed: plan_manifest::ArchivePlanParams = serde_json::from_value(params).unwrap();
-        assert_eq!(parsed.source_root, "/src");
-        assert_eq!(parsed.target_root, "/dst");
+        // c08 原来在这里做槽位落地断言；OQ-41② 落地后它是「正文缺失」拒绝功能
+        // （归档规则不随计划保存，映射表补不出），build_invocation 在槽位注入前就拒绝，
+        // 槽位键落在哪已不影响行为——拒绝口径由 content_free_features_refuse_with_reason
+        // 覆盖，槽位表保留是为 OQ-43（正文进模板）裁决后能直接接上。
+        {
+            let document = RecipeDocument::from_single_step(
+                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+                "c08 归档",
+                PlanAction::Move,
+                serde_json::Map::new(),
+                "2026-11-07T00:00:00Z",
+                Some("c08".to_string()),
+            );
+            let spec = recipe_apply::describe(&document);
+            assert!(!spec.applicable, "c08 应当被预声明为不可套用");
+        }
 
         // c10 解压 → archive + outputDir；压缩 → sources + output
         use kernel::plan::PlanAction;
@@ -1698,18 +1757,84 @@ mod tests {
         assert_eq!(parsed.file, "/a.csv");
         assert_eq!(parsed.output_dir, "/out");
 
-        let params = slots_of(
-            "f11",
-            &[],
-            &[("list", json!("/list.csv")), ("root", json!("/data"))],
-        );
-        let parsed: F11ShellParams = serde_json::from_value(params).unwrap();
-        assert_eq!(parsed.list, "/list.csv", "f11 的清单槽");
-        assert_eq!(parsed.root, "/data", "f11 的建档根槽");
+        // f11 原来在这里做槽位落地断言；同 c08——清单正文不随计划保存，现在是
+        // 「正文缺失」拒绝功能（content_free_features_refuse_with_reason 覆盖），
+        // F11ShellParams{list, root} 的槽位表保留给 OQ-43。
+        {
+            let document = RecipeDocument::from_single_step(
+                "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+                "f11 建目录",
+                PlanAction::CreateDir,
+                serde_json::Map::new(),
+                "2026-11-07T00:00:00Z",
+                Some("f11".to_string()),
+            );
+            let spec = recipe_apply::describe(&document);
+            assert!(!spec.applicable, "f11 应当被预声明为不可套用");
+        }
 
         let params = slots_of("f12", &[], &[("dir", json!("/data"))]);
         let parsed: F12ShellParams = serde_json::from_value(params).unwrap();
         assert_eq!(parsed.dir, "/data", "f12 的 dir 槽");
+    }
+
+    #[test]
+    fn csv_and_ops_sampling_defaults_land_on_their_routes() {
+        // f08/f09/c11 的路由在运行时必填 sampleWindow（scan_options），计划快照从不
+        // 携带——映射表按缺省补的键必须真的落在字段上；f06/f07/c12/c13/c14 是拒绝
+        // 功能（正文缺失），到不了这一步，其采样口径随 OQ-43 一并再议。
+        for feature in ["f08", "f09"] {
+            let params = slots_of(
+                feature,
+                &[],
+                &[
+                    ("files", json!(["/in/a.csv"])),
+                    ("outputDir", json!("/out")),
+                ],
+            );
+            let parsed: plan_csv::CsvPlanParams = serde_json::from_value(params).unwrap();
+            assert_eq!(
+                parsed.sample_window,
+                Some(4096),
+                "{feature} 的 sampleWindow 缺省没补上"
+            );
+        }
+        let params = slots_of(
+            "c11",
+            &[("key", json!("row")), ("target", json!("utf-8"))],
+            &[
+                ("files", json!(["/in/a.csv"])),
+                ("output", json!("/out/x.csv")),
+            ],
+        );
+        let parsed: plan_ops::OpPlanParams = serde_json::from_value(params).unwrap();
+        assert_eq!(
+            parsed.sample_window,
+            Some(4096),
+            "c11 的 sampleWindow 缺省没补上"
+        );
+    }
+
+    #[test]
+    fn template_sampling_values_win_over_defaults() {
+        // v5 模板存了采样值（OQ-41 附带裁决：进模板）→ 用模板的，不用缺省。
+        let sampling = kernel::recipe::RecipeSampling {
+            sample_window: Some(65536),
+            sample_blocks: Some(2),
+            sample_bytes: None,
+        };
+        let params = slots_of_sampling(
+            "c01",
+            &[("target", json!("utf-8"))],
+            Some(sampling),
+            &[("files", json!(["/in/a.txt"]))],
+        );
+        let parsed: plan_kinds::TranscodeParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.sample_window, 65536, "模板采样值没有盖过缺省");
+        assert_eq!(
+            parsed.sample_blocks, 2,
+            "可选的 sampleBlocks 没有随模板转发"
+        );
     }
 
     #[test]

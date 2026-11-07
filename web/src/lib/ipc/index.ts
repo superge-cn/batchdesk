@@ -5,7 +5,9 @@ import {
   mockCancel,
   mockCleanup,
   mockDeleteRecipe,
+  mockDescribeRecipe,
   mockExportRecipe,
+  mockLoadRecipe,
   mockGetConfig,
   mockGetRecipe,
   mockGetStorageInfo,
@@ -44,6 +46,7 @@ import type {
   PlanDocument,
   PlanOperationInput,
   RecoveryAction,
+  RecipeApplySpec,
   RecipeDocument,
   RecipeExportPayload,
   RecipePage,
@@ -279,9 +282,10 @@ export async function resetUiState(): Promise<UiState> {
 
 // ── 处理模板（C37；设计 03 §7）────────────────────────────────────────
 //
-// 六个命令都不涉及"应用"：把模板变成计划的是 `loadRecipe`，而它卡在 OQ-36
-// （模板只存动作，动作→功能码是一对多）。界面因此只做存取与导入导出，
-// 不提供"点一下直接跑"——那既是未裁决的契约缺口，也是方案 §15.2.2 明令禁止的。
+// 套用通道两条（OQ-40①/OQ-41②，ADR-0077/0080）：`describeRecipe` 静态评估一份
+// 模板能不能套、要填哪些路径槽位（判定与 `loadRecipe` 同源）；`loadRecipe
+// {recipeId, pathParams}` 按槽位注入文件集后走与 planOperation 同一条出口出
+// **预览计划**——只出计划不执行（方案 §15.2.2），执行由调用方拿 planId 显式走 applyPlan。
 
 export async function listRecipes(offset = 0, limit = 50): Promise<RecipePage> {
   return isTauri()
@@ -291,6 +295,21 @@ export async function listRecipes(offset = 0, limit = 50): Promise<RecipePage> {
 
 export async function getRecipe(recipeId: string): Promise<RecipeDocument> {
   return isTauri() ? invoke<RecipeDocument>("getRecipe", { recipeId }) : mockGetRecipe(recipeId);
+}
+
+export async function describeRecipe(recipeId: string): Promise<RecipeApplySpec> {
+  return isTauri()
+    ? invoke<RecipeApplySpec>("describeRecipe", { recipeId })
+    : mockDescribeRecipe(recipeId);
+}
+
+export async function loadRecipe(
+  recipeId: string,
+  pathParams: Record<string, unknown>
+): Promise<PlanDocument> {
+  return isTauri()
+    ? invoke<PlanDocument>("loadRecipe", { recipeId, pathParams })
+    : mockLoadRecipe(recipeId, pathParams);
 }
 
 export async function saveRecipe(input: SaveRecipeInput): Promise<RecipeDocument> {

@@ -361,9 +361,24 @@ export interface TemplateStep {
    * `csv-rows`＝f08/f09、`move`＝c07/c08），反推不出来就不猜。
    */
   feature?: string;
+  /**
+   * 采样类技术口径（schema v5 新增，OQ-41 裁决：进模板、不进快照）。
+   *
+   * `paramsSnapshot` 保持「计划自带那份」；采样窗口/字节是请求侧技术值，
+   * 计划参数从不携带、套用时路由又必填——保存时把界面当前值存进这里，
+   * 套用时模板值优先、没存由壳层映射表按缺省补（ADR-0080）。
+   */
+  sampling?: RecipeSampling;
   /** 参数快照：不含源路径/输出目录/脚本（不变量 13，内核与壳层各兜一层）。 */
   paramsSnapshot: Record<string, unknown>;
   source: StepSource;
+}
+
+/** 采样类技术口径的可选存档（v5）。只存该功能实际用到的键，值必须 ≥1。 */
+export interface RecipeSampling {
+  sampleWindow?: number;
+  sampleBlocks?: number;
+  sampleBytes?: number;
 }
 
 export interface RecipeDocument {
@@ -399,9 +414,34 @@ export interface SaveRecipeInput {
   steps?: TemplateStep[];
   /** 单步模板的功能码（界面保存时传当前功能页 id）；缺省时壳层按唯一动作推断。 */
   feature?: string;
+  /** 单步模板的采样口径存档（v5，OQ-41 裁决；保存时从当前表单采集，表单没这项就不传）。 */
+  sampling?: RecipeSampling;
 }
 
-/** `exportRecipe` 出参：序列化后的当前版本（v4）JSON（落盘位置由壳层另存对话框决定）。 */
+/** 一个路径槽位的形状（`describeRecipe` 出参；`many`＝多值，填列表）。 */
+export interface RecipeSlotSpec {
+  key: string;
+  many: boolean;
+}
+
+/**
+ * `describeRecipe` 出参：一份模板的「一键套用」静态评估。
+ *
+ * `applicable=false` 时 `reason` 说明原因（未绑定/多步/变换正文不在计划参数里/
+ * 旧版压缩模板），界面**不渲染套用按钮**、只展示原因——不给按了必报错的按钮
+ * （同 ADR-0072/0077 的口径）。判定与 `loadRecipe` 同源（壳层 `assess`）。
+ */
+export interface RecipeApplySpec {
+  recipeId: string;
+  applicable: boolean;
+  reason?: string;
+  feature?: string;
+  kind?: PlanAction;
+  required: RecipeSlotSpec[];
+  outputs: RecipeSlotSpec[];
+}
+
+/** `exportRecipe` 出参：序列化后的当前版本（v5）JSON（落盘位置由壳层另存对话框决定）。 */
 export interface RecipeExportPayload {
   payload: string;
 }

@@ -1,28 +1,37 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Info, Loader2, Trash2, Upload } from "lucide-react";
-import { deleteRecipe, exportRecipe, importRecipe, listRecipes, toIpcError } from "./lib/ipc";
+import { Download, Info, Loader2, Play, Sparkles, Trash2, Upload } from "lucide-react";
+import {
+  applyPlan,
+  deleteRecipe,
+  describeRecipe,
+  exportRecipe,
+  importRecipe,
+  listRecipes,
+  loadRecipe,
+  toIpcError
+} from "./lib/ipc";
 import { ErrorBanner } from "./ErrorBanner";
 import { useI18n } from "./i18n";
 import { actionLabel } from "./labels";
 import { NAV_LABEL_BY_ID } from "./navCatalog";
-import type { IpcError, RecipeDocument } from "./lib/ipc/types";
+import { VirtualList } from "./VirtualList";
+import type { IpcError, PlanDocument, RecipeApplySpec, RecipeDocument, RecipeSlotSpec } from "./lib/ipc/types";
 
 /**
  * 处理模板（C37，方案 §15、设计 12 §5）。
  *
- * **这一版做到"绑定已记录、套用还没通道"**：列表、查看步骤、删除、导入、导出、
- * 「存为处理模板」都在；OQ-36 已裁（取①），所以模板现在**记着功能码**——
- * 每个步骤卡上会写明它绑到哪个功能，一对多且没绑定的直接说"未绑定"。
+ * **这一版接通「一键套用」**（OQ-40①＋OQ-41②，ADR-0077/0080）：列表、查看步骤、
+ * 删除、导入、导出之外，可套用的模板现在能填路径槽位后生成**预览计划**——
+ * 只出计划不执行（方案 §15.2.2），核对后由「执行此计划」显式走 applyPlan。
  *
- * 剩下的不是功能码问题，而是**输入通道**：方案 §15.2.5 说套用＝回填参数后调
- * `planOperation`，而设计 03/01 的 `loadRecipe` 只收 `recipeId`——模板按不变量 13
- * 不存路径，只给 id 就产不出计划。这条冲突登记在
- * [OQ-40](../../docs/OPEN-QUESTIONS.md) 等人类裁决（AGENTS「何时停下来问人」：命令面变更走人），
- * 裁决前这里不放一个点了没反应的按钮。
+ * 套用面的判定来自壳层 `describeRecipe`（与 `loadRecipe` 同源，两套口径不可能分叉）：
+ * - 未绑定/多步 → 不给按钮，绑定行说明原因；
+ * - 变换正文不在计划参数里的功能（归档规则/清单/过滤/排序/列操作/来源列/列选择）
+ *   → 不给按钮并展示原因（OQ-43 登记后续裁决）；
+ * - 采样口径随模板存档（v5），没存的由壳层映射表按缺省补。
  *
- * 另两条硬约束写在交互里：
- * - 模板**不含**源路径与输出目录（不变量 13），所以"套用"时本来就要重选位置；
- * - 任何应用路径都必须重新预览（方案 §15.2.2），本页不提供"直接执行"。
+ * 硬约束不变：模板不含源路径与输出目录（不变量 13），套用时现选位置；
+ * 任何应用路径都必须重新预览（方案 §15.2.2）。
  */
 export function TemplatesPage({ onBack }: { onBack: () => void }) {
   const { t } = useI18n();
@@ -32,11 +41,21 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** 每个模板的套用面（describeRecipe）；取不到的（刚被删等）不渲染套用按钮。 */
+  const [specs, setSpecs] = useState<Record<string, RecipeApplySpec | null>>({});
   /** 删除是两段式：先选中要删的，再确认——避免误触把模板删掉。 */
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [importText, setImportText] = useState("");
   const [exported, setExported] = useState<{ name: string; payload: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  /** 套用对话框：目标模板＋它的槽位评估。 */
+  const [applyTarget, setApplyTarget] = useState<{ item: RecipeDocument; spec: RecipeApplySpec } | null>(null);
+  /** 槽位输入值（键＝槽位键；单值一行文本，多值一行一个路径）。 */
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({});
+  const [applying, setApplying] = useState(false);
+  /** 套用产出的预览计划（未执行；执行按钮显式走 applyPlan）。 */
+  const [applied, setApplied] = useState<{ name: string; plan: PlanDocument } | null>(null);
+  const [executing, setExecuting] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -45,6 +64,18 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
       const page = await listRecipes(0, 200);
       setItems(page.items);
       setTotal(page.total);
+      // 套用面与列表同源取回：判定是纯内存静态评估，逐条一次调用很便宜；
+      // 单条失败不拖垮整个列表（该模板只是没有套用按钮）。
+      const entries = await Promise.all(
+        page.items.map(async (item) => {
+          try {
+            return [item.recipeId, await describeRecipe(item.recipeId)] as const;
+          } catch {
+            return [item.recipeId, null] as const;
+          }
+        })
+      );
+      setSpecs(Object.fromEntries(entries));
     } catch (value) {
       setError(toIpcError(value));
     } finally {
@@ -140,6 +171,69 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const openApply = (item: RecipeDocument, spec: RecipeApplySpec) => {
+    setError(null);
+    setNotice(null);
+    setSlotValues({});
+    setApplyTarget({ item, spec });
+  };
+
+  /** 多值槽一行一个路径；单值槽去首尾空白。空行丢弃，空结果返回 undefined 让壳层报缺槽。 */
+  const slotParam = (spec: RecipeSlotSpec, value: string | undefined): string | string[] | undefined => {
+    const text = (value ?? "").trim();
+    if (!spec.many) {
+      return text.length > 0 ? text : undefined;
+    }
+    const items = text
+      .split(/[\n,\uFF0C]+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return items.length > 0 ? items : undefined;
+  };
+
+  const onSubmitApply = async () => {
+    if (!applyTarget) return;
+    const { item, spec } = applyTarget;
+    const pathParams: Record<string, unknown> = {};
+    for (const slot of [...spec.required, ...spec.outputs]) {
+      const value = slotParam(slot, slotValues[slot.key]);
+      if (value !== undefined) {
+        pathParams[slot.key] = value;
+      }
+    }
+    setApplying(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const plan = await loadRecipe(item.recipeId, pathParams);
+      setApplied({ name: item.name, plan });
+      setApplyTarget(null);
+      setNotice(t("templates.notice.applied"));
+    } catch (value) {
+      setError(toIpcError(value));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const onExecute = async () => {
+    if (!applied) return;
+    setExecuting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const handle = await applyPlan(applied.plan.planId, {
+        onConflict: "skip",
+        overwriteConfirmed: false
+      });
+      setNotice(t("templates.notice.executed", { taskId: handle.taskId }));
+    } catch (value) {
+      setError(toIpcError(value));
+    } finally {
+      setExecuting(false);
+    }
+  };
+
   return (
     <div className="content">
       {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
@@ -172,10 +266,10 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
           </div>
         </div>
 
-        <div className="banner banner-warn" role="status">
+        <div className="banner banner-info" role="status">
           <Info size={14} />
           <div>
-            <strong>{t("templates.blocked.title")}</strong> {t("templates.blocked.body")}
+            <strong>{t("templates.applyNotice.title")}</strong> {t("templates.applyNotice.body")}
           </div>
         </div>
 
@@ -201,6 +295,16 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                         ? t("templates.bound", { features: binding(item).label })
                         : t("templates.unbound")}
                     </p>
+                    {/* 已绑定但预声明不可套用（正文缺失/旧压缩模板）：如实给原因，不给假按钮。 */}
+                    {binding(item).bound &&
+                    specs[item.recipeId] &&
+                    !specs[item.recipeId]!.applicable ? (
+                      <p className="hint" data-testid="template-refused">
+                        {t("templates.refusedReason", {
+                          reason: specs[item.recipeId]!.reason ?? ""
+                        })}
+                      </p>
+                    ) : null}
                     {item.match?.extensions?.length ? (
                       <p className="hint">
                         {t("templates.match", { extensions: item.match.extensions.join(", ") })}
@@ -208,6 +312,16 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                     ) : null}
                   </div>
                   <div className="button-row">
+                    {specs[item.recipeId]?.applicable ? (
+                      <button
+                        className="button button-primary"
+                        type="button"
+                        data-testid="template-apply"
+                        onClick={() => openApply(item, specs[item.recipeId]!)}
+                      >
+                        <Sparkles size={14} /> {t("templates.apply")}
+                      </button>
+                    ) : null}
                     <button
                       className="button button-secondary"
                       type="button"
@@ -254,6 +368,14 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                         {t("templates.stepParams", {
                           count: Object.keys(step.paramsSnapshot).length
                         })}
+                        {step.sampling
+                          ? ` · ${t("templates.stepSampling", {
+                              sampling: Object.entries(step.sampling)
+                                .filter(([, value]) => value !== undefined)
+                                .map(([key, value]) => `${key}=${value}`)
+                                .join(", ")
+                            })}`
+                          : ""}
                         {step.source === "previous" ? ` · ${t("templates.stepPrevious")}` : ""}
                       </span>
                     </li>
@@ -264,6 +386,146 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
           </div>
         )}
       </section>
+
+      {applyTarget && (
+        <section className="card" aria-labelledby="template-apply-title">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title" id="template-apply-title">
+                {t("templates.apply.title", { name: applyTarget.item.name })}
+              </h2>
+              <p className="card-sub">
+                {t("templates.apply.feature", { feature: applyTarget.spec.feature ?? "" })}
+              </p>
+              <p className="hint">{t("templates.apply.hint")}</p>
+            </div>
+            <div className="button-row">
+              <button
+                className="button button-ghost"
+                type="button"
+                onClick={() => setApplyTarget(null)}
+              >
+                {t("templates.apply.cancel")}
+              </button>
+            </div>
+          </div>
+          {[...applyTarget.spec.required, ...applyTarget.spec.outputs].map((slot, index) => (
+            <label className="field" key={slot.key}>
+              <span>
+                {slot.key}
+                {slot.many ? ` · ${t("templates.apply.manyLabel")}` : ""}
+                {index >= applyTarget.spec.required.length
+                  ? ` · ${t("templates.apply.outputLabel")}`
+                  : ""}
+              </span>
+              {slot.many ? (
+                <textarea
+                  className="textarea mono"
+                  rows={3}
+                  spellCheck={false}
+                  aria-label={slot.key}
+                  data-testid={`apply-slot-${slot.key}`}
+                  placeholder={t("templates.apply.manyHint")}
+                  value={slotValues[slot.key] ?? ""}
+                  onChange={(event) =>
+                    setSlotValues((current) => ({
+                      ...current,
+                      [slot.key]: event.target.value
+                    }))
+                  }
+                />
+              ) : (
+                <input
+                  className="input"
+                  type="text"
+                  spellCheck={false}
+                  aria-label={slot.key}
+                  data-testid={`apply-slot-${slot.key}`}
+                  value={slotValues[slot.key] ?? ""}
+                  onChange={(event) =>
+                    setSlotValues((current) => ({
+                      ...current,
+                      [slot.key]: event.target.value
+                    }))
+                  }
+                />
+              )}
+            </label>
+          ))}
+          <div className="button-row">
+            <button
+              className="button button-primary"
+              type="button"
+              data-testid="apply-submit"
+              disabled={applying}
+              onClick={() => void onSubmitApply()}
+            >
+              <Loader2 size={14} className={applying ? "spin" : undefined} />
+              {t("templates.apply.submit")}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {applied && (
+        <section className="card" aria-labelledby="template-preview-title">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title" id="template-preview-title">
+                {t("templates.preview.title", { name: applied.name })}
+              </h2>
+              <p className="card-sub">{t("templates.preview.hint")}</p>
+              <p className="hint" data-testid="apply-preview-stats">
+                {t("templates.preview.stats", {
+                  total: applied.plan.stats.total,
+                  conflict: applied.plan.stats.conflict,
+                  warning: applied.plan.stats.warning,
+                  blocked: applied.plan.stats.blocked
+                })}
+              </p>
+            </div>
+            <div className="button-row">
+              <button
+                className="button button-primary"
+                type="button"
+                data-testid="apply-execute"
+                disabled={executing || applied.plan.entries.length === 0}
+                onClick={() => void onExecute()}
+              >
+                <Play size={14} /> {t("templates.preview.execute")}
+              </button>
+            </div>
+          </div>
+          {applied.plan.warnings.length > 0 && (
+            <ul className="result-list" data-testid="apply-preview-warnings">
+              {applied.plan.warnings.map((warning, index) => (
+                <li className="result-row" key={`${warning.kind}-${index}`}>
+                  <span className="badge">{t("templates.preview.warning")}</span>
+                  <span className="reason">{warning.kind}</span>
+                  <span className="hint">{warning.suggestion ?? ""}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* 方案 6.2：计划条目可能上千，只挂窗口内的行。 */}
+          <VirtualList
+            label={t("templates.preview.entries", { total: applied.plan.entries.length })}
+            items={applied.plan.entries}
+            getKey={(entry) => entry.entryId}
+            renderRow={(entry) => (
+              <div className="row">
+                <span className="path" title={entry.source}>
+                  {entry.source}
+                </span>
+                <span className="path" title={entry.target ?? entry.reason}>
+                  {entry.target ?? entry.reason}
+                  {entry.blocked ? ` · ${entry.blocked.code}` : ""}
+                </span>
+              </div>
+            )}
+          />
+        </section>
+      )}
 
       {exported && (
         <section className="card" aria-labelledby="template-export-title">

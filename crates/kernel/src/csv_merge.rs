@@ -751,7 +751,10 @@ pub fn plan_f06(input: PlanF06Input) -> Result<PlanDocument, KernelError> {
     let entries = vec![entry];
 
     let mut params = std::collections::BTreeMap::new();
-    params.insert("target".to_string(), PlanParamValue::String(input.target));
+    // 输出路径的参数键是 `output`（ADR-0080，同 plan_f04）：`target` 剔不进
+    // PATH_PARAM_KEYS，输出绝对路径会随模板保存/导出泄漏（不变量 13），
+    // 且与「target＝目标编码」同名不同义。
+    params.insert("output".to_string(), PlanParamValue::String(input.target));
     params.insert(
         "targetEncoding".to_string(),
         PlanParamValue::String(input.target_encoding.as_str().to_string()),

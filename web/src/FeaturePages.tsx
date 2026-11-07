@@ -30,6 +30,7 @@ import type {
   PlanEntry,
   PreviewStatus,
   ProgressPhase,
+  RecipeSampling,
   RenamePreview,
   SaveRecipeInput,
   TaskState,
@@ -916,6 +917,29 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
    * 一份计划里出现多种动作时（C07 的清单可能是 move/copy 混排）拒绝保存而不是
    * 挑一个——挑错等于把另一部分语义悄悄丢掉。
    */
+  /**
+   * 采样口径进模板、不进快照（v5，OQ-41 裁决）：当前视图字段清单里有采样键才采集，
+   * 值取表单当前值，空则与计划生成同口径落 4096（`FeaturePages` 里 `|| 4096` 的既有缺省，
+   * 非方案 §5.2 数值）。判据来自 FEATURE_FIELDS，不另抄一份功能码清单。
+   */
+  const samplingFromForm = (): RecipeSampling | undefined => {
+    const sampling: RecipeSampling = {};
+    for (const spec of FEATURE_FIELDS[view] ?? []) {
+      if (spec.name !== "sampleWindow" && spec.name !== "sampleBytes" && spec.name !== "sampleBlocks") {
+        continue;
+      }
+      const fallback = spec.name === "sampleBlocks" ? 0 : 4096;
+      const raw = Number(form[spec.name] || fallback);
+      if (!Number.isFinite(raw) || raw <= 0) {
+        continue;
+      }
+      if (spec.name === "sampleWindow") sampling.sampleWindow = raw;
+      if (spec.name === "sampleBlocks") sampling.sampleBlocks = raw;
+      if (spec.name === "sampleBytes") sampling.sampleBytes = raw;
+    }
+    return Object.keys(sampling).length > 0 ? sampling : undefined;
+  };
+
   const onSaveTemplate = async () => {
     if (!plan) return;
     const counts = new Map<string, number>();
@@ -943,6 +967,9 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
         // 参数快照就是计划自己带的那份（设计 01 §5）；源路径与输出目录由壳层剔除，
         // 这里不再抄一份路径键表——两份清单必然漂移，判据只留内核一处。
         paramsSnapshot: plan.params,
+        // 采样口径进模板不进快照（v5，OQ-41 裁决）：快照保持计划形状，
+        // 采样窗口/字节从当前表单采集——套用时模板值优先、没存由壳层按缺省补。
+        sampling: samplingFromForm(),
         // 功能码在保存这一刻是**已知**的（就是当前页），不记下来就得事后反推——
         // 而 `split`/`edit-content`/`rename` 这些动作对应多个功能码，反推必然靠猜（OQ-36 裁决①）。
         feature: view

@@ -132,4 +132,33 @@ describe("功能页的「存为处理模板」", () => {
     await userEvent.click(screen.getByRole("button", { name: /生成计划预览/ }));
     await waitFor(() => expect(page.getByTestId("save-template")).toBeDisabled());
   });
+
+  it("采样口径进模板不进快照（v5，OQ-41）：表单当前值存进 sampling，快照保持计划形状", async () => {
+    // c01 的路由必填 sampleWindow 但计划参数从不携带——保存时把表单当前值
+    // 采集进 sampling 块；paramsSnapshot 仍是 plan.params（不含采样键，ADR-0072 不变）。
+    nextPlan = {
+      ...splitPlan,
+      kind: "c01",
+      params: { target: "utf-8", invalid: "replace-and-count", platformPrior: "other" },
+      entries: [{ ...splitPlan.entries[0], action: "transcode", reason: "transcode" }]
+    };
+    const page = render(<FeaturePages view="c01" onBack={() => undefined} />);
+    await userEvent.click(screen.getByRole("button", { name: /生成计划预览/ }));
+    await waitFor(() => expect(page.getByTestId("save-template")).toBeInTheDocument());
+
+    await userEvent.click(page.getByTestId("save-template"));
+    await userEvent.type(page.getByLabelText("模板名称"), "转码模板");
+    // 表单里把采样窗口改成 65536：模板该存的就是这个值，而不是缺省
+    const windowInput = page.getByLabelText(/采样窗口/);
+    await userEvent.clear(windowInput);
+    await userEvent.type(windowInput, "65536");
+    await userEvent.click(page.getByTestId("save-template-submit"));
+
+    await waitFor(() => expect(saveRecipe).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(saveRecipe).mock.calls[0][0];
+    expect(call.sampling).toEqual({ sampleWindow: 65536 });
+    // 快照＝计划自带那份，采样键不在里面
+    expect(call.paramsSnapshot).toEqual(nextPlan.params);
+    expect(call.paramsSnapshot).not.toHaveProperty("sampleWindow");
+  });
 });

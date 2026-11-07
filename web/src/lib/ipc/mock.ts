@@ -19,6 +19,7 @@ import type {
   ProgressPhase,
   RecipeDocument,
   RecipeExportPayload,
+  RecipeApplySpec,
   RecipePage,
   SaveRecipeInput,
   ScopeView,
@@ -668,7 +669,7 @@ let recipeCounter = 0;
 let recipes: RecipeDocument[] = [
   {
     recipeId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8R1",
-    schemaVersion: 4,
+    schemaVersion: 5,
     name: "CSV 分片（每片 5 万行）",
     description: "演示夹具：真实模板由桌面壳落盘",
     steps: [
@@ -763,6 +764,7 @@ export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
           stepId: "step-1",
           kind: input.kind ?? "rename",
           feature: input.feature ?? inferFeature(input.kind ?? "rename"),
+          sampling: input.sampling,
           paramsSnapshot: stripPaths(input.paramsSnapshot ?? {}),
           source: "original"
         }
@@ -773,7 +775,7 @@ export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
   recipeCounter += 1;
   const document: RecipeDocument = {
     recipeId: input.recipeId ?? `01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8S${recipeCounter}`,
-    schemaVersion: 4,
+    schemaVersion: 5,
     name: input.name,
     description: input.description,
     steps,
@@ -794,6 +796,144 @@ export function mockDeleteRecipe(recipeId: string): void {
 
 export function mockExportRecipe(recipeId: string): RecipeExportPayload {
   return { payload: JSON.stringify(mockGetRecipe(recipeId), null, 2) };
+}
+
+/**
+ * 「正文不随计划保存」的功能码（OQ-41②，ADR-0080）：变换正文（归档规则/清单文本/
+ * 过滤条件/排序键/拆分合并规格/来源列语义/列选择）在计划参数里只剩计数，
+ * 映射表补不出来 ⇒ 一键套用语义上不可行。浏览器 mock 与壳层
+ * `recipe_apply::FEATURE_PARAM_MAP` 的 refuse 清单同源，由 check_docs.py 逐码核对。
+ */
+const REFUSED_FEATURES = ["f06", "f07", "c08", "f11", "c12", "c13", "c14"];
+
+/**
+ * 浏览器夹具的槽位表（`describeRecipe` 出参用）。与壳层
+ * `recipe_apply::FEATURE_PATH_SLOTS` 同源，由 check_docs.py 逐码核对
+ * （键名/单复数/多值标记，含 c09 的 sourcePaths 通道）。
+ * 只登记演示与测试会用到的功能；未登记的功能如实报"夹具没有槽位"。
+ */
+const APPLY_SLOTS: Record<string, { required: [string, boolean][]; outputs: [string, boolean][] }> = {
+  c09: { required: [["sourcePaths", true]], outputs: [] },
+  f01: { required: [["file", false]], outputs: [["outputDir", false]] },
+  f02: { required: [["file", false]], outputs: [["outputDir", false]] },
+  f03: { required: [["file", false]], outputs: [["outputDir", false]] },
+  f04: { required: [["files", true]], outputs: [["output", false]] },
+  f05: { required: [["file", false]], outputs: [["outputDir", false]] },
+  f06: { required: [["files", true]], outputs: [["output", false]] },
+  f07: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] },
+  f08: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] },
+  f09: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] },
+  f10: { required: [["roots", true]], outputs: [["output", false], ["outputDir", false]] },
+  f11: { required: [["list", false], ["root", false]], outputs: [] },
+  f12: { required: [["dir", false]], outputs: [] },
+  c01: { required: [["files", true]], outputs: [] },
+  c02: { required: [["files", true]], outputs: [] },
+  c03: { required: [["files", true]], outputs: [] },
+  c04: { required: [["dir", false]], outputs: [] },
+  c07: { required: [["manifest", false], ["sourceRoot", false]], outputs: [["targetRoot", false]] },
+  c08: { required: [["sourceRoot", false]], outputs: [["targetRoot", false]] },
+  c10: { required: [["archive", false]], outputs: [["outputDir", false]] },
+  c11: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] },
+  c12: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] },
+  c13: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] },
+  c14: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] }
+};
+
+/** 浏览器夹具的 loadRecipe：槽位校验与壳层同语义（缺/多/空都报），事实采集是夹具（同 mockPlan），返回同形状的预览计划。 */
+export function mockLoadRecipe(recipeId: string, pathParams: Record<string, unknown>): Promise<PlanDocument> {
+  const spec = mockDescribeRecipe(recipeId);
+  if (!spec.applicable || !spec.feature) {
+    fail("E1002", `loadRecipe: ${spec.reason ?? "recipe is not applicable"}`);
+  }
+  const declared = new Set([...spec.required, ...spec.outputs].map((slot) => slot.key));
+  for (const key of Object.keys(pathParams)) {
+    if (!declared.has(key)) {
+      fail(
+        "E1002",
+        `loadRecipe: ${spec.feature} has no path slot ${key}; declared slots are ${[...declared].join(", ")}`
+      );
+    }
+  }
+  const missing = spec.required.filter((slot) => {
+    const value = pathParams[slot.key];
+    return value === undefined || (typeof value === "string" && value.trim().length === 0);
+  });
+  if (missing.length > 0) {
+    fail(
+      "E1002",
+      `loadRecipe: ${spec.feature} needs the path slots: ${missing.map((slot) => slot.key).join(", ")}`
+    );
+  }
+  if (
+    spec.outputs.length > 0 &&
+    !spec.outputs.some((slot) => {
+      const value = pathParams[slot.key];
+      return typeof value === "string" ? value.trim().length > 0 : value !== undefined;
+    })
+  ) {
+    fail(
+      "E1002",
+      `loadRecipe: ${spec.feature} needs one of the output slots: ${spec.outputs.map((slot) => slot.key).join(", ")}`
+    );
+  }
+  const step = mockGetRecipe(recipeId).steps[0];
+  // PlanOperationInput 的 kind 字段在类型上只写了 "c09"（C09 形状先行），
+  // mockPlan 运行时本就按非 c09 分支给最小夹具——与既有用法一致，这里显式收窄。
+  return mockPlan({
+    kind: step.kind as "c09",
+    params: { ...step.paramsSnapshot, ...pathParams } as PlanOperationInput["params"],
+    sourcePaths: []
+  });
+}
+
+export function mockDescribeRecipe(recipeId: string): RecipeApplySpec {
+  const document = mockGetRecipe(recipeId);
+  const step = document.steps[0];
+  const base = {
+    recipeId: document.recipeId,
+    feature: step?.feature,
+    kind: step?.kind
+  };
+  if (!step || document.steps.length > 1 || !step.feature) {
+    return {
+      ...base,
+      applicable: false,
+      reason: step
+        ? document.steps.length > 1
+          ? "multi-step recipe is not applied in one click; plan each step separately"
+          : "recipe step has no feature binding; re-save it from that feature page"
+        : "recipe has no step to apply",
+      required: [],
+      outputs: []
+    };
+  }
+  const feature = step.feature;
+  if (REFUSED_FEATURES.includes(feature)) {
+    return {
+      ...base,
+      applicable: false,
+      reason:
+        "transformation content is not carried in plan params; reconfigure on the feature page",
+      required: [],
+      outputs: []
+    };
+  }
+  const slots = APPLY_SLOTS[feature];
+  if (!slots) {
+    return {
+      ...base,
+      applicable: false,
+      reason: `browser fixture has no slots registered for ${feature}`,
+      required: [],
+      outputs: []
+    };
+  }
+  return {
+    ...base,
+    applicable: true,
+    required: slots.required.map(([key, many]) => ({ key, many })),
+    outputs: slots.outputs.map(([key, many]) => ({ key, many }))
+  };
 }
 
 export function mockImportRecipe(payload: string): RecipeDocument {

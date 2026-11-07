@@ -157,7 +157,11 @@ pub fn plan_f04(input: PlanF04Input) -> Result<PlanDocument, KernelError> {
     let entries = vec![entry];
 
     let mut params = std::collections::BTreeMap::new();
-    params.insert("target".to_string(), PlanParamValue::String(input.target));
+    // 输出路径的参数键是 `output`（ADR-0080）：`PlanF04Input.target` 这个字段名是历史遗留，
+    // 但键名不能再叫 `target`——处理模板的保存按 PATH_PARAM_KEYS 剔路径，`target` 剔不到它，
+    // 输出绝对路径会随模板保存/导出泄漏（不变量 13）；且别的功能里 `target` 是目标编码，
+    // 同名不同义正是 OQ-41 里 f04 的陷阱来源。
+    params.insert("output".to_string(), PlanParamValue::String(input.target));
     params.insert(
         "targetEncoding".to_string(),
         PlanParamValue::String(input.target_encoding.as_str().to_string()),

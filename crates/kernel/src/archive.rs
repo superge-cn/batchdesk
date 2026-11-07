@@ -561,6 +561,13 @@ pub fn plan_c10_compress(input: PlanC10CompressInput) -> Result<PlanDocument, Ke
         });
     }
     let mut params = BTreeMap::new();
+    // mode 必须随计划保存（ADR-0080）：套用通道按快照里的 `mode` 分流路径槽位
+    // （解压 archive＋outputDir、压缩 sources＋output），压缩计划不写 mode 会被当成解压。
+    // `sources` 仍是 JSON 串且会被保存通道按路径键剔除，这里只补模式标记。
+    params.insert(
+        "mode".to_string(),
+        PlanParamValue::String("compress".to_string()),
+    );
     params.insert(
         "sources".to_string(),
         PlanParamValue::String(serde_json::to_string(&input.sources).map_err(|error| {

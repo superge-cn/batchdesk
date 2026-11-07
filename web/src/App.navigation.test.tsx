@@ -109,10 +109,11 @@ describe("功能视图导航可达", () => {
     expect(within(main).getByLabelText("界面语言")).toHaveValue("zh-CN");
   });
 
-  it("「处理模板」是能点开的真实视图：列表出得来，未裁决的部分不给假按钮", async () => {
-    // C37 前端只做到"存取那一半"：把模板变成计划要 `loadRecipe`，而它卡在 OQ-36
-    // （模板存动作、壳层按功能码路由）。所以这条用例同时钉两件事——
-    // ① 视图真渲染（侧栏有名字 ≠ 页面在）；② 页面不提供一个点了没反应的「应用」。
+  it("「处理模板」是能点开的真实视图：列表出得来，可套用的模板给真按钮", async () => {
+    // OQ-41② 落地后套用通道已接（ADR-0080）：夹具里预置的 f05 模板（已绑定、
+    // 变换正文随计划保存）应当渲染「套用」按钮——判定来自 describeRecipe，
+    // 与 loadRecipe 同源。这条用例同时钉两件事：
+    // ① 视图真渲染（侧栏有名字 ≠ 页面在）；② 套用按钮只在可套用的模板上出现。
     render(<App />);
     const nav = screen.getByRole("navigation", { name: "功能导航" });
     const main = screen.getByRole("main");
@@ -123,7 +124,7 @@ describe("功能视图导航可达", () => {
     expect(await within(main).findByRole("heading", { name: "处理模板", level: 2 })).toBeVisible();
     // 浏览器夹具里预置了一条模板：列表不是空壳（空列表也会通过"页面渲染了"这种弱断言）
     await waitFor(() => expect(main.textContent).toContain("CSV 分片（每片 5 万行）"));
-    expect(main.textContent).toContain("OQ-36");
-    expect(within(main).queryByRole("button", { name: /^应用/ })).toBeNull();
+    expect(main.textContent).toContain("OQ-41");
+    expect(within(main).getByTestId("template-apply")).toBeVisible();
   });
 });

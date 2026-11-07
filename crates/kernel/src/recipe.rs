@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::error::KernelError;
 use crate::plan::PlanAction;
 
-pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 5;
 
 /// 多步骤上限沿用 F15 单束上限（方案 §15.1，不新增数值）。
 pub const MAX_RECIPE_STEPS: usize = 10;
@@ -90,6 +90,28 @@ pub struct TemplateStep {
     /// `None`＝该步**不可套用**（旧 v3 里一对多动作迁移后的状态），不是"绑定到了通用出口"。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature: Option<String>,
+    /// 采样类技术口径（v5 新增，OQ-41 裁决②的附带决定：**进模板、不进快照**）。
+    ///
+    /// `params_snapshot` 保持「计划自带那份」（ADR-0072）不动——检测采样窗口/字节是
+    /// **请求侧**的技术值，计划参数里从不携带（实测 plan_c01/c02/c03 只写 target/invalid/
+    /// platformPrior 等），套用时路由又必填它们。v5 起保存时把界面当前值存进这块；
+    /// `None`（v4 及更早模板）＝套用通道按映射表的缺省补（见壳层 `FEATURE_PARAM_MAP`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<RecipeSampling>,
+}
+
+/// 采样类技术口径的可选存档（v5，OQ-41 裁决）。三个键都可选：只存该功能
+/// 实际用到的那几个（c01 记 `sampleWindow`、c02/c03 记 `sampleBytes`），
+/// 不为没用的键造 null。值必须 ≥1（0 无意义，validate 拒绝）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct RecipeSampling {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_blocks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_bytes: Option<u64>,
 }
 
 /// 动作→功能码**一对一**的表：只登记唯一对应项，迁移时用来自动补 `feature`。
@@ -205,6 +227,7 @@ impl RecipeDocument {
                 params_snapshot,
                 source: StepSource::Original,
                 feature,
+                sampling: None,
             }],
             match_: None,
             source_format: None,
@@ -258,6 +281,20 @@ impl RecipeDocument {
                 return Err(KernelError::invalid_params(format!(
                     "template parameters must not contain scripts (found {key})"
                 )));
+            }
+            if let Some(sampling) = &step.sampling {
+                for (name, value) in [
+                    ("sampleWindow", sampling.sample_window),
+                    ("sampleBlocks", sampling.sample_blocks),
+                    ("sampleBytes", sampling.sample_bytes),
+                ] {
+                    if value == Some(0) {
+                        return Err(KernelError::invalid_params(format!(
+                            "sampling {name} must be at least 1 for step {}",
+                            step.step_id
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -358,6 +395,9 @@ pub fn strip_path_params(params: &mut Map<String, Value>) -> Vec<String> {
 /// v3→v4 的迁移是**补 `feature`**：一对多动作留 `None`（不可套用），
 /// 一对一动作按 `feature_for_action` 自动绑定——迁移不猜功能码。
 ///
+/// v4→v5 没有可补的字段：`sampling` 从 v5 起才在保存时采集，旧模板留 `None`，
+/// 套用时由壳层映射表按该功能的缺省补（迁移不猜采样值）。
+///
 /// 低版本（1/2）迁移；高于 `CURRENT_RECIPE_SCHEMA_VERSION` → E1007（不猜测语义）。
 pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelError> {
     let version = payload
@@ -392,6 +432,13 @@ pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelErro
             v3.bind_features_from_actions();
             v3.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
             Ok(v3)
+        }
+        4 => {
+            let mut v4: RecipeDocument =
+                serde_json::from_value(payload).map_err(recipe_parse_error)?;
+            v4.strip_paths();
+            v4.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
+            Ok(v4)
         }
         CURRENT_RECIPE_SCHEMA_VERSION => {
             let mut current: RecipeDocument =
@@ -440,6 +487,7 @@ impl RecipeV1 {
                 params_snapshot: self.params_snapshot,
                 source: StepSource::Original,
                 feature: feature_for_action(self.kind).map(str::to_string),
+                sampling: None,
             }],
             match_: Some(RecipeMatch::default()),
             source_format: None,
@@ -467,6 +515,7 @@ impl RecipeDocumentV2 {
                 params_snapshot: params,
                 source: StepSource::Original,
                 feature: feature_for_action(self.kind).map(str::to_string),
+                sampling: None,
             }],
             match_: self.match_,
             source_format: self.source_format,
@@ -536,6 +585,7 @@ mod tests {
             params_snapshot: last,
             source: StepSource::Previous,
             feature: None,
+            sampling: None,
         });
         assert_eq!(
             recipe.strip_paths(),
@@ -845,6 +895,7 @@ mod tests {
             params_snapshot: params,
             source: StepSource::Previous,
             feature: Some("c11".to_string()),
+            sampling: None,
         });
         let error = multi.single_step_binding().unwrap_err();
         assert_eq!(error.code, "E1002");
@@ -868,5 +919,102 @@ mod tests {
         assert_eq!(recipe.validate().unwrap_err().code, "E1002");
         recipe.steps[0].feature = Some("f01".to_string());
         recipe.validate().unwrap();
+    }
+
+    #[test]
+    fn v5_round_trips_sampling_and_omits_the_block_when_absent() {
+        let mut params = Map::new();
+        params.insert("target".to_string(), json!("utf-8"));
+        let mut bound = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8H",
+            "转码模板（带采样）",
+            PlanAction::Transcode,
+            params.clone(),
+            "2026-11-07T00:00:00Z",
+            Some("c01".to_string()),
+        );
+        bound.steps[0].sampling = Some(RecipeSampling {
+            sample_window: Some(65536),
+            sample_blocks: None,
+            sample_bytes: None,
+        });
+        bound.validate().unwrap();
+        let json = serde_json::to_value(&bound).unwrap();
+        assert_eq!(json["steps"][0]["sampling"]["sampleWindow"], json!(65536));
+        assert!(json["steps"][0]["sampling"].get("sampleBlocks").is_none());
+        let back: RecipeDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(back, bound);
+
+        // 没存采样的步骤不写块（同 feature 的省略口径）
+        let plain = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8I",
+            "转码模板（无采样）",
+            PlanAction::Transcode,
+            params,
+            "2026-11-07T00:00:00Z",
+            Some("c01".to_string()),
+        );
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json["steps"][0].get("sampling").is_none());
+    }
+
+    #[test]
+    fn v4_payload_migrates_to_v5_with_sampling_absent() {
+        // v4 模板没有 sampling 键：serde default → None，版本号升 5。
+        // 采样值不猜——套用时由壳层映射表按缺省补（ADR-0080 §2）。
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8J",
+            "schemaVersion": 4,
+            "name": "v4 的转码模板",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "transcode",
+                "paramsSnapshot": {"target": "utf-8"},
+                "source": "original",
+                "feature": "c01"
+            }],
+            "createdAt": "2026-11-06T00:00:00Z"
+        });
+        let migrated = migrate_recipe_value(payload).unwrap();
+        assert_eq!(migrated.schema_version, CURRENT_RECIPE_SCHEMA_VERSION);
+        assert_eq!(migrated.steps[0].sampling, None);
+        assert!(migrated.validate().is_ok());
+    }
+
+    #[test]
+    fn sampling_zero_is_rejected_and_unknown_keys_are_denied() {
+        let mut recipe = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8K",
+            "零采样",
+            PlanAction::Transcode,
+            Map::new(),
+            "2026-11-07T00:00:00Z",
+            Some("c01".to_string()),
+        );
+        recipe.steps[0].sampling = Some(RecipeSampling {
+            sample_window: Some(0),
+            ..RecipeSampling::default()
+        });
+        let error = recipe.validate().unwrap_err();
+        assert_eq!(error.code, "E1002");
+        assert!(error.message.contains("sampleWindow"), "{error:?}");
+
+        // 采样块的键集是封闭的：塞进未知键（deny_unknown_fields）直接解析失败，
+        // 不静默丢——否则保存侧新加的键会被导入通道悄悄抹掉。
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8L",
+            "schemaVersion": 5,
+            "name": "未知采样键",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "transcode",
+                "paramsSnapshot": {},
+                "source": "original",
+                "feature": "c01",
+                "sampling": {"window": 4096}
+            }],
+            "createdAt": "2026-11-07T00:00:00Z"
+        });
+        assert!(migrate_recipe_value(payload).is_err());
     }
 }
