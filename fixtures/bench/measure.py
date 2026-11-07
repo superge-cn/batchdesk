@@ -20,6 +20,7 @@ docs/testing/性能基准执行手册.md §3–§4。本脚本只测量与记录
     python3 fixtures/bench/measure.py c2rw --case c03-regex                # 查找替换（可界定正则）
     python3 fixtures/bench/measure.py c2rw --case c03-cell                 # 查找替换（CSV 单元格）
     python3 fixtures/bench/measure.py c2rw --case c03-plain --size-mib 512 # 只取 C-2 集的前 512 MiB
+    python3 fixtures/bench/measure.py c2rw --case c01 --gb-multibyte --size-mib 64  # 现生成的 GB18030 多字节变体（方向性读数，见下）
 
 c2rw 一律在 C-2 集的**工作副本**上就地改写（改写会覆盖源，故绝不碰 `out/big_file.txt` 本体），
 产物按方案 §9.1 的"改写"语义逐字节校验：校验不过＝样本作废。校验在计时区外做。
@@ -31,6 +32,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import statistics
@@ -205,6 +207,107 @@ def digest_of(path: Path, limit: int | None = None) -> tuple[str, int]:
         digest.update(block)
         total += len(block)
     return digest.hexdigest(), total
+
+
+# ── C01 的 GB18030 多字节变体（方向性读数用，不是 T v1.12 附录 C 的 C-2 构造）────────────
+# 附录 C 的 C-2 只规定了「行长度含正常与极端两类」，没有编码维度；既有数据集是纯 ASCII，
+# `c01 --source gb18030` 在它上面只走 1:1 子集，所以 §9.1 的大文件吞吐从未在真实多字节输入上量过。
+# 下面三个常量都是构造参数（非产品阈值）：行长与 gen_c2.py 的「常规行约 60 字节」同量级。
+GB_LINE_BYTES = 60
+GB_EVERY_FOUR_BYTE_LINE = 50
+GB_SEED = 2026  # 与 gen_c2.py 同种子，重复运行逐字节一致
+GB_BLOCK_LINES = 200_000  # 每批 20 万行（≈12 MiB），把生成期间的内存钉住
+GB_CACHE_DIR = Path("/tmp/batchdesk-bench")  # 与 measure.py 的工作副本同处，不入库
+
+
+def gb_target_bytes(size_mib: int) -> int:
+    if size_mib <= 0:
+        raise SystemExit(
+            "--gb-multibyte 必须配 --size-mib：这份数据集是现生成的、不入库，没有整档可言"
+        )
+    return max(1, size_mib * 1048576 // GB_LINE_BYTES) * GB_LINE_BYTES
+
+
+def build_gb_multibyte(dest: Path, total_bytes: int, seed: int = GB_SEED) -> int:
+    """现生成一份真多字节的 GB18030 数据集：60 字节一行，主体是 GB18030 双字节汉字，
+    每 GB_EVERY_FOUR_BYTE_LINE 行把两对汉字换成一条四字节序列（CJK 扩展 B），字节数不变。
+
+    行长由构造保证（每批整块自校 len(block)＝批行数×60），所以切片与分块都不会切在字符中间——
+    跨块解码由被测实现自己在 64 KiB 缓冲边界上处理，数据侧不额外制造错位场景。
+    这份数据不含非法序列，`detail` 的替换计数必须为 0（夹具另做反向断言）：本臂要量的是多字节
+    解码与 UTF-8 展开的代价，非法序列路径的正确性另有 CI 锚点（encoding 的 ReplaceAndCount）。
+    """
+    rng = random.Random(seed)
+    han = [chr(code) for code in range(0x4E00, 0x4E00 + 1024)]  # CJK 基本区：GB18030 双字节
+    rare = [chr(code) for code in range(0x20000, 0x20000 + 256)]  # CJK 扩展 B：GB18030 四字节
+    digits = "0123456789"
+    lines_total = total_bytes // GB_LINE_BYTES
+    four_byte_lines = 0
+    digest = hashlib.sha256()
+    with dest.open("wb") as sink:
+        index = 0
+        while index < lines_total:
+            count = min(GB_BLOCK_LINES, lines_total - index)
+            idxs = range(index, index + count)
+            four = {i for i in idxs if i % GB_EVERY_FOUR_BYTE_LINE == 0}
+            four_byte_lines += len(four)
+            han_pool = rng.choices(han, k=24 * (count - len(four)) + 20 * len(four))
+            rare_pool = rng.choices(rare, k=2 * len(four))
+            digit_pool = rng.choices(digits, k=9 * count)
+            hp = rp = dp = 0
+            text = []
+            for i in idxs:
+                head = "".join(han_pool[hp:hp + 12])
+                hp += 12
+                num = "".join(digit_pool[dp:dp + 9])
+                dp += 9
+                if i in four:
+                    units = han_pool[hp:hp + 8] + rare_pool[rp:rp + 2]
+                    hp += 8
+                    rp += 2
+                    rng.shuffle(units)
+                    tail = "".join(units)
+                else:
+                    tail = "".join(han_pool[hp:hp + 12])
+                    hp += 12
+                text.append(f"{head},{num},{tail}\n")
+            block = "".join(text).encode("gb18030")
+            if len(block) != count * GB_LINE_BYTES:
+                raise SystemExit(f"生成自校失败：批 {count} 行编码后 {len(block)} 字节 "
+                                 f"≠ {count}×{GB_LINE_BYTES}")
+            digest.update(block)
+            sink.write(block)
+            index += count
+    return {"bytes": dest.stat().st_size, "lines": lines_total,
+            "four_byte_lines": four_byte_lines, "sha256": digest.hexdigest()}
+
+
+def gb_dataset(total_bytes: int) -> tuple[Path, dict]:
+    """多字节变体的数据集：按体积现生成一次、逐轮复用，并缓存期望产物（同一份数据四轮才可比）。
+
+    与 C-2 本体同一条纪律——不入库、每轮只做工作副本；sidecar 里记的是生成结果与独立算出的
+    期望 UTF-8 摘要，因此换体积会另起一份文件，不会把两档数据混成同一行台账。
+    """
+    GB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = GB_CACHE_DIR / f"gb18030-multibyte-{total_bytes}B-seed{GB_SEED}.txt"
+    side = dest.with_suffix(".json")
+    if not (dest.exists() and side.exists() and dest.stat().st_size == total_bytes):
+        stats = build_gb_multibyte(dest, total_bytes)
+        want_digest, want_bytes = expected_utf8_from_gb(dest.read_bytes())
+        side.write_text(json.dumps({**stats, "want_sha256": want_digest,
+                                    "want_bytes": want_bytes}), encoding="utf-8")
+    meta = json.loads(side.read_text(encoding="utf-8"))
+    if meta["bytes"] != dest.stat().st_size:
+        raise SystemExit(f"多字节数据集缓存与 sidecar 不一致（{meta['bytes']} ≠ "
+                         f"{dest.stat().st_size}），删除 {dest} 重跑")
+    return dest, meta
+
+
+def expected_utf8_from_gb(data: bytes) -> tuple[str, int]:
+    """期望产物由 Python 的 gb18030 编解码器独立算出（被测实现是 encoding_rs，另一套实现），
+    两侧同循 GB18030 标准，所以「逐字节一致」这条断言能证伪，不是拿实现的输出自证。"""
+    want = data.decode("gb18030").encode("utf-8")
+    return hashlib.sha256(want).hexdigest(), len(want)
 
 
 def has_border(needle: bytes) -> bool:
@@ -419,18 +522,40 @@ def measure_c2rw(case: str, tag: str, a) -> dict:
     d = workdir(f"c2rw-{case}-{tag}")
     limit = c2rw_limit(a.size_mib)
     src = d / spec["name"]
-    # 就地改写会覆盖源，所以永远在数据集之外做工作副本；子档取的是同一生成器产物的前缀切片。
-    with src.open("wb") as sink:
-        for block in read_blocks(C2_SRC, limit):
-            sink.write(block)
-    src_bytes = src.stat().st_size
+    gb = getattr(a, "gb_multibyte", False)
+    GB_META: dict | None = None
+    check = "gb18030" if gb else spec["check"]
+    if gb and case != "c01":
+        raise SystemExit("--gb-multibyte 只对 --case c01 成立（其余臂的期望变换按 ASCII 定义）")
+    if gb:
+        # 多字节变体：数据集现生成一次后逐轮复用（不入库、不碰 C-2 本体），没有 limit 切片可言。
+        limit = None
+        gb_src, GB_META = gb_dataset(gb_target_bytes(a.size_mib))
+        want_digest, want_bytes = GB_META["want_sha256"], GB_META["want_bytes"]
+        with src.open("wb") as sink:
+            for block in read_blocks(gb_src, None):
+                sink.write(block)
+        src_bytes = src.stat().st_size
+    else:
+        # 就地改写会覆盖源，所以永远在数据集之外做工作副本；子档取的是同一生成器产物的前缀切片。
+        with src.open("wb") as sink:
+            for block in read_blocks(C2_SRC, limit):
+                sink.write(block)
+        src_bytes = src.stat().st_size
+        want_digest = want_bytes = None
 
     # 前置断言：期望校验的口径前提必须为真，否则数值毫无意义（样本作废，不出结果行）。
-    if spec["check"] == "identity" and count_non_ascii(C2_SRC, limit):
+    if check == "identity" and count_non_ascii(C2_SRC, limit):
         raise SystemExit(f"{case} 的逐字节相同期望只对纯 ASCII 源成立，本轮作废")
-    if spec["check"] == "newline" and count_byte(C2_SRC, b"\r", limit):
+    if check == "newline" and count_byte(C2_SRC, b"\r", limit):
         raise SystemExit(f"{case} 的 LF→CRLF 期望要求源不含裸 CR，本轮作废")
-    hits = count_needle(C2_SRC, spec["find"], limit) if spec.get("kind") == "literal" else None
+    if check == "gb18030":
+        if not count_non_ascii(src):
+            raise SystemExit("多字节臂的源不含非 ASCII 字节＝退回 1:1 子集，本轮作废")
+        if want_bytes <= src_bytes:
+            raise SystemExit(f"期望产物 {want_bytes} 未大于源 {src_bytes}＝没有真的发生多字节扩展，本轮作废")
+    hits = None if gb else (
+        count_needle(C2_SRC, spec["find"], limit) if spec.get("kind") == "literal" else None)
     if hits is not None and not hits:
         raise SystemExit(f"{case} 在子档内零命中：计划会整条 skip，测不出吞吐，本轮作废")
 
@@ -458,13 +583,25 @@ def measure_c2rw(case: str, tag: str, a) -> dict:
 
     # 校验在计时区外做：期望产物由本脚本按同一纪律自行算出，不复用被测实现的输出。
     out_digest, out_bytes = digest_of(src)
-    if spec["check"] == "identity":
+    if check == "identity":
         want_digest, want_bytes = digest_of(C2_SRC, limit)
-    elif spec["check"] == "cells":
-        want_digest = want_bytes = None
+    elif check in ("cells", "gb18030"):
+        pass  # cells 无逐字节期望；gb18030 的期望在计时区外已按 Python 编解码器算好
     else:
         want_digest, want_bytes = expected_digest(C2_SRC, spec, limit)
-    if spec["check"] == "cells":
+    if check == "gb18030":
+        if out_digest != want_digest:
+            raise SystemExit(f"{case} 多字节臂产物与期望逐字节不一致：out {out_digest[:16]}… ≠ "
+                             f"want {want_digest[:16]}…，样本作废")
+        if count_byte(src, b"\xef\xbf\xbd"):
+            raise SystemExit(f"{case} 多字节臂产物含 U+FFFD，但生成的源不含非法序列——"
+                             "说明解码口径不符，样本作废")
+        verify = {"mode": "gb18030", "src_bytes": src_bytes, "out_bytes": out_bytes,
+                  "want_bytes": want_bytes, "out_sha256": out_digest, "digest_match": True,
+                  "expansion": round(out_bytes / src_bytes, 3),
+                  "gb_lines": GB_META["lines"], "gb_four_byte_lines": GB_META["four_byte_lines"],
+                  "gb_src_sha256": GB_META["sha256"]}
+    elif check == "cells":
         remaining = count_needle(src, spec["find"])
         replaced = count_needle(src, spec["replace"])
         records_out = count_byte(src, b"\n")
@@ -483,7 +620,7 @@ def measure_c2rw(case: str, tag: str, a) -> dict:
         if out_digest != want_digest:
             raise SystemExit(f"{case} 产物与期望逐字节不一致：out {out_digest[:16]}… ≠ "
                              f"want {want_digest[:16]}…，样本作废")
-        verify = {"mode": spec["check"], "src_bytes": src_bytes, "out_bytes": out_bytes,
+        verify = {"mode": check, "src_bytes": src_bytes, "out_bytes": out_bytes,
                   "want_bytes": want_bytes, "out_sha256": out_digest, "digest_match": True}
 
     row = {"case": case, "tag": tag, "limit_bytes": limit, "reason": entry["reason"],
@@ -492,6 +629,11 @@ def measure_c2rw(case: str, tag: str, a) -> dict:
     row["mbps_plan"] = round(src_bytes / 1048576 / plan["wall_s"], 1)
     row["mbps_apply"] = round(src_bytes / 1048576 / apply_["wall_s"], 1)
     row["mbps_total"] = round(src_bytes / 1048576 / row["total_wall_s"], 1)
+    if check == "gb18030":
+        # 多字节臂的产物比源大（UTF-8 展开），所以另给一个「产物字节/秒」读数——
+        # 只引源口径会把「实际写出量更大」这件事藏掉，两个数一起才读得出代价在哪一侧。
+        row["mbps_out_apply"] = round(out_bytes / 1048576 / apply_["wall_s"], 1)
+        row["gb_multibyte"] = True
     if not a.keep_workdir:
         shutil.rmtree(d, ignore_errors=True)
     return row
@@ -579,11 +721,15 @@ def main() -> None:
                    help="c2rw 测后不清工作目录（默认逐轮删除，避免 GiB 级副本堆积）")
     p.add_argument("--plan-only", action="store_true",
                    help="c2rw 只跑到计划段（用来量化计划段的体积-内存关系，不做改写与校验）")
+    p.add_argument("--gb-multibyte", action="store_true",
+                   help="c2rw --case c01：现生成 GB18030 多字节数据集（60 字节一行、每 50 行含一条"
+                        "四字节序列）代替 C-2 的 ASCII 切片。它不属于 T 附录 C 的 C-2 构造，"
+                        "所以数值只作方向性参照、不作 §9.1 达标判定；必须配 --size-mib")
     a = p.parse_args()
     if a.scenario == "c2rw" and not a.case:
         p.error("c2rw 需要 --case")
     for path in (BIN, C1_ROOT if a.scenario == "c1" else C2_SRC):
-        if not path.exists():
+        if not path.exists() and not (a.gb_multibyte and path == C2_SRC):
             raise SystemExit(f"前置缺失：{path}（先 cargo build --release 并生成数据集）")
     if a.scenario == "c1":
         measure = lambda t: measure_c1(t, a.rss_limit_mib)  # noqa: E731
@@ -605,9 +751,13 @@ def main() -> None:
         summary["case"] = a.case
         summary["size_mib"] = a.size_mib
         summary["plan_only"] = a.plan_only
+        summary["gb_multibyte"] = a.gb_multibyte
         if not a.plan_only:
             summary["median_mbps_apply"] = round(
                 statistics.median([r["mbps_apply"] for r in rows[1:]]), 1)
+            if a.gb_multibyte:
+                summary["median_mbps_out_apply"] = round(
+                    statistics.median([r["mbps_out_apply"] for r in rows[1:]]), 1)
     print(json.dumps(summary, ensure_ascii=False), flush=True)
 
 
