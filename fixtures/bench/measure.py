@@ -29,6 +29,7 @@ c2rw 一律在 C-2 集的**工作副本**上就地改写（改写会覆盖源，
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import json
 import os
@@ -293,7 +294,7 @@ def gb_dataset(total_bytes: int) -> tuple[Path, dict]:
     side = dest.with_suffix(".json")
     if not (dest.exists() and side.exists() and dest.stat().st_size == total_bytes):
         stats = build_gb_multibyte(dest, total_bytes)
-        want_digest, want_bytes = expected_utf8_from_gb(dest.read_bytes())
+        want_digest, want_bytes = expected_utf8_from_gb_stream(dest)
         side.write_text(json.dumps({**stats, "want_sha256": want_digest,
                                     "want_bytes": want_bytes}), encoding="utf-8")
     meta = json.loads(side.read_text(encoding="utf-8"))
@@ -301,6 +302,31 @@ def gb_dataset(total_bytes: int) -> tuple[Path, dict]:
         raise SystemExit(f"多字节数据集缓存与 sidecar 不一致（{meta['bytes']} ≠ "
                          f"{dest.stat().st_size}），删除 {dest} 重跑")
     return dest, meta
+
+
+def expected_utf8_from_gb_stream(path: Path) -> tuple[str, int]:
+    """流式算「GB18030 源 → UTF-8 产物」的期望摘要（sha256 与字节数）。
+
+    整档 2 GiB 不能整读：`read_bytes`＋整段 decode/encode 的峰值 ≈ 源×2.4，
+    机器吃不消；增量解码器自带跨块字节 carry，逐块解码＋编码的产物与整段一次
+    变换逐字节一致，内存恒定。期望仍由 Python 编解码器独立算出（被测实现是
+    encoding_rs，另一套实现），「逐字节一致」这条断言能证伪。
+    """
+    decoder = codecs.getincrementaldecoder("gb18030")()
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as fh:
+        while True:
+            block = fh.read(BLOCK)
+            if not block:
+                break
+            chunk = decoder.decode(block).encode("utf-8")
+            digest.update(chunk)
+            total += len(chunk)
+    chunk = decoder.decode(b"", True).encode("utf-8")
+    digest.update(chunk)
+    total += len(chunk)
+    return digest.hexdigest(), total
 
 
 def expected_utf8_from_gb(data: bytes) -> tuple[str, int]:

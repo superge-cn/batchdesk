@@ -19,9 +19,9 @@ T v1.12 §3.2 的 28 条语料中，有 4 条的「构造方式」依赖人工�
 
 规则
 ----
-1. manifest 行数 = EXPECTED_TOTAL（28，对齐 T v1.12 §3.2）；
+1. manifest 行数 = EXPECTED_TOTAL（28，对齐当前 T 基线版本 §3.2，版本号从 docs/baseline/README.md 取）；
 2. 「人工」集合（manifest）与 manual-only.txt 双向一致；
-3. 状态=就绪 → 必须有 gen_*.py、对应目录与 expected.md，且 expected.md 回指 T v1.12 §3.2；
+3. 状态=就绪 → 必须有 gen_*.py、对应目录与 expected.md，且 expected.md 回指当前 T 基线版本的 §3.2；
 4. 状态=人工 → 不得有 gen_*.py；
 5. 磁盘上的语料目录必须在 manifest 中列出；
 6. 状态=待补 → 不要求目录（构建期允许尚未落地）。
@@ -45,6 +45,20 @@ HERE = Path(__file__).resolve().parent
 MANIFEST = HERE / "manifest.md"
 MANUAL_LIST = HERE / "manual-only.txt"
 EXPECTED_TOTAL = 28
+
+def _current_t_version() -> str:
+    """当前测试基线版本号：单一来源是 docs/baseline/README.md 的版本表。
+
+    写死「T v1.12」的旧锚点在基线升版时会静默变红（假红）或被批量替换后失去
+    判据（假绿），与 OQ-36 批处理过的「写死 schemaVersion」同型——锚点跟索引走。
+    """
+    readme = HERE.parent.parent / "docs" / "baseline" / "README.md"
+    match = re.search(r"《功能测试方案与验收标准》\s*\|\s*(T v[0-9.]+)", readme.read_text(encoding="utf-8"))
+    if not match:
+        raise SystemExit("check_scope 自校失败：docs/baseline/README.md 里解析不到《功能测试方案与验收标准》的版本")
+    return match.group(1)
+
+T_VERSION = _current_t_version()
 
 STATUS_READY = "就绪"
 STATUS_TODO = "待补"
@@ -112,7 +126,7 @@ def main() -> int:
     # 规则 1：行数
     if len(table) != EXPECTED_TOTAL:
         errors.append(
-            f"manifest 列出 {len(table)} 条，与 T v1.12 §3.2 的 {EXPECTED_TOTAL} 条不符"
+            f"manifest 列出 {len(table)} 条，与 {T_VERSION} §3.2 的 {EXPECTED_TOTAL} 条不符"
         )
 
     # 规则 2：人工集合双向一致
@@ -130,8 +144,8 @@ def main() -> int:
         expected = HERE / fid / "expected.md"
         if not expected.is_file():
             errors.append(f"{fid} 标为「{STATUS_READY}」但缺少 expected.md")
-        elif "T v1.12 §3.2" not in expected.read_text(encoding="utf-8"):
-            errors.append(f"{fid} 的 expected.md 未回指 T v1.12 §3.2")
+        elif f"{T_VERSION} §3.2" not in expected.read_text(encoding="utf-8"):
+            errors.append(f"{fid} 的 expected.md 未回指 {T_VERSION} §3.2")
 
     # 规则 4：人工项不得有脚本（二选一，杜绝歧义）
     for fid in sorted(manual):

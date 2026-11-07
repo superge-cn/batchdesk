@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""C-2 基准数据集生成脚本：超大单文件（> 2 GB 档）。
+"""C-2 基准数据集生成脚本：超大单文件（> 2 GB 档），含 GB18030 多字节编码变体（OQ-42）。
 
-判定权威：T v1.12 附录 C 的 C-2 行与本目录 README（本脚本只负责产出数据集，不承载阈值）。
-对应指标：方案 §9.1 的"大文件吞吐"与"内存占用恒定"；对应策略分档见 §4.8（> 2 GB 走"流式＋预扫描"）。
+判定权威：T v1.13 附录 C 的 C-2 行与本目录 README（本脚本只负责产出数据集，不承载阈值）。
+对应指标：方案 v1.20 §9.1 的"大文件吞吐"（源/产物双分母口径）与"内存占用恒定"；
+对应策略分档见 §4.8（> 2 GB 走"流式＋预扫描"）。
 
 参数（固定，写入生成日志——README 要求）
 - 主文件体积：默认 2 GiB ＋ 64 MiB（跨过 §4.8 的 "> 2 GB" 档界，构造参数，非产品阈值；--size-mib 可调）；
 - 行长：常规行约 60 字节 + 每 1 GiB 插入 1 条极端长行（默认 1 MiB，--long-line-bytes 可调），
   用于覆盖 §5.1"有效下限由最长单行动态决定"的边界；长行长度是构造参数，不表示产品下限；
+- 编码（--encoding，默认 ascii）：`ascii` 即既有纯 ASCII 构造；`gb18030` 为 T v1.13 新增的
+  **编码变体**——60 字节/行的 GB18030 双字节汉字为主体、每 50 行一条四字节序列（CJK 扩展 B），
+  构造器从 `measure.py` 导入（单一来源，不抄第二份），sidecar 记录数据集与期望 UTF-8 产物两个摘要；
 - 随机源：random.Random(2026) 固定种子 → 重复运行逐字节一致（幂等）。
 
 设计要点
 - 分块写入（4 MiB/块，与 §4.8 的示例块大小同量级，示例非阈值），避免一次性占内存——本身也是"内存恒定"的对照；
-- 自校验：字节数精确、sha256 记录、长行确实存在且长度正确；
+- 自校验：字节数精确、sha256 记录、（ASCII）长行确实存在且长度正确、（GB18030）逐批编码长度自校；
+  期望 UTF-8 摘要用增量解码器**流式**算出（整档 2 GiB 不整读，内存恒定）；
 - 体积大，**不入库**：产物落 `out/`，CI 不默认生成，由性能测试按需调用；
 - 合成数据：全部为虚构内容。
 """
@@ -21,12 +26,24 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import random
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE / "out"
 OUT_FILE = OUT_DIR / "big_file.txt"
+OUT_FILE_GB = OUT_DIR / "big_file_gb18030.txt"
+
+# 多字节变体的构造器单一来源在 measure.py（OQ-42：同一份生成纪律，不维护两份会漂移的实现）
+sys.path.insert(0, str(HERE.parent))
+from measure import (  # noqa: E402
+    GB_SEED,
+    build_gb_multibyte,
+    expected_utf8_from_gb_stream,
+    gb_target_bytes,
+)
 
 SEED = 2026
 CHUNK = 4 * 1024 * 1024  # 4 MiB：与 §4.8 示例块大小同量级（示例，非阈值）
@@ -91,13 +108,59 @@ def verify(total_bytes: int, expected_sha: str, long_line_bytes: int) -> None:
         raise SystemExit("C-2 数据集失效：未在 1 GiB 边界后检测到极端长行")
 
 
+def generate_gb(total_bytes: int) -> dict:
+    """GB18030 变体：构造器来自 measure.py（逐批自校行长），写完重算 sha256 与期望 UTF-8 摘要。
+
+    期望摘要流式计算（增量解码器，内存恒定）；两条摘要都进 sidecar，供测量臂
+    断言「产物逐字节等于独立算出的期望」与「多字节真的发生了 1.4 倍级扩展」。
+    """
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    stats = build_gb_multibyte(OUT_FILE_GB, total_bytes)
+    actual = OUT_FILE_GB.stat().st_size
+    if actual != total_bytes:
+        raise SystemExit(f"C-2 GB18030 数据集失效：字节数 {actual} ≠ 预期 {total_bytes}")
+    digest = hashlib.sha256()
+    with OUT_FILE_GB.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(CHUNK), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != stats["sha256"]:
+        raise SystemExit("C-2 GB18030 数据集失效：写入后校验和不一致")
+    want_sha, want_bytes = expected_utf8_from_gb_stream(OUT_FILE_GB)
+    if want_bytes <= total_bytes:
+        raise SystemExit("C-2 GB18030 数据集失效：期望 UTF-8 产物未大于源＝没有真的多字节扩展")
+    return {**stats, "want_utf8_sha256": want_sha, "want_utf8_bytes": want_bytes}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="生成 C-2 超大单文件基准数据集（体积大，按需生成）")
     parser.add_argument("--size-mib", type=int, default=DEFAULT_SIZE // MIB,
                         help=f"主文件体积（MiB，默认 {DEFAULT_SIZE // MIB}，即 2 GiB+64 MiB）")
     parser.add_argument("--long-line-bytes", type=int, default=DEFAULT_LONG_LINE,
                         help=f"极端长行长度（字节，默认 {DEFAULT_LONG_LINE}；构造参数，非产品阈值）")
+    parser.add_argument("--encoding", choices=["ascii", "gb18030"], default="ascii",
+                        help="数据集编码（默认 ascii；gb18030 为 T v1.13 附录 C 的编码变体）")
     args = parser.parse_args()
+
+    if args.encoding == "gb18030":
+        total_bytes = gb_target_bytes(args.size_mib)
+        if total_bytes <= 0:
+            raise SystemExit("参数必须为正数")
+        side = OUT_DIR / "big_file_gb18030.json"
+        if (
+            OUT_FILE_GB.exists()
+            and side.exists()
+            and OUT_FILE_GB.stat().st_size == total_bytes
+            and json.loads(side.read_text(encoding="utf-8")).get("sha256")
+        ):
+            print(f"C-2 GB18030 已存在同体积产物，跳过生成：{OUT_FILE_GB}（如需重建请先删除）")
+            return
+        meta = generate_gb(total_bytes)
+        side.write_text(json.dumps({**meta, "seed": GB_SEED, "size_bytes": total_bytes,
+                                    "encoding": "gb18030"}, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+        print(f"C-2 GB18030 已生成：{OUT_FILE_GB}（{total_bytes} 字节，"
+              f"期望 UTF-8 {meta['want_utf8_bytes']} 字节；sidecar {side}）")
+        return
 
     total_bytes = args.size_mib * MIB
     if total_bytes <= 0 or args.long_line_bytes <= 0:
