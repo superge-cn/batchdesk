@@ -705,8 +705,11 @@ fn perform_with_retry(
     overwrite: bool,
 ) -> Result<Result<Performed, KernelError>, KernelError> {
     let mut network_attempts = 0u32;
+    // D1 补全：同一条目的隔离备份在首次尝试后缓存，重试复用——否则 edit-content /
+    // transcode 每枪都会 `backup_to_quarantine` 一次，退避重试会累积备份。
+    let mut backup: Option<String> = None;
     loop {
-        let outcome = perform(view, plan, entry, target, overwrite);
+        let outcome = perform(view, plan, entry, target, overwrite, &mut backup);
         if let Some(error) = network_error(&outcome) {
             if let Some(retry) = view.network_retry {
                 if crate::retry::entry_touches_network(view.fs, entry)
@@ -739,7 +742,7 @@ fn perform_with_retry(
         }
         if let Ok(Err(error)) = &outcome {
             if error.retryable && skips_permission_failures(plan) {
-                return perform(view, plan, entry, target, overwrite);
+                return perform(view, plan, entry, target, overwrite, &mut backup);
             }
         }
         return outcome;
@@ -1198,6 +1201,7 @@ fn perform_listing(
     entry: &crate::plan::PlanEntry,
     target: &str,
     overwrite: bool,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let options = listing_options(plan)?;
     if let (Ok(root), Ok(target_path)) = (try_normalize(&entry.source), try_normalize(target)) {
@@ -1216,7 +1220,7 @@ fn perform_listing(
         )
     })?;
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -1360,19 +1364,37 @@ impl CsvStreamWriter<'_> {
     }
 }
 
+/// 同一次条目执行（含 D1 重试）内复用同一个隔离备份：首次调用
+/// `backup_to_quarantine` 后缓存路径，后续重试不再重复备份。缓存按条目局部持有
+/// （`perform_with_retry` 的栈上变量），并发条目之间不共享；成功时该路径作为
+/// Journal `dataRef`，条目最终失败时由隔离目录清理按保留期统一回收。
+pub(crate) fn backup_once(
+    fs: &dyn FsAdapter,
+    target: &str,
+    backup: &mut Option<String>,
+) -> Result<String, KernelError> {
+    if let Some(path) = backup.as_deref() {
+        return Ok(path.to_string());
+    }
+    let path = fs.backup_to_quarantine(target)?;
+    *backup = Some(path.clone());
+    Ok(path)
+}
+
 fn perform(
     view: &WorkerView<'_>,
     plan: &PlanDocument,
     entry: &crate::plan::PlanEntry,
     target: Option<&str>,
     overwrite: bool,
+    backup: &mut Option<String>,
 ) -> Result<Result<Performed, KernelError>, KernelError> {
     let policy = if overwrite {
         ConflictPolicy::Overwrite
     } else {
         ConflictPolicy::Skip
     };
-    let run = || -> Result<Performed, KernelError> {
+    let mut run = || -> Result<Performed, KernelError> {
         match entry.action {
             PlanAction::Rename => {
                 let target = target.expect("validated: rename requires a target");
@@ -1446,7 +1468,7 @@ fn perform(
                 ensure_target_dir(view, target)?;
                 // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
                 let backup = if overwrite {
-                    Some(view.fs.backup_to_quarantine(target)?)
+                    Some(backup_once(view.fs, target, backup)?)
                 } else {
                     None
                 };
@@ -1480,7 +1502,7 @@ fn perform(
                     .range
                     .ok_or_else(|| KernelError::invalid_params("split entries require a range"))?;
                 let backup = if overwrite {
-                    Some(view.fs.backup_to_quarantine(target)?)
+                    Some(backup_once(view.fs, target, backup)?)
                 } else {
                     None
                 };
@@ -1535,7 +1557,7 @@ fn perform(
             PlanAction::Merge => {
                 let target = target.expect("validated: merge requires a target");
                 if let Some(csv_merge) = &entry.csv_merge {
-                    return perform_csv_merge(view, target, overwrite, csv_merge);
+                    return perform_csv_merge(view, target, overwrite, csv_merge, backup);
                 }
                 let merge = entry.merge.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("merge entries require a payload")
@@ -1549,7 +1571,7 @@ fn perform(
                 })?;
                 // 覆盖已有目标：先备份原内容（设计 01 §8 dataRef 语义）。
                 let backup = if overwrite {
-                    Some(view.fs.backup_to_quarantine(target)?)
+                    Some(backup_once(view.fs, target, backup)?)
                 } else {
                     None
                 };
@@ -1624,46 +1646,53 @@ fn perform(
                 let payload = entry.csv_extract.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-extract entries require a csvExtract payload")
                 })?;
-                perform_csv_extract(view, &entry.source, target, overwrite, payload)
+                perform_csv_extract(view, &entry.source, target, overwrite, payload, backup)
             }
             PlanAction::CsvColumns => {
                 let target = target.expect("validated: csv-columns requires a target");
                 let payload = entry.csv_columns.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-columns entries require a csvColumns payload")
                 })?;
-                perform_csv_columns(view, &entry.source, target, overwrite, payload)
+                perform_csv_columns(view, &entry.source, target, overwrite, payload, backup)
             }
             PlanAction::CsvSort => {
                 let target = target.expect("validated: csv-sort requires a target");
                 let payload = entry.csv_sort.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-sort entries require a csvSort payload")
                 })?;
-                crate::csv_sort::perform_csv_sort(view, &entry.source, target, overwrite, payload)
+                crate::csv_sort::perform_csv_sort(
+                    view,
+                    &entry.source,
+                    target,
+                    overwrite,
+                    payload,
+                    backup,
+                )
             }
             PlanAction::CsvRows => {
                 let target = target.expect("validated: csv-rows requires a target");
                 let payload = entry.csv_rows.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-rows entries require a csvRows payload")
                 })?;
-                perform_csv_rows(view, &entry.source, target, overwrite, payload)
+                perform_csv_rows(view, &entry.source, target, overwrite, payload, backup)
             }
             PlanAction::CsvDedup => {
                 let target = target.expect("validated: csv-dedup requires a target");
                 let payload = entry.csv_dedup.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-dedup entries require a csvDedup payload")
                 })?;
-                perform_csv_dedup(view, &entry.source, target, overwrite, payload)
+                perform_csv_dedup(view, &entry.source, target, overwrite, payload, backup)
             }
             PlanAction::CsvFilter => {
                 let target = target.expect("validated: csv-filter requires a target");
                 let payload = entry.csv_filter.as_ref().ok_or_else(|| {
                     KernelError::invalid_params("csv-filter entries require a csvFilter payload")
                 })?;
-                perform_csv_filter(view, &entry.source, target, overwrite, payload)
+                perform_csv_filter(view, &entry.source, target, overwrite, payload, backup)
             }
             PlanAction::Listing => {
                 let target = target.expect("validated: listing requires a target");
-                perform_listing(view, plan, entry, target, overwrite)
+                perform_listing(view, plan, entry, target, overwrite, backup)
             }
             PlanAction::CreateDir => {
                 let target = target.expect("validated: create-dir requires a target");
@@ -1688,7 +1717,8 @@ fn perform(
             }
             PlanAction::EditContent => {
                 // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
-                let backup = view.fs.backup_to_quarantine(&entry.source)?;
+                // 备份经 `backup_once` 缓存：D1 重试不再产生第二份备份。
+                let backup = backup_once(view.fs, &entry.source, backup)?;
                 let detail = if let Some(rewriter) = view.content_rewriter {
                     // 明细经闭包局部变量带出（rewrite_atomic_with 的回调签名固定为 ()）。
                     let mut rewrite_detail = None;
@@ -1761,6 +1791,7 @@ fn perform_csv_columns(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvColumns,
+    backup: &mut Option<String>,
 ) -> Result<crate::generic_apply::Performed, KernelError> {
     use crate::csv_columns::{split_value, SplitBy};
     use crate::journal::FsOp;
@@ -1782,7 +1813,7 @@ fn perform_csv_columns(
         .ok_or_else(|| KernelError::invalid_params("unsupported csvColumns delimiter"))?;
 
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -2557,6 +2588,7 @@ fn perform_csv_extract(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvExtract,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let encoding = payload.encoding.ok_or_else(|| {
         KernelError::new(
@@ -2575,7 +2607,7 @@ fn perform_csv_extract(
         .ok_or_else(|| KernelError::invalid_params("unsupported csvExtract delimiter"))?;
 
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -2677,6 +2709,7 @@ fn perform_csv_range(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvRows,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let encoding = payload.encoding.ok_or_else(|| {
         KernelError::new(
@@ -2742,7 +2775,7 @@ fn perform_csv_range(
     }
 
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -2812,6 +2845,7 @@ fn perform_csv_filter(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvFilter,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let encoding = payload.encoding.ok_or_else(|| {
         KernelError::new(
@@ -2836,7 +2870,7 @@ fn perform_csv_filter(
         _ => return Err(KernelError::invalid_params("unsupported csvFilter mode")),
     };
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -2930,6 +2964,7 @@ fn perform_csv_dedup(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvDedup,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let encoding = payload.encoding.ok_or_else(|| {
         KernelError::new(
@@ -2947,7 +2982,7 @@ fn perform_csv_dedup(
     let delimiter = Delimiter::parse(&payload.delimiter)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvDedup delimiter"))?;
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -3037,6 +3072,7 @@ fn perform_csv_rows(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvRows,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let encoding = payload.encoding.ok_or_else(|| {
         KernelError::new(
@@ -3049,7 +3085,7 @@ fn perform_csv_rows(
     let window = RowWindow::parse(&payload.window)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows window"))?;
     if window == RowWindow::Range {
-        return perform_csv_range(view, source, target, overwrite, payload);
+        return perform_csv_range(view, source, target, overwrite, payload, backup);
     }
     let target_encoding = TargetEncoding::parse(&payload.target_encoding)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows target encoding"))?;
@@ -3060,7 +3096,7 @@ fn perform_csv_rows(
         .ok_or_else(|| KernelError::invalid_params("unsupported csvRows delimiter"))?;
 
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -3195,6 +3231,7 @@ fn perform_csv_merge(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvMerge,
+    backup: &mut Option<String>,
 ) -> Result<Performed, KernelError> {
     let target_encoding = TargetEncoding::parse(&payload.target_encoding)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvMerge target encoding"))?;
@@ -3204,7 +3241,7 @@ fn perform_csv_merge(
     let output_delimiter = Delimiter::parse(&payload.delimiter)
         .ok_or_else(|| KernelError::invalid_params("unsupported csvMerge delimiter"))?;
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(backup_once(view.fs, target, backup)?)
     } else {
         None
     };
@@ -4484,6 +4521,73 @@ mod tests {
             retry.pauses.load(Ordering::SeqCst),
             1,
             "3 次重试耗尽后必须切到暂停，而不是直接失败"
+        );
+    }
+
+    /// D1 补全：`edit-content` 的网络断线重试复用同一份隔离备份——重试不得
+    /// 每枪都 `backup_to_quarantine` 一次（旧口径把它排除在重试族之外）。
+    #[test]
+    fn edit_content_network_retry_reuses_a_single_quarantine_backup() {
+        let fs = TestFs::with_files(&["//server/share/a.txt"]);
+        fs.write_file("//server/share/a.txt", b"abc");
+        // 前 4 枪失败（首次＋3 次重试），暂停恢复后的第 5 枪成功。
+        fs.set_permission_failure("//server/share/a.txt", "E2005", true, 4);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = RecordingRetry::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.network_retry = Some(&retry);
+        ctx.content_editor = Some(&|data: &[u8]| {
+            Ok(EditedContent::new(
+                data.iter().map(|byte| byte.to_ascii_uppercase()).collect(),
+            ))
+        });
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "//server/share/a.txt",
+                None,
+                PlanAction::EditContent,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(fs.read_file("//server/share/a.txt"), b"ABC");
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ],
+            "edit-content 的断线重试必须按 2/4/8 秒退避"
+        );
+        assert_eq!(retry.pauses.load(Ordering::SeqCst), 1);
+        let backups = fs
+            .files
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|path| path.ends_with(".bak"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            backups.len(),
+            1,
+            "重试必须复用同一份隔离备份，不得每枪累积一份：{backups:?}"
+        );
+        let data_ref = match &journal.entries[0].forward {
+            FsOp::WriteAtomic {
+                data_ref: Some(path),
+                ..
+            } => path,
+            other => panic!("edit-content forward must be write-atomic: {other:?}"),
+        };
+        assert_eq!(
+            data_ref, &backups[0],
+            "Journal 的 dataRef 必须指向重试复用的那份备份"
         );
     }
 

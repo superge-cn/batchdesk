@@ -464,6 +464,7 @@ pub(crate) fn perform_csv_sort(
     target: &str,
     overwrite: bool,
     payload: &PlanCsvSort,
+    backup: &mut Option<String>,
 ) -> Result<crate::generic_apply::Performed, KernelError> {
     use crate::csv_merge::CsvRecordStream;
     use crate::encoding::StreamTranscoder;
@@ -486,7 +487,7 @@ pub(crate) fn perform_csv_sort(
         .ok_or_else(|| KernelError::invalid_params("unsupported csvSort delimiter"))?;
 
     let backup = if overwrite {
-        Some(view.fs.backup_to_quarantine(target)?)
+        Some(crate::generic_apply::backup_once(view.fs, target, backup)?)
     } else {
         None
     };

@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use crate::error::KernelError;
-use crate::plan::PlanAction;
 
 /// §4.9 的重试次数（不含首次尝试）。
 pub const NETWORK_RETRY_ATTEMPTS: u32 = 3;
@@ -141,8 +140,9 @@ pub fn fs_op_touches_network(fs: &dyn crate::fs::FsAdapter, op: &crate::journal:
     }
 }
 
-/// 可重试动作：内容是原子写/改名/移动/删除，失败不产生半成品；`edit-content`
-/// 与 `transcode` 先备份再重写，重试会重复落备份，暂不纳入（记在设计 04）。
-pub fn action_can_retry_network(action: PlanAction) -> bool {
-    !matches!(action, PlanAction::EditContent | PlanAction::Transcode)
+/// 可重试动作：`edit-content`/`transcode` 的隔离备份在重试间复用（见
+/// `generic_apply::backup_once`），因此所有动作都进 D1 重试族；保留本函数是为了
+/// 让「哪些动作不可重试」有一个单点答案，新增排除时只改这里与执行器。
+pub fn action_can_retry_network(_action: crate::plan::PlanAction) -> bool {
+    true
 }
