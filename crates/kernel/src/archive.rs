@@ -717,13 +717,17 @@ pub fn apply_archive_plan(
     let mut ok = 0usize;
     let mut cancelled = false;
     let total_entries = plan.entries.len() as u64;
-    // D1：只要计划里任一源/目标或压缩源是 UNC，整单的归档读/写都走同一套断线重试。
-    let network = plan.entries.iter().any(crate::retry::entry_touches_network)
+    // D1：只要计划里任一源/目标或压缩源是网络路径，整单的归档读/写都走同一套断线重试。
+    // 判定经适配层能力（UNC 或 Windows 映射盘），不在执行器里自拼盘符。
+    let network = plan
+        .entries
+        .iter()
+        .any(|entry| crate::retry::entry_touches_network(context.fs, entry))
         || plan_param_sources(plan)
             .map(|sources| {
                 sources
                     .iter()
-                    .any(|source| crate::retry::is_network_path(source))
+                    .any(|source| context.fs.is_network_path(source))
             })
             .unwrap_or(false);
     report_progress(context, 0, total_entries);

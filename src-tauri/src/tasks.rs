@@ -1220,7 +1220,7 @@ fn run_apply(
         task_id: task_id.to_string(),
         control: Arc::clone(control),
     };
-    // D1：只给 c09 与通用执行器；C10 归档执行器另有自己的上下文，暂未接断线重试。
+    // D1：apply 的 c09／通用／C10 三个执行上下文都注入同一断线重试端口。
     let network_retry = TaskNetworkRetry {
         inner: Arc::clone(inner),
         task_id: task_id.to_string(),
@@ -1387,10 +1387,17 @@ fn run_undo(
         task_id: task_id.to_string(),
         control: Arc::clone(control),
     };
+    // D1 补全：撤销同样注入断线重试/自动暂停端口（与 apply 共用同一实现）。
+    let network_retry = TaskNetworkRetry {
+        inner: Arc::clone(inner),
+        task_id: task_id.to_string(),
+        control: Arc::clone(control),
+    };
     let ports = UndoPorts {
         task_id: Some(task_id),
         progress: Some(&sink),
         cancel: Some(control.as_ref()),
+        network_retry: Some(&network_retry),
     };
     match undo_plan_with_ports(
         plan_id,

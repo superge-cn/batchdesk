@@ -106,14 +106,39 @@ pub fn is_network_path(path: &str) -> bool {
     trimmed.starts_with(r"\\") || trimmed.starts_with("//")
 }
 
-/// 条目是否触及网络路径（源或目标任意一侧）。
-pub fn entry_touches_network(entry: &crate::plan::PlanEntry) -> bool {
-    is_network_path(&entry.source)
+/// 条目是否触及网络路径（源或目标任意一侧）。判定走适配层能力：平台可识别
+/// 盘符映射的网络盘，纯字符串判定（[`is_network_path`]）只覆盖 UNC。
+pub fn entry_touches_network(
+    fs: &dyn crate::fs::FsAdapter,
+    entry: &crate::plan::PlanEntry,
+) -> bool {
+    fs.is_network_path(&entry.source)
         || entry
             .target
             .as_deref()
-            .map(is_network_path)
+            .map(|target| fs.is_network_path(target))
             .unwrap_or(false)
+}
+
+/// Journal 逆向操作是否触及网络路径（undo 的重试判定，设计 01 §8）。
+pub fn fs_op_touches_network(fs: &dyn crate::fs::FsAdapter, op: &crate::journal::FsOp) -> bool {
+    match op {
+        crate::journal::FsOp::Rename { from, to }
+        | crate::journal::FsOp::Quarantine { from, to }
+        | crate::journal::FsOp::Copy { from, to } => {
+            fs.is_network_path(from) || fs.is_network_path(to)
+        }
+        crate::journal::FsOp::WriteAtomic { path, data_ref } => {
+            fs.is_network_path(path)
+                || data_ref
+                    .as_deref()
+                    .map(|backup| fs.is_network_path(backup))
+                    .unwrap_or(false)
+        }
+        crate::journal::FsOp::CreateDir { path } | crate::journal::FsOp::RemoveDir { path } => {
+            fs.is_network_path(path)
+        }
+    }
 }
 
 /// 可重试动作：内容是原子写/改名/移动/删除，失败不产生半成品；`edit-content`

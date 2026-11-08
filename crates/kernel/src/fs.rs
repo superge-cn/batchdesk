@@ -189,6 +189,14 @@ pub trait FsAdapter: Send + Sync {
         policy: ConflictPolicy,
     ) -> Result<PathOutcome, KernelError>;
     fn remove_to_quarantine(&self, path: &str) -> Result<String, KernelError>;
+    /// D1：该路径是否指向网络位置（UNC 或平台可识别的映射网络盘）。
+    ///
+    /// 默认只做纯字符串判定（`\\`/`//` 前缀）；平台适配层可覆写本方法，用系统
+    /// API 识别盘符映射的网络盘（Windows `GetDriveTypeW == DRIVE_REMOTE`）。
+    /// kernel 执行器的断线重试判定统一经此方法，不在执行器里自拼盘符规则。
+    fn is_network_path(&self, path: &str) -> bool {
+        crate::retry::is_network_path(path)
+    }
     /// 把原文件内容备份进隔离目录（复制、不移动），返回备份路径。
     ///
     /// 设计 01 §8：覆盖类动作（overwrite 的 copy/内容写回）在落盘前先备份

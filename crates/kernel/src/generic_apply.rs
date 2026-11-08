@@ -709,7 +709,7 @@ fn perform_with_retry(
         let outcome = perform(view, plan, entry, target, overwrite);
         if let Some(error) = network_error(&outcome) {
             if let Some(retry) = view.network_retry {
-                if crate::retry::entry_touches_network(entry)
+                if crate::retry::entry_touches_network(view.fs, entry)
                     && crate::retry::action_can_retry_network(entry.action)
                 {
                     if network_attempts < crate::retry::NETWORK_RETRY_ATTEMPTS {

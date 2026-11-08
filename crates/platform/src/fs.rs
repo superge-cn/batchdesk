@@ -167,6 +167,10 @@ pub fn case_sensitivity() -> CaseSense {
 }
 
 impl FsAdapter for CliFsAdapter {
+    fn is_network_path(&self, path: &str) -> bool {
+        kernel::retry::is_network_path(path) || mapped_drive_is_remote(path)
+    }
+
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError> {
         fs::read(fs_path(Path::new(path))).map_err(|error| io_error(&error, Path::new(path)))
     }
@@ -1111,6 +1115,35 @@ fn windows_network_error(_error: &io::Error) -> bool {
     false
 }
 
+/// D1 补全：盘符映射的网络盘（`Z:\...`）用 Win32 判定（`GetDriveTypeW`）。
+/// 纯字符串判定只能识别 UNC；映射盘在路径上看起来和本地盘一样，必须问系统。
+#[cfg(windows)]
+fn mapped_drive_is_remote(path: &str) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    // Win32 `DRIVE_REMOTE` 的取值（windows-sys 0.61 把它放在需额外 feature 的
+    // `Win32::System::WindowsProgramming` 模块，这里只用一个常量，不扩 feature）。
+    const DRIVE_REMOTE: u32 = 4;
+
+    let trimmed = path.trim_start();
+    let bytes = trimmed.as_bytes();
+    // 只认「盘符:」开头；UNC 已由字符串判定覆盖，相对路径没有盘符可问。
+    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return false;
+    }
+    let mut root: Vec<u16> = format!("{}:\\", (bytes[0] as char).to_ascii_uppercase())
+        .encode_utf16()
+        .collect();
+    root.push(0);
+    // SAFETY: `root` 是以 NUL 结尾的盘符根字符串；GetDriveTypeW 只读该缓冲区。
+    let drive_type = unsafe { GetDriveTypeW(root.as_ptr()) };
+    drive_type == DRIVE_REMOTE
+}
+
+#[cfg(not(windows))]
+fn mapped_drive_is_remote(_path: &str) -> bool {
+    false
+}
+
 pub fn now_rfc3339() -> String {
     format_rfc3339(SystemTime::now())
 }
@@ -1583,6 +1616,28 @@ mod tests {
             assert_eq!(error.code, "E2005", "raw os error {raw}");
             assert!(error.retryable, "raw os error {raw} 必须可重试");
         }
+    }
+
+    #[test]
+    fn network_path_detection_keeps_unc_and_rejects_local_drive() {
+        let adapter = CliFsAdapter::new(None);
+        assert!(
+            adapter.is_network_path(r"\\server\share\file.txt"),
+            "UNC 必须判为网络路径"
+        );
+        assert!(
+            adapter.is_network_path("//server/share/file.txt"),
+            "正斜杠 UNC 必须判为网络路径"
+        );
+        let local = std::env::current_exe().expect("current exe");
+        assert!(
+            !adapter.is_network_path(&local.to_string_lossy()),
+            "本机可执行文件所在盘不能被误判为网络盘"
+        );
+        assert!(
+            !adapter.is_network_path("relative\\path.txt"),
+            "没有盘符的相对路径不能判为网络盘"
+        );
     }
 
     #[test]

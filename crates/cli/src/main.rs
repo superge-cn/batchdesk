@@ -10,7 +10,8 @@ use std::env;
 use std::path::PathBuf;
 
 use kernel::apply::{
-    apply_plan, undo_dry_run, undo_plan, ApplyContext, ApplyOptions, ApplyOutcome, UndoOutcome,
+    apply_plan, undo_dry_run, undo_plan_with_ports, ApplyContext, ApplyOptions, ApplyOutcome,
+    UndoOutcome, UndoPorts,
 };
 use kernel::archive::{
     apply_archive_plan, plan_c10, plan_c10_compress, ArchiveApplyContext, ArchiveCompression,
@@ -5297,7 +5298,18 @@ fn run_undo(args: &[String]) -> i32 {
         return 0;
     }
     let license = AlwaysAllowLicense;
-    match undo_plan(&plan_id, &adapter, &license, &mut journal) {
+    // D1 补全：CLI 的 undo 与 apply 共用同一重试端口；无暂停交互面时按 Abort 退出。
+    let network_retry = CliNetworkRetry;
+    match undo_plan_with_ports(
+        &plan_id,
+        &adapter,
+        &license,
+        &mut journal,
+        UndoPorts {
+            network_retry: Some(&network_retry),
+            ..UndoPorts::default()
+        },
+    ) {
         Ok(outcome) => {
             if json {
                 match serde_json::to_string(&outcome) {

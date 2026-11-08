@@ -58,9 +58,9 @@
 
 ## 4. 已接受的坑、边界与仍开放的缺陷
 
-- **D1 只覆盖 UNC 路径**：盘符映射的网络盘无法从路径字符串识别；按 UNC 收口（与 R05 场景一致），映射盘留待后续需求。
+- **D1 的网络路径判定**：UNC 由纯字符串识别；Windows 盘符映射网络盘由适配层 `GetDriveTypeW == DRIVE_REMOTE` 识别（`FsAdapter::is_network_path` 能力方法，kernel 不自拼盘符规则）。**未覆盖**：没有 UNC 形态的非 Windows 网络挂载点（如 Linux CIFS 挂载的 `/mnt/share`）仍按本地路径处理，留待后续平台需求。
 - **D1 不覆盖 `edit-content`/`transcode`**：这两个动作会先 `backup_to_quarantine`；重试会累积备份。若后续要覆盖，需先做备份去重/复用，不在本次范围。
-- **D1 覆盖范围**：已接通用执行器、c09 隔离移动与 **C10 归档执行器**（`ArchiveApplyContext.network_retry`：inspect/compress/write_atomic/write_atomic_with/stat/create_dir 均走重试；`platform::archive` 把 ZIP 读与源文件读的网络错误保持 E2005）。**未覆盖**：undo、盘符映射网络盘；`edit-content`/`transcode` 不在重试族。
+- **D1 覆盖范围**：已接通用执行器、c09 隔离移动、**C10 归档执行器**（`ArchiveApplyContext.network_retry`：inspect/compress/write_atomic/write_atomic_with/stat/create_dir 均走重试；`platform::archive` 把 ZIP 读与源文件读的网络错误保持 E2005）与 **undo**（`UndoPorts.network_retry`：逆向改名/隔离/写回/建删目录均走重试，Abort 中止整任务）。**未覆盖**：`edit-content`/`transcode` 不在重试族。
 - **D1 暂停是「在途条目内」暂停**：与手动暂停（停止派发、在途条目完成）不同；断线时条目本来就阻塞在网络调用上，语义可接受。恢复后重试计数清零，若网络仍断会再次暂停。
 - **D2 的 59/121/1236 未在实机逐码验证**：只有 64 是 R05 实测；其余按 Windows 错误常量归族，错误码语义不变。
 - **D5 的 Pending 收敛依赖隔离路径存在性**：跨卷复制后删源失败可能同时存在源与隔离副本，此时收敛为 Applied（撤销会报冲突，但不会丢数据）；这是可接受的保守选择。
@@ -69,11 +69,12 @@
 ## 5. 验证
 
 - **自动化**（2026-11-08 本机）：
-  - D1：`generic_apply::tests::network_disconnect_is_retried_three_times_then_pauses_and_resumes`（前 4 枪 E2005、第 5 枪成功；断言 copy 调用 5 次、退避 `[2,4,8]`、pause 1 次）；`apply::tests::c09_network_disconnect_is_retried_three_times_then_pauses`（隔离移动同序列）；`archive_network::c10_extract_retries_network_inspect_three_times_then_pauses`（platform 集成：inspect 前 4 枪 E2005、第 5 枪读真实 ZIP 夹具，断言 inspect 5 次、退避 `[2,4,8]`、pause 1 次，目标 UNC 不可达时终态非完成）；`tasks::tests::auto_pause_sets_reason_and_resume_clears_it`（暂停状态、原因与恢复清理）。
-  - D2：`platform::fs::tests::windows_network_disconnect_maps_to_e2005`（64/59/121/1236 → E2005、retryable）。
+  - D1：`generic_apply::tests::network_disconnect_is_retried_three_times_then_pauses_and_resumes`（前 4 枪 E2005、第 5 枪成功；断言 copy 调用 5 次、退避 `[2,4,8]`、pause 1 次）；`apply::tests::c09_network_disconnect_is_retried_three_times_then_pauses`（隔离移动同序列）；`apply::tests::undo_network_disconnect_is_retried_three_times_then_pauses`（撤销逆向改名同序列）；`apply::tests::undo_network_disconnect_aborts_the_whole_task_without_a_pause_host`（Abort 宿主整任务返回 E2005）；`apply::tests::mapped_network_drive_apply_and_undo_are_retried`（适配层把 `Z:` 标成网络盘后，apply 与 undo 都进重试族）；`archive_network::c10_extract_retries_network_inspect_three_times_then_pauses`（platform 集成：inspect 前 4 枪 E2005、第 5 枪读真实 ZIP 夹具，断言 inspect 5 次、退避 `[2,4,8]`、pause 1 次，目标 UNC 不可达时终态非完成）；`tasks::tests::auto_pause_sets_reason_and_resume_clears_it`（暂停状态、原因与恢复清理）。
+  - D2：`platform::fs::tests::windows_network_disconnect_maps_to_e2005`（64/59/121/1236 → E2005、retryable）；`platform::fs::tests::network_path_detection_keeps_unc_and_rejects_local_drive`（UNC 为真、本机盘与相对路径为假）。
   - D5：`apply::tests::c09_crash_after_quarantine_move_leaves_a_journal_entry`（移动后 panic 仍留下 Journal 意图）；`platform::journal::tests::pending_quarantine_entry_recovers_applied_when_the_file_exists`、`pending_entry_is_dropped_when_the_move_never_happened`。
-  - 全量：`cargo test --workspace` 674 项、桌面壳 66＋6 项全绿（2026-11-08 升 Rust 1.99.1 后复跑）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、桌面壳 clippy、`check_docs.py`、`check_scope.py` 全绿。
+  - 全量：`cargo test --workspace` 678 项（kernel 443＋platform 119）、桌面壳 66＋6 项全绿（2026-11-08 升 Rust 1.99.1 后复跑）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、桌面壳 clippy、`check_docs.py`、`check_scope.py` 全绿。
 - **R05 实机复跑**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1d5/r05/`）：3000 条 copy 至 SMB，t≈2.058s 停止 LanmanServer；stderr 依次出现 `2 秒/4 秒/8 秒后重试`，t≈16.188s 以 E2005（os error 64）中止；已复制 220 条、0 字节 0 条、SHA256 不符 0 条、Journal 220 条；未再出现「任务报 completed 但文件 0 字节」。
 - **E04 实机复跑**（2026-11-08，桌面壳预检路径，`E:/batchdesk-shijiri/fix-d1d5/e04/`）：F: 填至剩 1 MiB，f11 计划在预检阶段产生 `disk-space` 项：`Block`、`available 1048576 < required 0 + margin 209715200`、path `F:\batchdesk-e04-target`，整任务阻断；未产生 31 条副作用（临时测试代码已移除，日志留档）。
 - **C10 归档执行器实机复跑**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1d5/c10/`）：3000 条 ZIP 放在 SMB 共享、解压到本地；t≈1.087s 停 LanmanServer（已解 23 条），stderr 依次 `2/4/8 秒后重试`，t≈15.152s 以 **E2005（os error 64）** 中止；已解 23 条、0 字节 0 条、Journal 23 条。证明 C10 的 inspect/extract 网络错误已进入 D1 重试族。
+- **映射盘 undo 实机复验**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1-undo/records.md`）：10 个同内容文件放在临时 SMB 共享、客户端映射 `Z:`；c09 计划删 9 条、apply 后 9 条进隔离；`Stop-Service LanmanServer` 后跑 undo——stderr 依次 `2/4/8 秒后重试`、t≈14.421s 以 **E2005（os error 64）** 中止（`detail: \\?\Z:\data\dup9.txt`，路径不含 UNC 前缀，证明映射盘由适配层识别）；隔离 9 条与源 1 条原样、零半成品。`Start-Service` 后复跑 undo：reverted 9、failed 0、t≈0.095s；源文件 10、隔离 0、Journal reverted 9；10 个文件 SHA256 唯一值 1、0 空文件。测后共享与 `Z:` 映射已删除、LanmanServer 已恢复 Running。
 - **CI**：run 42475364987（2026-11-08，head `2692392`＝C10 接入批收尾，覆盖 `86899b7` 的 C10 代码与 `2692392` 的 1.99 适配）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。**判红留档**：run 42471860342（head `86899b7`）仅 lint job 红——CI 用 Rust 1.99.1，`AtomicU64::fetch_update` 在该版本被弃用（`::error::` 注解指向 `crates/platform/tests/archive_network.rs:58`），其余六 job 已 success；改 `try_update`（`2692392`）后本轮转绿，本机工具链同步升到 1.99.1 复跑全部门禁。上一轮 run 42449989630（head `2a145bf`＝D1/D2/D5 修复批）七 job 全 success、95 步零 skipped 零失败。

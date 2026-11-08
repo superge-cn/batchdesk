@@ -455,10 +455,10 @@ pub fn apply_plan(
             }
         };
 
-        // D1：UNC 断线时对隔离移动做 3 次退避重试；耗尽后由壳层暂停任务。
+        // D1：网络路径（UNC 或映射盘）断线时对隔离移动做 3 次退避重试；耗尽后由壳层暂停任务。
         let moved = crate::retry::with_network_retry(
             context.network_retry,
-            crate::retry::is_network_path(&entry.source),
+            context.fs.is_network_path(&entry.source),
             || {
                 context
                     .fs
@@ -676,6 +676,8 @@ pub struct UndoPorts<'a> {
     pub task_id: Option<&'a str>,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
+    /// D1：撤销路径的断线重试端口（与 apply 共用同一套退避/暂停语义）。
+    pub network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
 }
 
 pub fn undo_plan(
@@ -865,7 +867,16 @@ pub fn undo_plan_with_ports(
         {
             break;
         }
-        let result = execute_reverse(fs, &entry.reverse);
+        // D1 补全：撤销的逆向操作（改名/隔离/写回/建删目录）同样走断线重试。
+        // 判定经适配层能力（UNC 或映射盘）；Abort 表示宿主无暂停交互面，整任务中止。
+        let network = crate::retry::fs_op_touches_network(fs, &entry.reverse);
+        let result = match crate::retry::with_network_retry(ports.network_retry, network, || {
+            execute_reverse(fs, &entry.reverse)
+        }) {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.abort => return Err(failure.error),
+            Err(failure) => Err(failure.error),
+        };
         match result {
             Ok(()) => {
                 license.release(entry.plan_kind.as_deref().unwrap_or(C09), 1);
@@ -982,6 +993,8 @@ mod tests {
         /// D1 故障注入：源路径 →（错误码, retryable, 剩余可失败次数）。
         rename_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
         rename_calls: std::sync::atomic::AtomicU64,
+        /// D1 补全：模拟盘符映射网络盘（`Z:`），验证执行器读适配层能力。
+        mapped_network: AtomicBool,
     }
 
     impl TestFs {
@@ -996,7 +1009,12 @@ mod tests {
                 panic_after_move: AtomicBool::new(false),
                 rename_failures: Mutex::new(BTreeMap::new()),
                 rename_calls: std::sync::atomic::AtomicU64::new(0),
+                mapped_network: AtomicBool::new(false),
             }
+        }
+
+        fn set_mapped_network(&self, value: bool) {
+            self.mapped_network.store(value, Ordering::SeqCst);
         }
 
         fn set_panic_after_move(&self, value: bool) {
@@ -1059,6 +1077,11 @@ mod tests {
     }
 
     impl FsAdapter for TestFs {
+        fn is_network_path(&self, path: &str) -> bool {
+            (self.mapped_network.load(Ordering::SeqCst) && path.starts_with("Z:"))
+                || crate::retry::is_network_path(path)
+        }
+
         fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError> {
             self.files
                 .lock()
@@ -1435,6 +1458,151 @@ mod tests {
         assert!(!fs.exists("//server/share/a.txt"));
     }
 
+    /// D1 补全：undo 的逆向改名同样走 3 次退避重试；耗尽后暂停，恢复后完成撤销。
+    #[test]
+    fn undo_network_disconnect_is_retried_three_times_then_pauses() {
+        let fs = TestFs::with_files(&["//server/share/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        {
+            let mut context = context(&fs, &license, &mut journal);
+            let outcome = apply_plan(
+                &plan(vec![delete_entry("e1", "//server/share/a.txt")]),
+                &ApplyOptions::default(),
+                &mut context,
+            )
+            .unwrap();
+            assert_eq!(outcome.state, ApplyState::Completed);
+        }
+        fs.set_rename_failure("/quarantine/1", "E2005", true, 4);
+        let retry = RecordingRetry::default();
+        let before = fs.rename_calls.load(Ordering::SeqCst);
+        let outcome = undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            UndoPorts {
+                network_retry: Some(&retry),
+                ..UndoPorts::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.reverted, 1, "重试耗尽并恢复后必须完成撤销");
+        assert_eq!(
+            fs.rename_calls.load(Ordering::SeqCst) - before,
+            5,
+            "首次＋3 次退避重试＋暂停恢复后 1 次"
+        );
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ]
+        );
+        assert!(retry.pauses.load(Ordering::SeqCst));
+        assert!(fs.exists("//server/share/a.txt"), "撤销后源文件回到原位");
+    }
+
+    /// D1 补全：盘符映射网络盘（`Z:`）的判定走适配层能力，撤销与执行器都不再
+    /// 只看字符串前缀。适配层把 `Z:` 标成网络盘后，apply 与 undo 都进入重试族。
+    #[test]
+    fn mapped_network_drive_apply_and_undo_are_retried() {
+        let fs = TestFs::with_files(&["Z:\\data\\a.txt"]);
+        fs.set_mapped_network(true);
+        let entry = delete_entry("e1", "Z:\\data\\a.txt");
+        assert!(
+            crate::retry::entry_touches_network(&fs, &entry),
+            "适配层判定 Z: 是网络盘时，条目必须进重试族"
+        );
+        assert!(
+            !crate::retry::is_network_path("Z:\\data\\a.txt"),
+            "纯字符串判定识别不了映射盘，必须由适配层补足"
+        );
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        fs.set_rename_failure("Z:\\data\\a.txt", "E2005", true, 4);
+        let apply_retry = RecordingRetry::default();
+        {
+            let mut context = context(&fs, &license, &mut journal);
+            context.network_retry = Some(&apply_retry);
+            let outcome =
+                apply_plan(&plan(vec![entry]), &ApplyOptions::default(), &mut context).unwrap();
+            assert_eq!(outcome.state, ApplyState::Completed, "映射盘断线后重试成功");
+        }
+        assert_eq!(
+            fs.rename_calls.load(Ordering::SeqCst),
+            5,
+            "apply：首次＋3 次退避重试＋暂停恢复后 1 次"
+        );
+        assert!(apply_retry.pauses.load(Ordering::SeqCst));
+
+        fs.set_rename_failure("/quarantine/1", "E2005", true, 4);
+        let undo_retry = RecordingRetry::default();
+        let before = fs.rename_calls.load(Ordering::SeqCst);
+        let outcome = undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            UndoPorts {
+                network_retry: Some(&undo_retry),
+                ..UndoPorts::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.reverted, 1);
+        assert_eq!(
+            fs.rename_calls.load(Ordering::SeqCst) - before,
+            5,
+            "undo：映射盘断线后同样 5 次调用"
+        );
+        assert!(fs.exists("Z:\\data\\a.txt"));
+    }
+
+    /// D1 补全：无暂停交互面的宿主（CLI）在重试耗尽后按 Abort 中止整个撤销，
+    /// 而不是把它降级成「条目失败、继续下一条」。
+    #[test]
+    fn undo_network_disconnect_aborts_the_whole_task_without_a_pause_host() {
+        struct AbortRetry;
+        impl crate::retry::NetworkRetry for AbortRetry {
+            fn wait(&self, _delay: Duration) -> bool {
+                true
+            }
+            fn pause(&self, _error: &KernelError) -> crate::retry::PauseAction {
+                crate::retry::PauseAction::Abort
+            }
+        }
+
+        let fs = TestFs::with_files(&["//server/share/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        {
+            let mut context = context(&fs, &license, &mut journal);
+            let _ = apply_plan(
+                &plan(vec![delete_entry("e1", "//server/share/a.txt")]),
+                &ApplyOptions::default(),
+                &mut context,
+            )
+            .unwrap();
+        }
+        fs.set_rename_failure("/quarantine/1", "E2005", true, 4);
+        let error = undo_plan_with_ports(
+            PLAN_ID,
+            &fs,
+            &license,
+            &mut journal,
+            UndoPorts {
+                network_retry: Some(&AbortRetry),
+                ..UndoPorts::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E2005");
+    }
+
     #[test]
     fn denied_license_does_not_touch_the_file() {
         let fs = TestFs::with_files(&["a"]);
@@ -1791,6 +1959,7 @@ mod tests {
                 task_id: Some("task-2"),
                 progress: Some(&sink),
                 cancel: Some(&token),
+                network_retry: None,
             },
         )
         .unwrap();
