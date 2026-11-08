@@ -75,3 +75,4 @@
   - 全量：`cargo test --workspace` 671 项、桌面壳 66＋6 项全绿；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、桌面壳 clippy 全绿。
 - **R05 实机复跑**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1d5/r05/`）：3000 条 copy 至 SMB，t≈2.058s 停止 LanmanServer；stderr 依次出现 `2 秒/4 秒/8 秒后重试`，t≈16.188s 以 E2005（os error 64）中止；已复制 220 条、0 字节 0 条、SHA256 不符 0 条、Journal 220 条；未再出现「任务报 completed 但文件 0 字节」。
 - **E04 实机复跑**（2026-11-08，桌面壳预检路径，`E:/batchdesk-shijiri/fix-d1d5/e04/`）：F: 填至剩 1 MiB，f11 计划在预检阶段产生 `disk-space` 项：`Block`、`available 1048576 < required 0 + margin 209715200`、path `F:\batchdesk-e04-target`，整任务阻断；未产生 31 条副作用（临时测试代码已移除，日志留档）。
+- **CI**：run 42449989630（2026-11-08，head `2a145bf`＝本批）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。
