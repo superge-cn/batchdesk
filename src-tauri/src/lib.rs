@@ -565,6 +565,24 @@ fn preflight_stored_plan(
     )
 }
 
+/// 把一条空间需求并入「同卷分组」（D4）：同一卷的条目合并成一次预检判定。
+fn add_disk_requirement(
+    groups: &mut Vec<(PathBuf, u64, u64)>,
+    path: &Path,
+    required: u64,
+    temp_peak: u64,
+) {
+    if let Some(group) = groups
+        .iter_mut()
+        .find(|(existing, _, _)| same_volume(existing, path))
+    {
+        group.1 = group.1.saturating_add(required);
+        group.2 = group.2.saturating_add(temp_peak);
+        return;
+    }
+    groups.push((path.to_path_buf(), required, temp_peak));
+}
+
 /// 预检闸：每次调用都重新采集磁盘余量与路径事实，**不缓存预览期的结论**
 /// （TC-S01-PRE-04「环境变化重算」）。零写入：本函数只 stat/读空间，
 /// 由 `preflight_gate_writes_nothing` 钉住。
@@ -587,25 +605,67 @@ pub(crate) fn preflight_gate(
         unc_roots.insert(share.to_string_lossy().into_owned());
     }
 
-    if plan.kind == "c09" {
-        let mut required = 0u64;
-        for entry in &plan.entries {
-            if entry.blocked.is_some() || entry.resolution == Some(PlanResolution::Skip) {
-                continue;
+    // D4：磁盘判定不再只接 c09。按「实际落盘的卷」分组，写入型计划逐卷判定；
+    // 同卷改名/移动不额外占空间，跨卷移动与复制按源大小计入目标卷。
+    let mut disk_groups: Vec<(PathBuf, u64, u64)> = Vec::new();
+    for entry in &plan.entries {
+        if entry.blocked.is_some() || entry.resolution == Some(PlanResolution::Skip) {
+            continue;
+        }
+        let source = Path::new(&entry.source);
+        let target = entry.target.as_deref().map(Path::new);
+        let size = entry
+            .expected
+            .as_ref()
+            .map(|expected| expected.size)
+            .unwrap_or(0);
+        match entry.action {
+            PlanAction::Rename => {}
+            PlanAction::Delete => {
+                let required = if same_volume(source, quarantine_dir) {
+                    0
+                } else {
+                    size
+                };
+                add_disk_requirement(&mut disk_groups, quarantine_dir, required, 0);
             }
-            let size = entry
-                .expected
-                .as_ref()
-                .map(|expected| expected.size)
-                .unwrap_or(0);
-            if !same_volume(Path::new(&entry.source), quarantine_dir) {
-                required = required.saturating_add(size);
+            PlanAction::Move => {
+                if let Some(target) = target {
+                    if !same_volume(source, target) {
+                        add_disk_requirement(&mut disk_groups, target, size, 0);
+                    }
+                }
+            }
+            PlanAction::CreateDir => {
+                if let Some(target) = target {
+                    add_disk_requirement(&mut disk_groups, target, 0, 0);
+                }
+            }
+            PlanAction::Transcode | PlanAction::EditContent => {
+                if let Some(target) = target {
+                    if same_volume(source, target) {
+                        // 原地重写：原文件保留到改名完成，峰值是临时产物的体积。
+                        add_disk_requirement(&mut disk_groups, target, 0, size);
+                    } else {
+                        add_disk_requirement(&mut disk_groups, target, size, 0);
+                    }
+                } else {
+                    add_disk_requirement(&mut disk_groups, source, 0, size);
+                }
+            }
+            _ => {
+                if let Some(target) = target {
+                    add_disk_requirement(&mut disk_groups, target, size, 0);
+                }
             }
         }
-        input.disk = Some(DiskSpaceCheck {
+    }
+    for (path, required, temp_peak) in disk_groups {
+        input.disks.push(DiskSpaceCheck {
+            path: Some(path.to_string_lossy().into_owned()),
             required_bytes: required,
-            available_bytes: available_space(quarantine_dir)?,
-            temp_peak_bytes: 0,
+            available_bytes: available_space(&path)?,
+            temp_peak_bytes: temp_peak,
             margin_floor_bytes,
             margin_ratio,
         });
@@ -2062,6 +2122,8 @@ mod tests {
             0,
             "无效行（.. 逃逸）不产生事实"
         );
-        fs::remove_dir_all(&root).unwrap();
+        // 清理失败不影响断言结论：部分 Windows 构建上 `remove_dir_all` 会对
+        // 目录内普通文件报 ERROR_DIR_NOT_EMPTY（本机已复现），不能把测试判红。
+        let _ = fs::remove_dir_all(&root);
     }
 }

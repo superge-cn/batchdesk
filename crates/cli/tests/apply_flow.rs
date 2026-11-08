@@ -2839,6 +2839,8 @@ fn f12_and_c03_name_read_only_files_in_plan_warnings() {
     #[cfg(windows)]
     {
         let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+        // Windows 只读是属性位，这里就是恢复可写的正确做法；Unix 分支在上面用 set_mode。
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(&read_only, permissions).unwrap();
     }

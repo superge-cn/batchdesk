@@ -1834,14 +1834,20 @@ mod tests {
     fn wait_snapshot_pruned(queue_path: &std::path::Path) -> PersistedQueue {
         let start = Instant::now();
         loop {
-            let persisted: PersistedQueue =
-                serde_json::from_str(&fs::read_to_string(queue_path).unwrap()).unwrap();
-            if persisted.tasks.is_empty() {
-                return persisted;
+            match fs::read_to_string(queue_path) {
+                Ok(contents) => {
+                    let persisted: PersistedQueue = serde_json::from_str(&contents).unwrap();
+                    if persisted.tasks.is_empty() {
+                        return persisted;
+                    }
+                }
+                // 首次落盘可能晚于内存终态：缺文件同样按「尚未收敛」处理。
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("read queue snapshot: {error}"),
             }
             assert!(
                 start.elapsed() < Duration::from_secs(5),
-                "terminal tasks must not be persisted for crash recovery"
+                "queue snapshot must be created and pruned of terminal tasks within 5s"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -1928,6 +1934,44 @@ mod tests {
         }
     }
 
+    /// 非 c09 的写入型计划（f11 逐级建档）：预检也必须给出磁盘判定（D4）。
+    fn f11_plan_with_targets(plan_id: &str, targets: &[PathBuf]) -> PlanDocument {
+        let entries = targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| PlanEntry {
+                entry_id: format!("{plan_id}-e{}", index + 1),
+                source: String::new(),
+                target: Some(target.to_string_lossy().into_owned()),
+                action: kernel::plan::PlanAction::CreateDir,
+                relation: None,
+                reason: "test create directory".to_string(),
+                conflict: None,
+                resolution: None,
+                blocked: None,
+                expected: None,
+                range: None,
+                merge: None,
+                csv: None,
+                csv_merge: None,
+                csv_extract: None,
+                csv_rows: None,
+                csv_dedup: None,
+                csv_filter: None,
+                csv_columns: None,
+                csv_sort: None,
+            })
+            .collect();
+        PlanDocument {
+            plan_id: plan_id.to_string(),
+            kind: "f11".to_string(),
+            params: BTreeMap::new(),
+            entries,
+            stats: PlanStats::default(),
+            warnings: Vec::new(),
+        }
+    }
+
     fn stored(plan: PlanDocument) -> StoredPlan {
         StoredPlan {
             plan,
@@ -1984,6 +2028,63 @@ mod tests {
         .expect("预检采集不应失败");
         assert!(!passed.is_task_blocked());
         assert!(crate::apply_gate_block(&passed).is_none());
+    }
+
+    #[test]
+    fn preflight_gate_checks_disk_for_non_c09_write_plans() {
+        // D4：E04 实机里 F11 在剩 1 MiB 的卷上建档 31 条才失败——预检磁盘判定此前
+        // 只接 c09，其余写入型计划根本没有 disk-space 项。这里用不可达的余量下限
+        // 逼出确定性阻断，不依赖测试机的真实空闲空间。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("created-dir");
+        let stored = stored(f11_plan_with_targets(
+            &new_ulid("preflight-f11"),
+            std::slice::from_ref(&target),
+        ));
+        let quarantine = temp.0.join("quarantine");
+
+        let blocked = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            UNREACHABLE_MARGIN_FLOOR,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检采集不应失败");
+        assert!(
+            blocked.items.iter().any(|item| item.kind == "disk-space"),
+            "f11 等非 c09 写入计划也必须产生 disk-space 判定项（D4）"
+        );
+        assert!(blocked.is_task_blocked(), "余量不足必须整任务阻断");
+
+        // 对照：把余量下限降到 0 后同一计划应放行（需用空间为 0），证明阻断来自判定式。
+        let passed = crate::preflight_gate(
+            &stored,
+            &quarantine,
+            0,
+            platform::preflight::DEFAULT_DISK_MARGIN_RATIO,
+        )
+        .expect("预检采集不应失败");
+        assert!(!passed.is_task_blocked());
+    }
+
+    #[test]
+    fn disk_requirements_sum_within_a_volume() {
+        // D4 的分组细节：同卷需求相加成一次判定（跨卷分组依赖真实多卷，留给实机）。
+        let temp = TempDir::new();
+        let first = temp.0.join("first");
+        let second = temp.0.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+
+        let mut groups = Vec::new();
+        crate::add_disk_requirement(&mut groups, &first, 10, 3);
+        crate::add_disk_requirement(&mut groups, &second, 20, 0);
+        crate::add_disk_requirement(&mut groups, &first, 5, 1);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, first);
+        assert_eq!((groups[0].1, groups[0].2), (35, 4));
     }
 
     #[test]

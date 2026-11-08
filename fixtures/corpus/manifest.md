@@ -78,6 +78,16 @@
 
 **与验收的关系**：人工项**不进 CI 通过率**，但**进阶段级验收**——T v1.13 §4.2 的"回归通过"要求自动化与人工两栏都通过。当前自动化栏为 24 asserted／0 partial／0 pending（见 `crates/kernel/tests/assertions.tsv`），CI 绿灯仍不能代表"自动化语料零失败"。
 
+## 缺陷回归语料（D3/D4，不计入 28 条 T 基线）
+
+> **口径**：以下两条来自 2026-11-08 Windows 实机日第二轮查实的实机缺陷，**不属于 T v1.13 §3.2 的 28 条语料**，因此不建 `corpus/D3|D4` 目录、不写 `gen_*.py`、不改 `EXPECTED_TOTAL = 28` 与 `manual-only.txt`。编号用 `D` 前缀，避免落入 `check_scope.py` 的 `[KTERZ]\d{2}` 行解析与目录核对。真实断线/满盘场景仍按人工语料 R05／E04 重跑。
+
+| 缺陷 | 实机表现（2026-11-08） | 修复与回归锚点 | 状态 |
+|---|---|---|---|
+| D3 复制非原子 | R05 断线瞬间 `FsAdapter::copy` 留 0 字节目标；恢复后重放被 E2007「目标已存在」跳过，任务报 completed 但文件 0 字节（全量 SHA256 对账唯一不符） | 同目录临时文件 → 校验写入字节数 → `fs::rename` 原子替换；锚点 `platform::fs::tests::failed_copy_preserves_an_existing_target`、`platform::fs::tests::short_or_failed_copy_never_reaches_the_target_path`、`platform::fs::tests::copy_replaces_existing_target_and_cleans_the_temp_file`、`platform::fs::tests::failed_copy_leaves_no_zero_byte_target`（`#[cfg(unix)]`）；[ADR-0083](../../docs/adr/0083-实机缺陷D3D4的安全默认修复.md) | 已修（故障注入红→绿）；R05 人工重跑待做 |
+| D4 磁盘预检只接 c09 | E04 剩 1 MiB 的卷上 F11 建档前 31 条成功、9 条 E2004；S01 未在预检期阻断（`preflight_gate` 仅 `plan.kind == "c09"` 时采集磁盘） | 按目标卷分组收集空间需求，kernel 每卷出一条 `disk-space`；锚点 `tasks::tests::preflight_gate_checks_disk_for_non_c09_write_plans`、`tasks::tests::disk_requirements_sum_within_a_volume`、`kernel::preflight::tests::each_affected_volume_gets_its_own_disk_item`、`kernel::preflight::tests::disk_pass_at_boundary_and_block_one_byte_below`；[ADR-0083](../../docs/adr/0083-实机缺陷D3D4的安全默认修复.md) | 已修（不可达余量下限红→绿）；E04 人工重跑待做 |
+
+
 ## 待补脚本的实施顺序建议
 
 > **状态：本节已完结（2026-10-28）**——原本 23 条待补脚本已按下列顺序全部落地，保留本节仅作过程留痕。

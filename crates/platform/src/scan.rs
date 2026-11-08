@@ -554,8 +554,8 @@ mod tests {
             deep.push("level-0123456789");
         }
         fs::create_dir_all(crate::fs::fs_path(&deep)).unwrap();
-        fs::write(crate::fs::fs_path(&deep.join("a.txt")), b"same").unwrap();
-        fs::write(crate::fs::fs_path(&deep.join("b.txt")), b"same").unwrap();
+        fs::write(crate::fs::fs_path(deep.join("a.txt")), b"same").unwrap();
+        fs::write(crate::fs::fs_path(deep.join("b.txt")), b"same").unwrap();
         assert!(deep.join("a.txt").to_string_lossy().len() > 260);
 
         let outcome = scan_path(&dir.0, full_options(None)).unwrap();

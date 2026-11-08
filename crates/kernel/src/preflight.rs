@@ -80,8 +80,10 @@ impl PreflightReport {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DiskSpaceCheck {
+    /// 判定所针对的卷/路径（显示用；由壳层采集时给出，kernel 不读盘）。
+    pub path: Option<String>,
     pub required_bytes: u64,
     pub available_bytes: u64,
     pub temp_peak_bytes: u64,
@@ -109,7 +111,8 @@ pub struct UncCheck {
 
 #[derive(Clone, Debug, Default)]
 pub struct PreflightInput {
-    pub disk: Option<DiskSpaceCheck>,
+    /// 每个受影响卷一条判定（D4：写入型计划的目标卷不再只限 c09 的隔离卷）。
+    pub disks: Vec<DiskSpaceCheck>,
     pub paths: Vec<PathCheck>,
     pub unc: Vec<UncCheck>,
     pub protected_dirs: Vec<ProtectedDir>,
@@ -159,7 +162,7 @@ pub fn run_preflight(input: &PreflightInput) -> PreflightReport {
     let mut items = Vec::new();
     let mut task_blocked = false;
 
-    if let Some(disk) = input.disk {
+    for disk in &input.disks {
         let margin = disk_margin_bytes(
             disk.required_bytes,
             disk.margin_floor_bytes,
@@ -193,7 +196,7 @@ pub fn run_preflight(input: &PreflightInput) -> PreflightReport {
             "disk-space",
             level,
             message,
-            None,
+            disk.path.clone(),
             Some("E2004"),
             hint,
         ));
@@ -441,6 +444,7 @@ mod tests {
 
     fn disk(required: u64, available: u64) -> DiskSpaceCheck {
         DiskSpaceCheck {
+            path: None,
             required_bytes: required,
             available_bytes: available,
             temp_peak_bytes: 0,
@@ -479,7 +483,7 @@ mod tests {
     #[test]
     fn disk_pass_at_boundary_and_block_one_byte_below() {
         let input = PreflightInput {
-            disk: Some(disk(100, 110)),
+            disks: vec![disk(100, 110)],
             ..Default::default()
         };
         let report = run_preflight(&input);
@@ -487,7 +491,7 @@ mod tests {
         assert!(!report.task_blocked);
 
         let input = PreflightInput {
-            disk: Some(disk(100, 109)),
+            disks: vec![disk(100, 109)],
             ..Default::default()
         };
         let report = run_preflight(&input);
@@ -499,15 +503,36 @@ mod tests {
     }
 
     #[test]
+    fn each_affected_volume_gets_its_own_disk_item() {
+        let mut source = disk(100, 110);
+        source.path = Some("C:\\".to_string());
+        let mut target = disk(100, 109);
+        target.path = Some("F:\\".to_string());
+        let input = PreflightInput {
+            disks: vec![source, target],
+            ..Default::default()
+        };
+        let report = run_preflight(&input);
+        let disks = find(&report, "disk-space");
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks[0].path.as_deref(), Some("C:\\"));
+        assert_eq!(disks[0].level, PreflightLevel::Pass);
+        assert_eq!(disks[1].path.as_deref(), Some("F:\\"));
+        assert_eq!(disks[1].level, PreflightLevel::Block);
+        assert!(report.task_blocked);
+    }
+
+    #[test]
     fn temp_peak_is_part_of_the_requirement() {
         let input = PreflightInput {
-            disk: Some(DiskSpaceCheck {
+            disks: vec![DiskSpaceCheck {
+                path: None,
                 required_bytes: 100,
                 available_bytes: 115,
                 temp_peak_bytes: 5,
                 margin_floor_bytes: 10,
                 margin_ratio: 0.0,
-            }),
+            }],
             ..Default::default()
         };
         let report = run_preflight(&input);
@@ -515,13 +540,14 @@ mod tests {
         assert!(!report.task_blocked);
 
         let input = PreflightInput {
-            disk: Some(DiskSpaceCheck {
+            disks: vec![DiskSpaceCheck {
+                path: None,
                 required_bytes: 100,
                 available_bytes: 114,
                 temp_peak_bytes: 5,
                 margin_floor_bytes: 10,
                 margin_ratio: 0.0,
-            }),
+            }],
             ..Default::default()
         };
         let report = run_preflight(&input);

@@ -74,13 +74,13 @@ impl CliFsAdapter {
                 fs::create_dir_all(parent).map_err(|error| io_error(&error, &to))?;
             }
         }
-        if to.exists() {
-            fs::remove_file(&to).map_err(|error| io_error(&error, &to))?;
-        }
+        // 不先删目标（D3）：`fs::rename` 在 Windows/Unix 上都可替换既有文件，
+        // 先删会把「改名失败」升级成「目标丢失」；跨卷复制也由临时文件做替换。
         match fs::rename(&from, &to) {
             Ok(()) => Ok(()),
             Err(error) if is_cross_device(&error) => {
-                fs::copy(&from, &to).map_err(|error| io_error(&error, &from))?;
+                // 跨卷移动同样走原子复制（D3）：失败时目标卷上不留半成品。
+                self.copy_file_atomic(&from, &to)?;
                 fs::remove_file(&from).map_err(|error| {
                     let _ = fs::remove_file(&to);
                     io_error(&error, &from)
@@ -89,6 +89,25 @@ impl CliFsAdapter {
             }
             Err(error) => Err(io_error(&error, &from)),
         }
+    }
+
+    /// D3：复制到同目录临时文件，完整写入后再改名到目标。
+    ///
+    /// 这样网络断线、源读取失败或短写只会留下可清理的临时文件（通常连临时文件
+    /// 都清理掉了），不会在最终目标路径上留下 0 字节半成品，也不会先删掉既有目标。
+    fn copy_file_atomic(&self, from: &Path, to: &Path) -> Result<u64, KernelError> {
+        let parent = to
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| {
+                KernelError::new("E1003", "target has no parent directory", None, false)
+            })?;
+        let temp = parent.join(format!(
+            ".batchdesk-copy-{}-{}",
+            std::process::id(),
+            self.next_id()
+        ));
+        copy_via_temp(from, &temp, to, |source, target| fs::copy(source, target))
     }
 
     /// 隔离目录内的唯一新路径（`stem.nanos.id` 命名，与 remove_to_quarantine 同式）。
@@ -351,11 +370,8 @@ impl FsAdapter for CliFsAdapter {
             });
         };
         let replaced = path_exists(&target);
-        if replaced {
-            fs::remove_file(fs_path(&target)).map_err(|error| io_error(&error, &target))?;
-        }
-        fs::copy(fs_path(from_path), fs_path(&target))
-            .map_err(|error| io_error(&error, from_path))?;
+        // D3：先写同目录临时文件，完整写入后才改名到目标；失败不触碰既有目标。
+        self.copy_file_atomic(from_path, &target)?;
         Ok(PathOutcome {
             outcome: if replaced {
                 PathOutcomeKind::Replaced
@@ -670,7 +686,8 @@ impl FsAdapter for CliFsAdapter {
             .unwrap_or_else(|| "file.bak".to_string());
         let target = self.unique_quarantine_path(quarantine_dir, &base_name)?;
         // 备份是复制而非移动（设计 01 §8）：原文件留在原地，撤销时用备份还原。
-        fs::copy(fs_path(source), fs_path(&target)).map_err(|error| io_error(&error, source))?;
+        // 备份同样走原子复制（D3），失败不在隔离目录里留半截 .bak。
+        self.copy_file_atomic(source, &target)?;
         Ok(target.to_string_lossy().into_owned())
     }
 
@@ -803,6 +820,48 @@ impl FsAdapter for CliFsAdapter {
         }
         Ok(Some(hex_encode(hasher.finalize().as_bytes())))
     }
+}
+
+/// D3 的原子复制内核：先写到 `temp`，校验写入字节数，再改名到 `target`。
+///
+/// `copy` 是注入点：生产路径用 `fs::copy`，测试用可控的失败/短写闭包证明
+/// “失败不落最终目标”不是碰巧。
+fn copy_via_temp<F>(source: &Path, temp: &Path, target: &Path, copy: F) -> Result<u64, KernelError>
+where
+    F: FnOnce(&Path, &Path) -> io::Result<u64>,
+{
+    let source_fs = fs_path(source);
+    let temp_fs = fs_path(temp);
+    let target_fs = fs_path(target);
+    let expected = fs::metadata(&source_fs)
+        .map_err(|error| io_error(&error, source))?
+        .len();
+    let written = match copy(&source_fs, &temp_fs) {
+        Ok(written) => written,
+        Err(error) => {
+            let _ = fs::remove_file(&temp_fs);
+            return Err(io_error(&error, source));
+        }
+    };
+    if written != expected {
+        let _ = fs::remove_file(&temp_fs);
+        return Err(KernelError::new(
+            "E2008",
+            "copy finished short; target left untouched",
+            Some(format!(
+                "{}: wrote {written} of {expected} bytes",
+                source.display()
+            )),
+            false,
+        ));
+    }
+    // `fs::rename` 在 Windows/Unix 上都可替换既有文件（已由测试覆盖），
+    // 不先删目标，避免「改名失败 → 目标也没了」。
+    if let Err(error) = fs::rename(&temp_fs, &target_fs) {
+        let _ = fs::remove_file(&temp_fs);
+        return Err(io_error(&error, target));
+    }
+    Ok(written)
 }
 
 /// 按固定块把源文件 `[start, end)` 复制到 `temp`（流式，内存恒定）。
@@ -1377,6 +1436,120 @@ mod tests {
         );
         let reserved_again = adapter.quarantine_target_path("out.csv").unwrap();
         assert_ne!(reserved, reserved_again, "reserved paths are unique");
+    }
+
+    #[test]
+    fn failed_copy_preserves_an_existing_target() {
+        // D3：copy 是「先删目标再复制」时，复制失败会把既有目标一起弄丢。
+        // 用目录当源构造确定性失败（fs::copy 不接受目录），覆盖失败路径即可。
+        let dir = TempDir::new();
+        let source = dir.0.join("source-is-a-directory");
+        let target = dir.0.join("target.txt");
+        fs::create_dir(&source).unwrap();
+        fs::write(&target, b"keep").unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        let error = adapter
+            .copy(
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+                ConflictPolicy::Overwrite,
+            )
+            .unwrap_err();
+        assert!(
+            error.code.starts_with("E2"),
+            "目录源应走文件系统错误码：{error:?}"
+        );
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"keep",
+            "复制失败不得破坏既有目标（D3）"
+        );
+        assert_eq!(
+            leftover_temp_files(&dir.0),
+            Vec::<String>::new(),
+            "失败路径必须清掉临时文件"
+        );
+    }
+
+    #[test]
+    fn copy_replaces_existing_target_and_cleans_the_temp_file() {
+        // D3 成功路径：临时文件完整写入后替换既有目标，且不留 `.batchdesk-copy-*`。
+        let dir = TempDir::new();
+        let source = dir.0.join("source.txt");
+        let target = dir.0.join("target.txt");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&target, b"old").unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        let outcome = adapter
+            .copy(
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+                ConflictPolicy::Overwrite,
+            )
+            .unwrap();
+        assert_eq!(outcome.outcome, PathOutcomeKind::Replaced);
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(leftover_temp_files(&dir.0), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_copy_leaves_no_zero_byte_target() {
+        // D3 的另一个形态：目标原本不存在时，std::fs::copy 在 Unix 上会先创建
+        // 目标、再读源失败，留下 0 字节文件；恢复后重放又会被「目标已存在」跳过。
+        let dir = TempDir::new();
+        let source = dir.0.join("source-is-a-directory");
+        let target = dir.0.join("fresh-target.txt");
+        fs::create_dir(&source).unwrap();
+        let adapter = CliFsAdapter::new(None);
+
+        let error = adapter
+            .copy(
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+                ConflictPolicy::Skip,
+            )
+            .unwrap_err();
+        assert!(error.code.starts_with("E2"));
+        assert!(
+            !target.exists(),
+            "复制失败不得在目标路径留下 0 字节半成品（D3）"
+        );
+        assert_eq!(leftover_temp_files(&dir.0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn short_or_failed_copy_never_reaches_the_target_path() {
+        // 故障注入：底层 copy 只写了 3 字节却「成功」返回，或直接报错——两种都不许
+        // 让半成品落到最终目标；这覆盖断线瞬间短写/0 字节的根因（D3）。
+        let dir = TempDir::new();
+        let source = dir.0.join("source.bin");
+        let target = dir.0.join("target.bin");
+        let temp = dir.0.join(".batchdesk-copy-test");
+        fs::write(&source, b"abcdef").unwrap();
+        fs::write(&target, b"keep").unwrap();
+
+        let error = copy_via_temp(&source, &temp, &target, |_from, to| {
+            fs::write(to, b"abc")?;
+            Ok(3)
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "E2008", "短写必须报错，不得静默成功");
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+        assert!(!temp.exists(), "短写失败必须清掉临时文件");
+
+        let error = copy_via_temp(&source, &temp, &target, |_from, _to| {
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "network disconnected",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "E2005", "断线错误要映射为网络不可达");
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+        assert!(!temp.exists());
     }
 
     #[test]
