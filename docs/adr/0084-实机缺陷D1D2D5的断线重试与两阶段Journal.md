@@ -104,3 +104,7 @@ D5 的 Pending→Applied 最初用「每次状态变化重写整个 JSONL」实�
 - **S03 执行中强杀→回滚**（1199 条计划、跨卷隔离）：强杀落在 72 条已移动处，重启横幅三选项→回滚；Journal 1270 行全 reverted、data 1200、**quarantine 0 个 Journal 孤儿**（仅 1 个 0 字节 `.batchdesk-copy-*` 复制临时文件，属 §4 已登记的崩溃窗口边界，不是撤销看不见的隔离文件）。
 - **S03 执行中强杀→续跑**（1199 条计划）：强杀落在 68 条已移动处，重启→续跑 total 1131（1199−68），按 Journal 幂等跳过，最终 data 1（保留最早）、quarantine 1200、applied 1199、pending 0。
 - **断线自动暂停→继续**（5135 条计划）：新增 50 条隔离后停 LanmanServer，14 秒重试耗尽后 `state=paused`、message 含 os error 64；界面显示原因（截图 `ui-completed.png` 为完成后状态，暂停态文本由 UI 树取证）；恢复服务点继续→完成 5135/5135，共享目录剩 1 个保留文件、隔离总计 7999。
+
+### CI
+
+run 42498459881（2026-11-08，head `fb53020`＝本批）：七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。
