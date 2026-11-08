@@ -726,6 +726,18 @@ pub fn undo_dry_run(
     journal: &mut dyn JournalStore,
     fs: &dyn FsAdapter,
 ) -> Result<UndoDryRun, KernelError> {
+    undo_dry_run_with_retry(plan_id, journal, fs, None)
+}
+
+/// C06 回滚预演的带端口版本：网络路径的 `stat`/`list_dir` 走与 apply/undo 同一套
+/// D1 重试；宿主没有暂停交互面时（CLI/预览命令），重试耗尽即返回 E2005，
+/// 不把断线伪装成 `missing`（旧行为把任何 stat 错误都记成源已缺失）。
+pub fn undo_dry_run_with_retry(
+    plan_id: &str,
+    journal: &mut dyn JournalStore,
+    fs: &dyn FsAdapter,
+    network_retry: Option<&dyn crate::retry::NetworkRetry>,
+) -> Result<UndoDryRun, KernelError> {
     let entries = journal.entries_for_plan(plan_id)?;
     let mut preview = Vec::new();
     let mut conflict_count = 0;
@@ -735,18 +747,28 @@ pub fn undo_dry_run(
         .rev()
         .filter(|entry| entry.status == JournalStatus::Applied)
     {
+        // 与执行期判定同一口径：逆向操作任一侧是网络路径，整条检查进重试族。
+        let network = crate::retry::fs_op_touches_network(fs, &entry.reverse);
+        let stat_exists = |path: &str| -> Result<bool, KernelError> {
+            match crate::retry::with_network_retry(network_retry, network, || fs.stat(path)) {
+                Ok(_) => Ok(true),
+                // 断线重试耗尽/宿主取消：把 E2005 上抛，不能降级成「不存在」。
+                Err(failure) if failure.error.code == "E2005" => Err(failure.error),
+                Err(_) => Ok(false),
+            }
+        };
         let (status, code, detail) = match &entry.reverse {
             // rename 还原与"产物进隔离目录"（reverse=Quarantine）都是两点位移：
             // 落点被占 → conflict；源已缺失 → missing。
             FsOp::Rename { from, to } | FsOp::Quarantine { from, to } => {
-                if fs.stat(to).is_ok() {
+                if stat_exists(to)? {
                     conflict_count += 1;
                     (
                         UndoDryRunStatus::Conflict,
                         Some("E2007".to_string()),
                         Some(format!("restore target already exists: {to}")),
                     )
-                } else if fs.stat(from).is_err() {
+                } else if !stat_exists(from)? {
                     missing_count += 1;
                     (
                         UndoDryRunStatus::Missing,
@@ -762,14 +784,14 @@ pub fn undo_dry_run(
                 path,
                 data_ref: Some(backup),
             } => {
-                if fs.stat(backup).is_err() {
+                if !stat_exists(backup)? {
                     missing_count += 1;
                     (
                         UndoDryRunStatus::Missing,
                         Some("E2001".to_string()),
                         Some(format!("backup no longer exists: {backup}")),
                     )
-                } else if fs.stat(path).is_err() {
+                } else if !stat_exists(path)? {
                     (
                         UndoDryRunStatus::Ok,
                         None,
@@ -792,7 +814,7 @@ pub fn undo_dry_run(
             // CreateDir 的逆是"删空目录"：目录在且为空 → ok；目录已不在 → missing；
             // 目录非空 → conflict（撤销只删空目录，F11 语义）。
             FsOp::RemoveDir { path } => {
-                if fs.stat(path).is_err() {
+                if !stat_exists(path)? {
                     missing_count += 1;
                     (
                         UndoDryRunStatus::Missing,
@@ -800,7 +822,17 @@ pub fn undo_dry_run(
                         Some(format!("directory no longer exists: {path}")),
                     )
                 } else {
-                    match fs.list_dir(path, &ScanFilter::default()) {
+                    let listed =
+                        match crate::retry::with_network_retry(network_retry, network, || {
+                            fs.list_dir(path, &ScanFilter::default())
+                        }) {
+                            Ok(entries) => Ok(entries),
+                            Err(failure) if failure.error.code == "E2005" => {
+                                return Err(failure.error)
+                            }
+                            Err(failure) => Err(failure.error),
+                        };
+                    match listed {
                         Ok(entries) if entries.is_empty() => (UndoDryRunStatus::Ok, None, None),
                         Ok(_) => (
                             UndoDryRunStatus::Conflict,
@@ -992,6 +1024,8 @@ mod tests {
         panic_after_move: AtomicBool,
         /// D1 故障注入：源路径 →（错误码, retryable, 剩余可失败次数）。
         rename_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
+        /// D1 补全：stat 的网络断线注入（undo 预演的只读检查复用同一重试端口）。
+        stat_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
         rename_calls: std::sync::atomic::AtomicU64,
         /// D1 补全：模拟盘符映射网络盘（`Z:`），验证执行器读适配层能力。
         mapped_network: AtomicBool,
@@ -1008,6 +1042,7 @@ mod tests {
                 next: Mutex::new(0),
                 panic_after_move: AtomicBool::new(false),
                 rename_failures: Mutex::new(BTreeMap::new()),
+                stat_failures: Mutex::new(BTreeMap::new()),
                 rename_calls: std::sync::atomic::AtomicU64::new(0),
                 mapped_network: AtomicBool::new(false),
             }
@@ -1038,6 +1073,28 @@ mod tests {
             Some(KernelError::new(
                 code.clone(),
                 "injected rename failure",
+                None,
+                *retryable,
+            ))
+        }
+
+        fn set_stat_failure(&self, path: &str, code: &str, retryable: bool, times: u64) {
+            self.stat_failures
+                .lock()
+                .unwrap()
+                .insert(path.to_string(), (code.to_string(), retryable, times));
+        }
+
+        fn stat_error(&self, path: &str) -> Option<KernelError> {
+            let mut failures = self.stat_failures.lock().unwrap();
+            let (code, retryable, remaining) = failures.get_mut(path)?;
+            if *remaining == 0 {
+                return None;
+            }
+            *remaining -= 1;
+            Some(KernelError::new(
+                code.clone(),
+                "injected stat failure",
                 None,
                 *retryable,
             ))
@@ -1212,6 +1269,9 @@ mod tests {
         }
 
         fn stat(&self, path: &str) -> Result<StatInfo, KernelError> {
+            if let Some(error) = self.stat_error(path) {
+                return Err(error);
+            }
             let files = self.files.lock().unwrap();
             if !files.contains_key(path) {
                 return Err(KernelError::new("E2001", "not found", None, false));
@@ -2067,5 +2127,81 @@ mod tests {
         let fs = TestFs::with_files(&["/data/created"]);
         let preview = undo_dry_run(PLAN_ID, &mut journal2, &fs).unwrap();
         assert_eq!(preview.entries[0].status, UndoDryRunStatus::Ok);
+    }
+
+    /// D1 补全：undo 预演的只读 stat 也走断线重试；网络错误不能被伪装成 missing。
+    #[test]
+    fn undo_dry_run_retries_network_stat_and_does_not_report_missing() {
+        let mut journal = TestJournal::default();
+        journal
+            .append(
+                PLAN_ID,
+                "e1",
+                "2026-10-30T00:00:00Z",
+                FsOp::Rename {
+                    from: "//server/share/a.txt".to_string(),
+                    to: "/quarantine/1".to_string(),
+                },
+                // undo 执行的是 reverse：从隔离目录还原回 UNC 源。
+                FsOp::Rename {
+                    from: "/quarantine/1".to_string(),
+                    to: "//server/share/a.txt".to_string(),
+                },
+            )
+            .unwrap();
+        let fs = TestFs::with_files(&["/quarantine/1"]);
+        // 前 4 枪失败（首次＋3 次重试），暂停恢复后的第 5 枪成功。
+        fs.set_stat_failure("/quarantine/1", "E2005", true, 4);
+        let retry = RecordingRetry::default();
+        let preview = undo_dry_run_with_retry(PLAN_ID, &mut journal, &fs, Some(&retry)).unwrap();
+        assert_eq!(preview.entries[0].status, UndoDryRunStatus::Ok);
+        assert_eq!(preview.missing_count, 0, "断线不能被记成源已缺失");
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ]
+        );
+        assert!(retry.pauses.load(Ordering::SeqCst));
+        assert!(fs.exists("/quarantine/1"), "预演必须零副作用");
+    }
+
+    /// 无暂停交互面的宿主（CLI/预览命令）在重试耗尽后把 E2005 上抛，
+    /// 而不是给出一个假的 `missing` 结论。
+    #[test]
+    fn undo_dry_run_surfaces_e2005_when_the_host_cannot_pause() {
+        struct AbortRetry;
+        impl crate::retry::NetworkRetry for AbortRetry {
+            fn wait(&self, _delay: Duration) -> bool {
+                true
+            }
+            fn pause(&self, _error: &KernelError) -> crate::retry::PauseAction {
+                crate::retry::PauseAction::Abort
+            }
+        }
+
+        let mut journal = TestJournal::default();
+        journal
+            .append(
+                PLAN_ID,
+                "e1",
+                "2026-10-30T00:00:00Z",
+                FsOp::Rename {
+                    from: "//server/share/a.txt".to_string(),
+                    to: "/quarantine/1".to_string(),
+                },
+                FsOp::Rename {
+                    from: "/quarantine/1".to_string(),
+                    to: "//server/share/a.txt".to_string(),
+                },
+            )
+            .unwrap();
+        let fs = TestFs::with_files(&["/quarantine/1"]);
+        fs.set_stat_failure("/quarantine/1", "E2005", true, 4);
+        let error =
+            undo_dry_run_with_retry(PLAN_ID, &mut journal, &fs, Some(&AbortRetry)).unwrap_err();
+        assert_eq!(error.code, "E2005");
     }
 }

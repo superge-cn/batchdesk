@@ -10,8 +10,8 @@ use std::env;
 use std::path::PathBuf;
 
 use kernel::apply::{
-    apply_plan, undo_dry_run, undo_plan_with_ports, ApplyContext, ApplyOptions, ApplyOutcome,
-    UndoOutcome, UndoPorts,
+    apply_plan, undo_dry_run_with_retry, undo_plan_with_ports, ApplyContext, ApplyOptions,
+    ApplyOutcome, UndoOutcome, UndoPorts,
 };
 use kernel::archive::{
     apply_archive_plan, plan_c10, plan_c10_compress, ArchiveApplyContext, ArchiveCompression,
@@ -5280,7 +5280,11 @@ fn run_undo(args: &[String]) -> i32 {
     let adapter = CliFsAdapter::new(None);
     if dry_run {
         // C06 回滚预演（方案 §7.8"回滚前重新做冲突检测"）：只读 stat，零副作用。
-        let preview = match undo_dry_run(&plan_id, &mut journal, &adapter) {
+        // D1 补全：网络路径的 stat 与执行期同套 2/4/8 秒重试；CLI 无暂停面，
+        // 耗尽后按 E2005 失败退出，不把断线伪装成「源已缺失」。
+        let retry = CliNetworkRetry;
+        let preview = match undo_dry_run_with_retry(&plan_id, &mut journal, &adapter, Some(&retry))
+        {
             Ok(preview) => preview,
             Err(error) => return print_kernel_error(&error),
         };

@@ -1301,6 +1301,21 @@ fn renamePreview(state: State<'_, AppState>, plan_id: String) -> Result<Value, I
     serde_json::to_value(preview).map_err(|error| IpcError::new("E9001", error.to_string()))
 }
 
+/// C06 预览命令的断线重试：同步等待 2/4/8 秒；预览无暂停交互面，
+/// 重试耗尽按 Abort 把 E2005 返回给界面（不把断线报成「源已缺失」）。
+struct PreviewNetworkRetry;
+
+impl kernel::retry::NetworkRetry for PreviewNetworkRetry {
+    fn wait(&self, delay: std::time::Duration) -> bool {
+        std::thread::sleep(delay);
+        true
+    }
+
+    fn pause(&self, _error: &kernel::error::KernelError) -> kernel::retry::PauseAction {
+        kernel::retry::PauseAction::Abort
+    }
+}
+
 /// C06 回滚预演（§7.8"回滚前重新做冲突检测"）：零副作用。
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
@@ -1308,8 +1323,14 @@ fn undoDryRun(state: State<'_, AppState>, plan_id: String) -> Result<Value, IpcE
     let mut journal =
         FileJournal::open(state.paths.journal_path.clone()).map_err(IpcError::from)?;
     let adapter = CliFsAdapter::new(None);
-    let preview =
-        kernel::apply::undo_dry_run(&plan_id, &mut journal, &adapter).map_err(IpcError::from)?;
+    let retry = PreviewNetworkRetry;
+    let preview = kernel::apply::undo_dry_run_with_retry(
+        &plan_id,
+        &mut journal,
+        &adapter,
+        Some(&retry),
+    )
+    .map_err(IpcError::from)?;
     serde_json::to_value(preview).map_err(|error| IpcError::new("E9001", error.to_string()))
 }
 

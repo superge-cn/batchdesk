@@ -134,6 +134,7 @@ pub fn apply_generic_plan(
             | PlanAction::Delete
             | PlanAction::Copy
             | PlanAction::EditContent
+            | PlanAction::Transcode
             | PlanAction::Split
             | PlanAction::Merge
             | PlanAction::CsvExtract
@@ -160,6 +161,11 @@ pub fn apply_generic_plan(
             PlanAction::EditContent if entry.target.is_some() => {
                 return Err(KernelError::invalid_params(
                     "edit-content entries edit in place and must not have a target",
+                ))
+            }
+            PlanAction::Transcode if entry.target.is_some() => {
+                return Err(KernelError::invalid_params(
+                    "transcode entries edit in place and must not have a target",
                 ))
             }
             PlanAction::Rename
@@ -1715,9 +1721,10 @@ fn perform(
                     detail: None,
                 })
             }
-            PlanAction::EditContent => {
+            PlanAction::EditContent | PlanAction::Transcode => {
                 // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
-                // 备份经 `backup_once` 缓存：D1 重试不再产生第二份备份。
+                // `transcode` 是与 `edit-content` 同一执行路径的旧动作名（C01），
+                // 变换由壳层按计划 kind 注入的编辑器/重写器完成；两者共用备份复用。
                 let backup = backup_once(view.fs, &entry.source, backup)?;
                 let detail = if let Some(rewriter) = view.content_rewriter {
                     // 明细经闭包局部变量带出（rewrite_atomic_with 的回调签名固定为 ()）。
@@ -4589,6 +4596,53 @@ mod tests {
             data_ref, &backups[0],
             "Journal 的 dataRef 必须指向重试复用的那份备份"
         );
+    }
+
+    /// `transcode` 的旧动作名走与 `edit-content` 相同的就地改写执行路径：
+    /// 备份 → 变换 → 原子写回 → Journal `WriteAtomic{dataRef}` → undo 还原。
+    #[test]
+    fn transcode_entries_run_the_in_place_rewrite_and_undo_restores_the_bytes() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.write_file("/data/a.txt", b"abc");
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.content_editor = Some(&|data: &[u8]| {
+            Ok(EditedContent::new(
+                data.iter().map(|byte| byte.to_ascii_uppercase()).collect(),
+            ))
+        });
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                None,
+                PlanAction::Transcode,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(fs.read_file("/data/a.txt"), b"ABC");
+        assert!(matches!(
+            &journal.entries[0].forward,
+            FsOp::WriteAtomic {
+                data_ref: Some(_),
+                ..
+            }
+        ));
+
+        let undo = crate::apply::undo_plan_with_ports(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+            &fs,
+            &license,
+            &mut journal,
+            crate::apply::UndoPorts::default(),
+        )
+        .unwrap();
+        assert_eq!(undo.reverted, 1);
+        assert_eq!(fs.read_file("/data/a.txt"), b"abc");
     }
 
     /// 只读不重试：设计 06 里 `E2002.retryable=false`——再试一次也不会变可写。
