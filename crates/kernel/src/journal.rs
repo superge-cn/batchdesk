@@ -82,6 +82,9 @@ pub enum JournalStatus {
     Pending,
     Applied,
     Reverted,
+    /// D5：动作未执行就失败时显式作废的 Pending（追加式 Journal 的墓碑行，
+    /// 打开时合并后移除，不参与撤销）。旧日志不会出现该值。
+    Discarded,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

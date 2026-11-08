@@ -154,9 +154,13 @@ fn apply_and_undo_restore_files() {
     assert!(!data.join("c.txt").exists());
     assert!(data.join("d.txt").exists());
     assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 2);
+    // D5 追加式 Journal：每条记录先落 pending、再追加 applied；两条记录对应
+    // 两条 applied 状态行（文件总行数为 4，不再是"每记录一行"的重写形态）。
+    let journal_text = fs::read_to_string(&journal_path).unwrap();
     assert_eq!(
-        fs::read_to_string(&journal_path).unwrap().lines().count(),
-        2
+        journal_text.matches("\"status\":\"applied\"").count(),
+        2,
+        "两条记录都必须确认成 applied：\n{journal_text}"
     );
 
     let undo = batchdesk(&[

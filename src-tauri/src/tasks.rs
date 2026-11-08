@@ -892,7 +892,20 @@ impl Inner {
     }
 
     fn emit_state(&self, task_id: &str, state: TaskState) {
-        self.emit(EVENT_STATE, json!({ "taskId": task_id, "state": state }));
+        // D1 实机缺陷（2026-11-08）：断线自动暂停只发了 state，界面拿不到原因，
+        // 用户只看到「已暂停」而不知道要恢复网络。状态事件带上最新的 message；
+        // 恢复/继续时 message 为 None，前端据此清空旧原因。
+        let message = {
+            let guard = self.state.lock().unwrap();
+            guard
+                .tasks
+                .get(task_id)
+                .and_then(|record| record.summary.message.clone())
+        };
+        self.emit(
+            EVENT_STATE,
+            json!({ "taskId": task_id, "state": state, "message": message }),
+        );
     }
 
     fn emit_progress(&self, event: ProgressEvent) {
@@ -2620,7 +2633,14 @@ mod tests {
     #[test]
     fn auto_pause_sets_reason_and_resume_clears_it() {
         let temp = TempDir::new();
-        let queue = test_queue(paths_for(&temp), Arc::new(|_event, _payload| {}));
+        let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let queue = test_queue(
+            paths_for(&temp),
+            Arc::new(move |event: &str, payload: Value| {
+                sink.lock().unwrap().push((event.to_string(), payload));
+            }),
+        );
         let task_id = new_ulid("auto-pause");
         insert_control_task(&queue, &task_id);
         queue
@@ -2638,10 +2658,36 @@ mod tests {
             "自动暂停必须带可操作原因：{:?}",
             paused.summary.message
         );
+        {
+            let captured = events.lock().unwrap();
+            assert!(
+                captured.iter().any(|(name, payload)| {
+                    name == EVENT_STATE
+                        && payload.get("state").and_then(Value::as_str) == Some("paused")
+                        && payload
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .contains("网络路径")
+                }),
+                "暂停状态事件必须携带原因（实机曾只发 state，界面看不到原因）：{captured:?}"
+            );
+        }
         queue.resume(&task_id);
         let resumed = queue.get(&task_id).unwrap();
         assert_eq!(resumed.summary.state, TaskState::Running);
         assert!(resumed.summary.message.is_none(), "恢复后不得留旧暂停原因");
+        {
+            let captured = events.lock().unwrap();
+            assert!(
+                captured.iter().any(|(name, payload)| {
+                    name == EVENT_STATE
+                        && payload.get("state").and_then(Value::as_str) == Some("running")
+                        && payload.get("message").is_some_and(Value::is_null)
+                }),
+                "恢复状态事件必须清空旧原因：{captured:?}"
+            );
+        }
     }
 
     #[test]

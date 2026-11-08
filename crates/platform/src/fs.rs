@@ -1626,6 +1626,10 @@ mod tests {
             "UNC 必须判为网络路径"
         );
         assert!(
+            adapter.is_network_path(r"\\localhost\batchdesk-pause\data\p0000-b.bin"),
+            "本机 localhost UNC 必须判为网络路径（断线暂停实机回归）"
+        );
+        assert!(
             adapter.is_network_path("//server/share/file.txt"),
             "正斜杠 UNC 必须判为网络路径"
         );

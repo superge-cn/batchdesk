@@ -78,3 +78,29 @@
 - **C10 归档执行器实机复跑**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1d5/c10/`）：3000 条 ZIP 放在 SMB 共享、解压到本地；t≈1.087s 停 LanmanServer（已解 23 条），stderr 依次 `2/4/8 秒后重试`，t≈15.152s 以 **E2005（os error 64）** 中止；已解 23 条、0 字节 0 条、Journal 23 条。证明 C10 的 inspect/extract 网络错误已进入 D1 重试族。
 - **映射盘 undo 实机复验**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1-undo/records.md`）：10 个同内容文件放在临时 SMB 共享、客户端映射 `Z:`；c09 计划删 9 条、apply 后 9 条进隔离；`Stop-Service LanmanServer` 后跑 undo——stderr 依次 `2/4/8 秒后重试`、t≈14.421s 以 **E2005（os error 64）** 中止（`detail: \\?\Z:\data\dup9.txt`，路径不含 UNC 前缀，证明映射盘由适配层识别）；隔离 9 条与源 1 条原样、零半成品。`Start-Service` 后复跑 undo：reverted 9、failed 0、t≈0.095s；源文件 10、隔离 0、Journal reverted 9；10 个文件 SHA256 唯一值 1、0 空文件。测后共享与 `Z:` 映射已删除、LanmanServer 已恢复 Running。
 - **CI**：run 42489526338（2026-11-08，head `f76f0de`＝transcode/undo 预演补全批收尾）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。**判红留档**：run 42489189813（head `6bdd92b`）lint job 的「rustfmt（桌面壳独立 workspace）」步骤红——本批改了 `src-tauri/src/lib.rs` 但只跑了根 workspace 的 `cargo fmt --all`；按桌面壳独立 workspace 跑 fmt 后 `f76f0de` 转绿。上一轮 run 42487267357（2026-11-08，head `749fe58`＝D1 再补全批：edit-content/transcode 重试＋备份复用）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。上一轮 run 42485549965（2026-11-08，head `8af89c7`＝D1 补全批：undo 重试＋映射盘识别）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。上一轮 run 42475364987（2026-11-08，head `2692392`＝C10 接入批收尾，覆盖 `86899b7` 的 C10 代码与 `2692392` 的 1.99 适配）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。**判红留档**：run 42471860342（head `86899b7`）仅 lint job 红——CI 用 Rust 1.99.1，`AtomicU64::fetch_update` 在该版本被弃用（`::error::` 注解指向 `crates/platform/tests/archive_network.rs:58`），其余六 job 已 success；改 `try_update`（`2692392`）后转绿，本机工具链同步升到 1.99.1 复跑全部门禁。再上一轮 run 42449989630（head `2a145bf`＝D1/D2/D5 修复批）七 job 全 success、95 步零 skipped 零失败。
+
+## 6. 2026-11-08 实机走查补记：两个新增缺陷（D6/D7）与 Journal 追加式
+
+### D6：C09 的执行前 stat/哈希复核未纳入网络重试，断线时逐条失败跑完
+
+实机（5135 条计划、源在 `\\localhost\batchdesk-pause\data`、隔离目录在本地 C:）：执行中新增 50 条隔离后 `Stop-Service LanmanServer`，任务在 59 秒内跑完 5200 条——5134 条 E2005 失败、65 条成功，**从未进入「已暂停」**。定位：`apply_plan` 的条目循环在隔离移动之前先做 `fs.stat` 与 `fs.content_hash`（计划期哈希复核），这两步直接调用、未走 `with_network_retry`；断线时它们先于 rename 失败，逐条记失败并 continue，重试与 pause 分支根本到不了。修复：stat 与 content_hash 也按 `is_network_path(entry.source)` 走同一 3 次/2-4-8 秒退避与暂停端口；Abort 宿主（CLI）整任务中止。
+
+验证：`apply::tests::c09_network_stat_failure_is_retried_three_times_then_pauses`、`apply::tests::c09_network_content_hash_failure_is_retried_three_times_then_pauses`（前 4 枪 E2005、第 5 枪成功；断言退避 `[2,4,8]`、pause 1 次）；断线 CLI 探针（debug 构建）`elapsed=14.12s`、stderr 依次 `2/4/8 秒后重试` 后以 E2005 中止。
+
+### D7：断线自动暂停的原因不进 `task://state`，界面只显示「已暂停」
+
+`auto_pause` 把原因写进 `TaskSummary.message` 并 persist，但 `emit_state` 只发 `{taskId, state}`；前端 `listenTaskState` 也只更新 state。暂停后 worker 阻塞、没有后续进度事件，于是界面永远拿不到原因。修复：`emit_state` 携带当前 message（恢复时 null，前端清空），`TaskStateEvent` 加 `message?: string | null`，`App.tsx` 按事件刷新。
+
+验证：`tasks::tests::auto_pause_sets_reason_and_resume_clears_it` 断言 paused 事件带原因、running 事件 message 为 null；实机断线暂停后界面显示「网络路径在 3 次退避重试后仍不可达（指定的网络名不再可用。 (os error 64)）；已暂停，恢复网络后点继续」，点继续后完成 5135/5135。
+
+### D5 追加：Journal 改为追加式写入
+
+D5 的 Pending→Applied 最初用「每次状态变化重写整个 JSONL」实现：实机 5135 条任务在 2798 条处 `mark_applied` 因 Windows 文件替换失败（E9001「quarantine move succeeded but journal confirmation failed」）中止整任务，报告 2798 条后全失败。改为追加式：pending/applied/reverted/discarded 各追加一行，`open` 时按 `(planId, seq)` 取最后一条并移除 discarded 墓碑；`remove_entries`（保留期清理，低频）仍全量重写，且不再先删目标（避免删除成功后改名失败丢整个 Journal）。`JournalStatus` 增 `Discarded` 墓碑值。
+
+验证：`platform::journal::tests::pending_then_applied_appends_and_merges_on_reopen`（文件 1→2 行、重开合并为 1 条 Applied）、`discarded_pending_is_tombstoned_and_removed_on_reopen`；`cli::tests::apply_flow::apply_and_undo_restore_files` 改断言「两条 applied 状态行」；实机断线+继续 5135 条完成后 Journal 14155 行（旧 3885＋5135×2），本轮 5135 applied／5135 pending／0 discarded，无 E9001。
+
+### 实机证据（`E:/batchdesk-shijiri/s03/`）
+
+- **S03 执行中强杀→回滚**（1199 条计划、跨卷隔离）：强杀落在 72 条已移动处，重启横幅三选项→回滚；Journal 1270 行全 reverted、data 1200、**quarantine 0 个 Journal 孤儿**（仅 1 个 0 字节 `.batchdesk-copy-*` 复制临时文件，属 §4 已登记的崩溃窗口边界，不是撤销看不见的隔离文件）。
+- **S03 执行中强杀→续跑**（1199 条计划）：强杀落在 68 条已移动处，重启→续跑 total 1131（1199−68），按 Journal 幂等跳过，最终 data 1（保留最早）、quarantine 1200、applied 1199、pending 0。
+- **断线自动暂停→继续**（5135 条计划）：新增 50 条隔离后停 LanmanServer，14 秒重试耗尽后 `state=paused`、message 含 os error 64；界面显示原因（截图 `ui-completed.png` 为完成后状态，暂停态文本由 UI 树取证）；恢复服务点继续→完成 5135/5135，共享目录剩 1 个保留文件、隔离总计 7999。

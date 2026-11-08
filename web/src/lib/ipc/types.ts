@@ -137,6 +137,8 @@ export interface ProgressEvent {
 export interface TaskStateEvent {
   taskId: string;
   state: TaskState;
+  /** 自动暂停原因（如断线重试耗尽）；恢复/继续时为空，前端应清空旧原因。 */
+  message?: string | null;
 }
 
 export interface TaskSummary {

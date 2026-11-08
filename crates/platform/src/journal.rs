@@ -1,10 +1,30 @@
 //! File-backed JSONL Journal implementation (design 01 §8).
 
-use std::fs;
+use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 use kernel::error::KernelError;
 use kernel::journal::{FsOp, JournalEntry, JournalSink, JournalStatus, JournalStore};
+
+/// 追加式 Journal 的读取合并：同一 `(plan_id, seq)` 只保留最后一条状态记录，
+/// `Discarded` 墓碑行在合并后移除。旧日志（每 seq 只有一行）原样通过。
+fn compact_entries(raw: Vec<JournalEntry>) -> Vec<JournalEntry> {
+    let mut out: Vec<JournalEntry> = Vec::new();
+    let mut positions: HashMap<(String, u64), usize> = HashMap::new();
+    for entry in raw {
+        let key = (entry.plan_id.clone(), entry.seq);
+        if let Some(&index) = positions.get(&key) {
+            out[index] = entry;
+        } else {
+            positions.insert(key, out.len());
+            out.push(entry);
+        }
+    }
+    out.retain(|entry| entry.status != JournalStatus::Discarded);
+    out
+}
 
 pub struct FileJournal {
     path: PathBuf,
@@ -41,7 +61,7 @@ impl FileJournal {
         } else {
             Vec::new()
         };
-        let (entries, changed) = reconcile_pending(entries);
+        let (entries, changed) = reconcile_pending(compact_entries(entries));
         let journal = Self { path, entries };
         if changed {
             journal.flush()?;
@@ -51,6 +71,53 @@ impl FileJournal {
 
     pub fn entries(&self) -> &[JournalEntry] {
         &self.entries
+    }
+
+    /// 追加一行状态记录。相比每次重写整个文件，追加写把路径信息落盘的成本从
+    /// O(总条目数) 降到 O(1)，并避开 Windows 上"删除+改名"的占用窗口。
+    fn append_line(&self, entry: &JournalEntry) -> Result<(), KernelError> {
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    KernelError::new(
+                        "E9001",
+                        "journal directory is not writable",
+                        Some(format!("{}: {error}", parent.display())),
+                        false,
+                    )
+                })?;
+            }
+        }
+        let line = serde_json::to_string(entry).map_err(|error| {
+            KernelError::new(
+                "E9001",
+                "journal entry is not serializable",
+                Some(error.to_string()),
+                false,
+            )
+        })?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|error| {
+                KernelError::new(
+                    "E9001",
+                    "journal file is not appendable",
+                    Some(format!("{}: {error}", self.path.display())),
+                    false,
+                )
+            })?;
+        file.write_all(line.as_bytes())
+            .and_then(|_| file.write_all(b"\n"))
+            .map_err(|error| {
+                KernelError::new(
+                    "E9001",
+                    "journal append failed",
+                    Some(format!("{}: {error}", self.path.display())),
+                    false,
+                )
+            })
     }
 
     pub fn remove_entries(&mut self, seqs: &[u64]) -> Result<(), KernelError> {
@@ -95,17 +162,8 @@ impl FileJournal {
                 false,
             )
         })?;
-        #[cfg(windows)]
-        if self.path.exists() {
-            fs::remove_file(&self.path).map_err(|error| {
-                KernelError::new(
-                    "E9001",
-                    "journal file is not replaceable",
-                    Some(format!("{}: {error}", self.path.display())),
-                    false,
-                )
-            })?;
-        }
+        // `fs::rename` 在 Windows 上以 MOVEFILE_REPLACE_EXISTING 替换目标；
+        // 不再先删目标——删除成功后改名失败会丢失整个 Journal。
         fs::rename(&temp, &self.path).map_err(|error| {
             let _ = fs::remove_file(&temp);
             KernelError::new(
@@ -165,7 +223,7 @@ impl JournalSink for FileJournal {
             status: JournalStatus::Applied,
         };
         self.entries.push(entry.clone());
-        if let Err(error) = self.flush() {
+        if let Err(error) = self.append_line(&entry) {
             self.entries.pop();
             return Err(error);
         }
@@ -193,7 +251,7 @@ impl JournalSink for FileJournal {
             status: JournalStatus::Applied,
         };
         self.entries.push(entry.clone());
-        if let Err(error) = self.flush() {
+        if let Err(error) = self.append_line(&entry) {
             self.entries.pop();
             return Err(error);
         }
@@ -221,7 +279,7 @@ impl JournalSink for FileJournal {
             status: JournalStatus::Pending,
         };
         self.entries.push(entry.clone());
-        if let Err(error) = self.flush() {
+        if let Err(error) = self.append_line(&entry) {
             self.entries.pop();
             return Err(error);
         }
@@ -229,21 +287,39 @@ impl JournalSink for FileJournal {
     }
 
     fn mark_applied(&mut self, plan_id: &str, seq: u64) -> Result<(), KernelError> {
+        let mut updated = None;
         for entry in &mut self.entries {
             if entry.plan_id == plan_id && entry.seq == seq {
                 entry.status = JournalStatus::Applied;
+                updated = Some(entry.clone());
             }
         }
-        self.flush()
+        match updated {
+            Some(entry) => self.append_line(&entry),
+            None => Ok(()),
+        }
     }
 
     fn discard_pending(&mut self, plan_id: &str, seq: u64) -> Result<(), KernelError> {
+        let mut discarded = None;
         self.entries.retain(|entry| {
-            !(entry.plan_id == plan_id
+            if entry.plan_id == plan_id
                 && entry.seq == seq
-                && entry.status == JournalStatus::Pending)
+                && entry.status == JournalStatus::Pending
+            {
+                discarded = Some(entry.clone());
+                false
+            } else {
+                true
+            }
         });
-        self.flush()
+        match discarded {
+            Some(mut entry) => {
+                entry.status = JournalStatus::Discarded;
+                self.append_line(&entry)
+            }
+            None => Ok(()),
+        }
     }
 }
 
@@ -258,12 +334,17 @@ impl JournalStore for FileJournal {
     }
 
     fn mark_reverted(&mut self, plan_id: &str, seqs: &[u64]) -> Result<(), KernelError> {
+        let mut reverted = Vec::new();
         for entry in &mut self.entries {
             if entry.plan_id == plan_id && seqs.contains(&entry.seq) {
                 entry.status = JournalStatus::Reverted;
+                reverted.push(entry.clone());
             }
         }
-        self.flush()
+        for entry in &reverted {
+            self.append_line(entry)?;
+        }
+        Ok(())
     }
 }
 
@@ -415,5 +496,62 @@ mod tests {
 
         let reopened = FileJournal::open(path).unwrap();
         assert!(reopened.entries_for_plan("plan-4").unwrap().is_empty());
+    }
+
+    #[test]
+    fn pending_then_applied_appends_and_merges_on_reopen() {
+        // 实机缺陷 2026-11-08：mark_applied 每次重写整个 Journal，在 2798 条后
+        // 因 Windows 文件替换失败中止任务（E9001）。追加式写入应只增加一行，
+        // 并在重开时合并为最新状态。
+        let dir = TempDir::new();
+        let path = dir.0.join("journal.jsonl");
+        let mut journal = FileJournal::open(path.clone()).unwrap();
+        let pending = journal
+            .append_pending_with_kind(
+                "plan-5",
+                "entry-1",
+                "2026-11-08T00:00:00Z",
+                "c09",
+                FsOp::Quarantine {
+                    from: "a".to_string(),
+                    to: "q".to_string(),
+                },
+                rename_op("q", "a"),
+            )
+            .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
+        journal.mark_applied("plan-5", pending.seq).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
+        drop(journal);
+
+        let reopened = FileJournal::open(path).unwrap();
+        let entries = reopened.entries_for_plan("plan-5").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, JournalStatus::Applied);
+    }
+
+    #[test]
+    fn discarded_pending_is_tombstoned_and_removed_on_reopen() {
+        let dir = TempDir::new();
+        let path = dir.0.join("journal.jsonl");
+        let mut journal = FileJournal::open(path.clone()).unwrap();
+        let pending = journal
+            .append_pending_with_kind(
+                "plan-6",
+                "entry-1",
+                "2026-11-08T00:00:00Z",
+                "c09",
+                FsOp::Quarantine {
+                    from: "a".to_string(),
+                    to: "q".to_string(),
+                },
+                rename_op("q", "a"),
+            )
+            .unwrap();
+        journal.discard_pending("plan-6", pending.seq).unwrap();
+        drop(journal);
+
+        let reopened = FileJournal::open(path).unwrap();
+        assert!(reopened.entries_for_plan("plan-6").unwrap().is_empty());
     }
 }

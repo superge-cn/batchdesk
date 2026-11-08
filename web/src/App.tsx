@@ -476,7 +476,11 @@ function AppShell() {
     );
     track(
       listenTaskState((event) => {
-        patchTask(event.taskId, (current) => ({ ...current, state: event.state }));
+        patchTask(event.taskId, (current) => ({
+          ...current,
+          state: event.state,
+          message: event.message ?? undefined
+        }));
       })
     );
     track(

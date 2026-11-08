@@ -323,11 +323,20 @@ pub fn apply_plan(
             }
         }
 
-        let stat = match context.fs.stat(&entry.source) {
+        // D1 实机补全（2026-11-08）：网络盘上的执行前 stat 与哈希复核同样会因
+        // 断线失败；此前只包了隔离移动，导致 C09 在断线时逐条立即失败并跑完，
+        // 界面看不到自动暂停。stat/哈希与 rename 共用同一重试与暂停语义。
+        let network = context.fs.is_network_path(&entry.source);
+        let network_retry = context.network_retry;
+        let fs = context.fs;
+        let stat = match crate::retry::with_network_retry(network_retry, network, || {
+            fs.stat(&entry.source)
+        }) {
             Ok(stat) => stat,
-            Err(error) => {
+            Err(failure) if failure.abort => return Err(failure.error),
+            Err(failure) => {
                 failed += 1;
-                entries.push(failed_entry(&entry.entry_id, error));
+                entries.push(failed_entry(&entry.entry_id, failure.error));
                 continue;
             }
         };
@@ -370,7 +379,10 @@ pub fn apply_plan(
                 continue;
             }
             if let Some(expected_hash) = &expected.hash {
-                match context.fs.content_hash(&entry.source, &expected.algorithm) {
+                let hashed = crate::retry::with_network_retry(network_retry, network, || {
+                    fs.content_hash(&entry.source, &expected.algorithm)
+                });
+                match hashed {
                     Ok(Some(actual)) if &actual != expected_hash => {
                         entries.push(ApplyEntryReport {
                             entry_id: entry.entry_id.clone(),
@@ -386,9 +398,10 @@ pub fn apply_plan(
                         continue;
                     }
                     Ok(_) => {}
-                    Err(error) => {
+                    Err(failure) if failure.abort => return Err(failure.error),
+                    Err(failure) => {
                         failed += 1;
-                        entries.push(failed_entry(&entry.entry_id, error));
+                        entries.push(failed_entry(&entry.entry_id, failure.error));
                         continue;
                     }
                 }
@@ -1026,6 +1039,8 @@ mod tests {
         rename_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
         /// D1 补全：stat 的网络断线注入（undo 预演的只读检查复用同一重试端口）。
         stat_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
+        /// D1 实机补全：执行前哈希复核的网络断线注入（C09 在断线时曾在此逐条失败）。
+        hash_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
         rename_calls: std::sync::atomic::AtomicU64,
         /// D1 补全：模拟盘符映射网络盘（`Z:`），验证执行器读适配层能力。
         mapped_network: AtomicBool,
@@ -1043,6 +1058,7 @@ mod tests {
                 panic_after_move: AtomicBool::new(false),
                 rename_failures: Mutex::new(BTreeMap::new()),
                 stat_failures: Mutex::new(BTreeMap::new()),
+                hash_failures: Mutex::new(BTreeMap::new()),
                 rename_calls: std::sync::atomic::AtomicU64::new(0),
                 mapped_network: AtomicBool::new(false),
             }
@@ -1102,6 +1118,28 @@ mod tests {
 
         fn exists(&self, path: &str) -> bool {
             self.files.lock().unwrap().contains_key(path)
+        }
+
+        fn set_hash_failure(&self, path: &str, code: &str, retryable: bool, times: u64) {
+            self.hash_failures
+                .lock()
+                .unwrap()
+                .insert(path.to_string(), (code.to_string(), retryable, times));
+        }
+
+        fn hash_error(&self, path: &str) -> Option<KernelError> {
+            let mut failures = self.hash_failures.lock().unwrap();
+            let (code, retryable, remaining) = failures.get_mut(path)?;
+            if *remaining == 0 {
+                return None;
+            }
+            *remaining -= 1;
+            Some(KernelError::new(
+                code.clone(),
+                "injected hash failure",
+                None,
+                *retryable,
+            ))
         }
     }
 
@@ -1302,6 +1340,9 @@ mod tests {
         }
 
         fn content_hash(&self, path: &str, algorithm: &str) -> Result<Option<String>, KernelError> {
+            if let Some(error) = self.hash_error(path) {
+                return Err(error);
+            }
             if algorithm != "blake3" {
                 return Ok(None);
             }
@@ -1506,6 +1547,69 @@ mod tests {
             5,
             "首次＋3 次退避重试＋暂停恢复后 1 次"
         );
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ]
+        );
+        assert!(retry.pauses.load(Ordering::SeqCst));
+        assert!(!fs.exists("//server/share/a.txt"));
+    }
+
+    /// D1 实机补全（2026-11-08）：C09 的执行前 stat 在断线时同样自动暂停，
+    /// 而不是逐条立即失败。此前只有隔离移动包了重试，实机 5200 条计划在
+    /// 断线后 59 秒内跑完 5134 条 E2005 失败，界面从未进入「已暂停」。
+    #[test]
+    fn c09_network_stat_failure_is_retried_three_times_then_pauses() {
+        let fs = TestFs::with_files(&["//server/share/a.txt"]);
+        fs.set_stat_failure("//server/share/a.txt", "E2005", true, 4);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = RecordingRetry::default();
+        let mut context = context(&fs, &license, &mut journal);
+        context.network_retry = Some(&retry);
+        let outcome = apply_plan(
+            &plan(vec![delete_entry("e1", "//server/share/a.txt")]),
+            &ApplyOptions::default(),
+            &mut context,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ]
+        );
+        assert!(retry.pauses.load(Ordering::SeqCst));
+        assert!(!fs.exists("//server/share/a.txt"));
+    }
+
+    /// D1 实机补全：执行前哈希复核（content_hash）同样走 3 次退避与暂停，
+    /// 断线时不得把 5000+ 条计划逐条记失败跑完。
+    #[test]
+    fn c09_network_content_hash_failure_is_retried_three_times_then_pauses() {
+        let fs = TestFs::with_files(&["//server/share/a.txt"]);
+        fs.set_hash_failure("//server/share/a.txt", "E2005", true, 4);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = RecordingRetry::default();
+        let mut entry = delete_entry("e1", "//server/share/a.txt");
+        entry.expected = Some(crate::plan::PlanExpected {
+            size: 7,
+            algorithm: "blake3".to_string(),
+            hash: Some(hex(b"content")),
+        });
+        let mut context = context(&fs, &license, &mut journal);
+        context.network_retry = Some(&retry);
+        let outcome =
+            apply_plan(&plan(vec![entry]), &ApplyOptions::default(), &mut context).unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
         assert_eq!(
             *retry.waits.lock().unwrap(),
             vec![
