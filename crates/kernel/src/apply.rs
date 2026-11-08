@@ -183,6 +183,8 @@ pub struct ApplyContext<'a> {
     pub name_rules: crate::conflict::NameRules,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
+    /// D1：网络断线的退避等待与自动暂停（None＝不重试）。
+    pub network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
 }
 
 pub fn apply_plan(
@@ -399,7 +401,22 @@ pub fn apply_plan(
             continue;
         }
 
-        let quarantine = match context.fs.remove_to_quarantine(&entry.source) {
+        let file_name = match std::path::Path::new(&entry.source)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+        {
+            Some(name) => name,
+            None => {
+                context.license.release(C09, 1);
+                failed += 1;
+                entries.push(failed_entry(
+                    &entry.entry_id,
+                    KernelError::new("E1003", "source path has no file name", None, false),
+                ));
+                continue;
+            }
+        };
+        let quarantine = match context.fs.quarantine_target_path(&file_name) {
             Ok(path) => path,
             Err(error) => {
                 context.license.release(C09, 1);
@@ -419,7 +436,9 @@ pub fn apply_plan(
                 "FsOp::inverse returned None for quarantine",
             )
         })?;
-        let journal_entry = match context.journal.append_with_kind(
+        // D5：先落"待确认"条目，再移动，最后确认 Applied；崩溃在移动与确认之间时，
+        // 下一次打开 Journal 会按隔离路径是否存在把 Pending 收敛为 Applied/丢弃。
+        let pending = match context.journal.append_pending_with_kind(
             &plan.plan_id,
             &entry.entry_id,
             &context.now_rfc3339,
@@ -427,36 +446,56 @@ pub fn apply_plan(
             forward,
             reverse.clone(),
         ) {
-            Ok(journal_entry) => journal_entry,
+            Ok(entry) => entry,
             Err(error) => {
                 context.license.release(C09, 1);
-                match context
-                    .fs
-                    .rename(&quarantine, &entry.source, ConflictPolicy::Skip)
-                {
-                    Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => {
-                        failed += 1;
-                        entries.push(failed_entry(&entry.entry_id, error));
-                    }
-                    Ok(_) => {
-                        return Err(KernelError::internal(
-                            "journal write failed and quarantine could not be restored",
-                            format!("{}: {}", error.code, error.message),
-                        ));
-                    }
-                    Err(restore_error) => {
-                        return Err(KernelError::internal(
-                            "journal write failed and quarantine restore failed",
-                            format!("{}; restore: {}", error.message, restore_error.message),
-                        ));
-                    }
-                }
+                failed += 1;
+                entries.push(failed_entry(&entry.entry_id, error));
                 continue;
             }
         };
+
+        // D1：UNC 断线时对隔离移动做 3 次退避重试；耗尽后由壳层暂停任务。
+        let moved = crate::retry::with_network_retry(
+            context.network_retry,
+            crate::retry::is_network_path(&entry.source),
+            || {
+                context
+                    .fs
+                    .rename(&entry.source, &quarantine, ConflictPolicy::Skip)
+            },
+        );
+        let moved = match moved {
+            Ok(outcome) if outcome.outcome != PathOutcomeKind::Skipped => outcome,
+            Ok(_) => {
+                let _ = context.journal.discard_pending(&plan.plan_id, pending.seq);
+                context.license.release(C09, 1);
+                failed += 1;
+                entries.push(failed_entry(
+                    &entry.entry_id,
+                    KernelError::new("E2007", "quarantine target already exists", None, false),
+                ));
+                continue;
+            }
+            Err(failure) if failure.abort => return Err(failure.error),
+            Err(failure) => {
+                let _ = context.journal.discard_pending(&plan.plan_id, pending.seq);
+                context.license.release(C09, 1);
+                failed += 1;
+                entries.push(failed_entry(&entry.entry_id, failure.error));
+                continue;
+            }
+        };
+        let _ = moved;
+        if let Err(error) = context.journal.mark_applied(&plan.plan_id, pending.seq) {
+            return Err(KernelError::internal(
+                "quarantine move succeeded but journal confirmation failed",
+                format!("{}: {}", error.code, error.message),
+            ));
+        }
         applied.push(AppliedOp {
             entry_index: index,
-            seq: journal_entry.seq,
+            seq: pending.seq,
             reverse,
         });
 
@@ -807,7 +846,9 @@ pub fn undo_plan_with_ports(
         return Err(KernelError::missing_param("planId is required"));
     }
     let mut journal_entries = journal.entries_for_plan(plan_id)?;
-    journal_entries.retain(|entry| entry.status != JournalStatus::Reverted);
+    // 只回滚已确认落盘的条目；Pending 是 D5 的中间态，既不能撤（动作可能没发生）
+    // 也不能留（由 Journal 打开时按隔离目录事实收敛）。
+    journal_entries.retain(|entry| entry.status == JournalStatus::Applied);
     journal_entries.sort_by_key(|entry| std::cmp::Reverse(entry.seq));
     let total = journal_entries.len() as u64;
 
@@ -929,12 +970,18 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     const PLAN_ID: &str = "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8";
 
     struct TestFs {
         files: Mutex<BTreeMap<String, Vec<u8>>>,
         next: Mutex<u64>,
+        /// D5 崩溃注入：移动完成后 panic，模拟"移动已落盘、Journal 确认未写"。
+        panic_after_move: AtomicBool,
+        /// D1 故障注入：源路径 →（错误码, retryable, 剩余可失败次数）。
+        rename_failures: Mutex<BTreeMap<String, (String, bool, u64)>>,
+        rename_calls: std::sync::atomic::AtomicU64,
     }
 
     impl TestFs {
@@ -946,7 +993,36 @@ mod tests {
             Self {
                 files: Mutex::new(files),
                 next: Mutex::new(0),
+                panic_after_move: AtomicBool::new(false),
+                rename_failures: Mutex::new(BTreeMap::new()),
+                rename_calls: std::sync::atomic::AtomicU64::new(0),
             }
+        }
+
+        fn set_panic_after_move(&self, value: bool) {
+            self.panic_after_move.store(value, Ordering::SeqCst);
+        }
+
+        fn set_rename_failure(&self, path: &str, code: &str, retryable: bool, times: u64) {
+            self.rename_failures
+                .lock()
+                .unwrap()
+                .insert(path.to_string(), (code.to_string(), retryable, times));
+        }
+
+        fn rename_error(&self, path: &str) -> Option<KernelError> {
+            let mut failures = self.rename_failures.lock().unwrap();
+            let (code, retryable, remaining) = failures.get_mut(path)?;
+            if *remaining == 0 {
+                return None;
+            }
+            *remaining -= 1;
+            Some(KernelError::new(
+                code.clone(),
+                "injected rename failure",
+                None,
+                *retryable,
+            ))
         }
 
         fn exists(&self, path: &str) -> bool {
@@ -962,6 +1038,24 @@ mod tests {
             output.push(HEX[(byte & 0x0f) as usize] as char);
         }
         output
+    }
+
+    #[derive(Default)]
+    struct RecordingRetry {
+        waits: Mutex<Vec<Duration>>,
+        pauses: AtomicBool,
+    }
+
+    impl crate::retry::NetworkRetry for RecordingRetry {
+        fn wait(&self, delay: Duration) -> bool {
+            self.waits.lock().unwrap().push(delay);
+            true
+        }
+
+        fn pause(&self, _error: &KernelError) -> crate::retry::PauseAction {
+            self.pauses.store(true, Ordering::SeqCst);
+            crate::retry::PauseAction::Resumed
+        }
     }
 
     impl FsAdapter for TestFs {
@@ -1002,6 +1096,11 @@ mod tests {
             to: &str,
             policy: ConflictPolicy,
         ) -> Result<crate::fs::PathOutcome, KernelError> {
+            self.rename_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(error) = self.rename_error(from) {
+                return Err(error);
+            }
             let mut files = self.files.lock().unwrap();
             if !files.contains_key(from) {
                 return Err(KernelError::new("E2001", "not found", None, false));
@@ -1014,6 +1113,10 @@ mod tests {
             }
             let data = files.remove(from).unwrap();
             files.insert(to.to_string(), data);
+            drop(files);
+            if self.panic_after_move.load(Ordering::SeqCst) {
+                panic!("simulated crash after quarantine move");
+            }
             Ok(crate::fs::PathOutcome {
                 outcome: crate::fs::PathOutcomeKind::Applied,
                 final_path: to.to_string(),
@@ -1054,6 +1157,12 @@ mod tests {
             self.rename(from, to, policy)
         }
 
+        fn quarantine_target_path(&self, _file_name: &str) -> Result<String, KernelError> {
+            let mut next = self.next.lock().unwrap();
+            *next += 1;
+            Ok(format!("/quarantine/{next}"))
+        }
+
         fn remove_to_quarantine(&self, path: &str) -> Result<String, KernelError> {
             let mut files = self.files.lock().unwrap();
             let data = files
@@ -1063,6 +1172,11 @@ mod tests {
             *next += 1;
             let destination = format!("/quarantine/{next}");
             files.insert(destination.clone(), data);
+            drop(files);
+            drop(next);
+            if self.panic_after_move.load(Ordering::SeqCst) {
+                panic!("simulated crash after quarantine move");
+            }
             Ok(destination)
         }
 
@@ -1239,6 +1353,7 @@ mod tests {
             name_rules: crate::conflict::NameRules::windows(),
             progress: None,
             cancel: None,
+            network_retry: None,
         }
     }
 
@@ -1258,6 +1373,66 @@ mod tests {
         assert!(!fs.exists("a"));
         assert_eq!(journal.entries.len(), 1);
         assert_eq!(journal.entries[0].status, JournalStatus::Applied);
+    }
+
+    #[test]
+    fn c09_crash_after_quarantine_move_leaves_a_journal_entry() {
+        // D5：旧实现"先移动、后写 Journal"——移动完成后立刻崩溃，Journal 里没有
+        // 任何条目，隔离目录里的文件成为撤销看不见的孤儿。移动前必须先落意图。
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.set_panic_after_move(true);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut context = context(&fs, &license, &mut journal);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = apply_plan(
+                &plan(vec![delete_entry("e1", "/data/a.txt")]),
+                &ApplyOptions::default(),
+                &mut context,
+            );
+        }));
+        assert!(result.is_err(), "故障注入必须真的在移动后中断");
+        drop(context);
+        assert_eq!(
+            journal.entries.len(),
+            1,
+            "移动前必须先落 Journal 意图；否则崩溃后隔离文件无账可查（D5）"
+        );
+        assert!(!fs.exists("/data/a.txt"), "文件应已移动到隔离目录");
+    }
+
+    /// D1：c09 的隔离移动同样走 3 次退避重试；耗尽后暂停，恢复后重试。
+    #[test]
+    fn c09_network_disconnect_is_retried_three_times_then_pauses() {
+        let fs = TestFs::with_files(&["//server/share/a.txt"]);
+        fs.set_rename_failure("//server/share/a.txt", "E2005", true, 4);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = RecordingRetry::default();
+        let mut context = context(&fs, &license, &mut journal);
+        context.network_retry = Some(&retry);
+        let outcome = apply_plan(
+            &plan(vec![delete_entry("e1", "//server/share/a.txt")]),
+            &ApplyOptions::default(),
+            &mut context,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(
+            fs.rename_calls.load(Ordering::SeqCst),
+            5,
+            "首次＋3 次退避重试＋暂停恢复后 1 次"
+        );
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ]
+        );
+        assert!(retry.pauses.load(Ordering::SeqCst));
+        assert!(!fs.exists("//server/share/a.txt"));
     }
 
     #[test]

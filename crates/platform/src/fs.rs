@@ -1082,6 +1082,11 @@ fn io_error(error: &io::Error, path: &Path) -> KernelError {
         | io::ErrorKind::ConnectionAborted
         | io::ErrorKind::ConnectionRefused
         | io::ErrorKind::ConnectionReset => ("E2005", true),
+        // D2：Windows 网络断线（R05 实测 os 64）的 kind 常落到 `Other`，不在这里
+        // 显式认领就会被下面的默认分支判成 E2008（不可重试），D1 的重试与暂停
+        // 也就永远不会触发。64/59/121/1236 分别是 NETNAME_DELETED / UNEXP_NET_ERR /
+        // SEM_TIMEOUT / CONNECTION_ABORTED。
+        _ if windows_network_error(error) => ("E2005", true),
         _ if matches!(error.raw_os_error(), Some(28) | Some(112)) => ("E2004", true),
         _ => ("E2008", false),
     };
@@ -1091,6 +1096,19 @@ fn io_error(error: &io::Error, path: &Path) -> KernelError {
         Some(path.to_string_lossy().into_owned()),
         retryable,
     )
+}
+
+#[cfg(windows)]
+fn windows_network_error(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(64) | Some(59) | Some(121) | Some(1236)
+    )
+}
+
+#[cfg(not(windows))]
+fn windows_network_error(_error: &io::Error) -> bool {
+    false
 }
 
 pub fn now_rfc3339() -> String {
@@ -1550,6 +1568,21 @@ mod tests {
         assert_eq!(error.code, "E2005", "断线错误要映射为网络不可达");
         assert_eq!(fs::read(&target).unwrap(), b"keep");
         assert!(!temp.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_network_disconnect_maps_to_e2005() {
+        // D2：R05 断线实测 os error 64 落 E2008；Windows 网络错误必须统一映射为
+        // E2005（retryable），否则 D1 的重试/暂停判据永远等不到。
+        for raw in [64, 59, 121, 1236] {
+            let error = io_error(
+                &io::Error::from_raw_os_error(raw),
+                Path::new(r"\\server\share\f.txt"),
+            );
+            assert_eq!(error.code, "E2005", "raw os error {raw}");
+            assert!(error.retryable, "raw os error {raw} 必须可重试");
+        }
     }
 
     #[test]

@@ -690,6 +690,23 @@ fn read_password_stdin() -> Result<String, String> {
     Ok(line)
 }
 
+/// D1：CLI 没有任务队列，断线仍按 3 次/2-4-8 秒退避重试；次数耗尽后 CLI 无「暂停」
+/// 交互面，按 E2005 失败退出（桌面壳才把任务切到 paused 等用户继续）。
+struct CliNetworkRetry;
+
+impl kernel::retry::NetworkRetry for CliNetworkRetry {
+    fn wait(&self, delay: std::time::Duration) -> bool {
+        eprintln!("E2005: 网络路径不可达，{:.0} 秒后重试", delay.as_secs_f64());
+        std::thread::sleep(delay);
+        true
+    }
+
+    fn pause(&self, _error: &kernel::error::KernelError) -> kernel::retry::PauseAction {
+        eprintln!("E2005: 网络路径在 3 次退避重试后仍不可达；CLI 无暂停交互面，按失败退出");
+        kernel::retry::PauseAction::Abort
+    }
+}
+
 fn run_apply(args: &[String]) -> i32 {
     let mut plan_path = None;
     let mut quarantine_dir = None;
@@ -779,6 +796,7 @@ fn run_apply(args: &[String]) -> i32 {
         }
     };
     let license = AlwaysAllowLicense;
+    let network_retry = CliNetworkRetry;
     let password = match password_from_stdin {
         true => match read_password_stdin() {
             Ok(password) => Some(password),
@@ -818,6 +836,7 @@ fn run_apply(args: &[String]) -> i32 {
             name_rules: platform::fs::name_rules(),
             progress: None,
             cancel: None,
+            network_retry: Some(&network_retry),
         };
         run_generic_or_specific(
             apply_plan(&plan, &ApplyOptions::default(), &mut context),
@@ -893,6 +912,7 @@ fn run_apply(args: &[String]) -> i32 {
             case_sense: adapter.case_sensitivity(),
             progress: None,
             cancel: None,
+            network_retry: Some(&network_retry),
             content_editor,
             content_rewriter,
             directory_lister: Some(&lister),

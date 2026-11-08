@@ -215,6 +215,44 @@ impl TaskControl {
     }
 }
 
+/// D1：桌面壳的断线重试端口。退避等待切成 20ms 片以响应取消；次数耗尽后把任务
+/// 切到 `paused` 并给出可操作提示，阻塞到用户点「继续」（或取消）。
+struct TaskNetworkRetry {
+    inner: Arc<Inner>,
+    task_id: String,
+    control: Arc<TaskControl>,
+}
+
+impl kernel::retry::NetworkRetry for TaskNetworkRetry {
+    fn wait(&self, delay: Duration) -> bool {
+        let deadline = Instant::now() + delay;
+        while Instant::now() < deadline {
+            if self.control.cancel.load(Ordering::SeqCst) {
+                return false;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            thread::sleep(remaining.min(Duration::from_millis(20)));
+        }
+        !self.control.cancel.load(Ordering::SeqCst)
+    }
+
+    fn pause(&self, error: &KernelError) -> kernel::retry::PauseAction {
+        self.inner.auto_pause(
+            &self.task_id,
+            &format!(
+                "网络路径在 3 次退避重试后仍不可达（{}）；已暂停，恢复网络后点继续",
+                error.message
+            ),
+        );
+        self.control.wait_while_paused();
+        if self.control.cancel.load(Ordering::SeqCst) {
+            kernel::retry::PauseAction::Cancel
+        } else {
+            kernel::retry::PauseAction::Resumed
+        }
+    }
+}
+
 /// 合帧状态（每任务）：kernel 逐条上报进度，壳层按窗口合并 `task://progress` 推送。
 /// `TaskSummary` 仍逐条更新，被合帧的计数通过 `getTask`/终态事件可达。
 #[derive(Default)]
@@ -645,14 +683,15 @@ impl TaskQueue {
 
     pub fn resume(&self, task_id: &str) {
         {
-            let state = self.inner.state.lock().unwrap();
-            let Some(record) = state.tasks.get(task_id) else {
+            let mut state = self.inner.state.lock().unwrap();
+            let Some(record) = state.tasks.get_mut(task_id) else {
                 return;
             };
             if record.summary.state != TaskState::Paused {
                 return;
             }
             record.control.pause.store(false, Ordering::SeqCst);
+            record.summary.message = None;
         }
         self.inner.set_state(task_id, TaskState::Running);
     }
@@ -882,6 +921,25 @@ impl Inner {
         if changed {
             self.emit_state(task_id, next);
         }
+        self.persist();
+    }
+
+    /// D1：断线重试耗尽的自动暂停。与手动 `pauseTask` 走同一状态机，但附带原因，
+    /// 让界面能显示「恢复网络后点继续」而不是一个无来由的暂停。
+    fn auto_pause(&self, task_id: &str, message: &str) {
+        {
+            let mut state = self.state.lock().unwrap();
+            let Some(record) = state.tasks.get_mut(task_id) else {
+                return;
+            };
+            if record.summary.state.is_terminal() {
+                return;
+            }
+            record.control.pause.store(true, Ordering::SeqCst);
+            record.summary.state = TaskState::Paused;
+            record.summary.message = Some(message.to_string());
+        }
+        self.emit_state(task_id, TaskState::Paused);
         self.persist();
     }
 
@@ -1162,6 +1220,12 @@ fn run_apply(
         task_id: task_id.to_string(),
         control: Arc::clone(control),
     };
+    // D1：只给 c09 与通用执行器；C10 归档执行器另有自己的上下文，暂未接断线重试。
+    let network_retry = TaskNetworkRetry {
+        inner: Arc::clone(inner),
+        task_id: task_id.to_string(),
+        control: Arc::clone(control),
+    };
     // kind 路由（设计 12 §3.1，UI 接入切片）：c09 走隔离清理专用执行器，
     // c10 走 ZIP 归档专用执行器，其余走通用执行器
     // （move/copy/delete/edit-content/split/merge/csv-* 全族）。
@@ -1224,6 +1288,7 @@ fn run_apply(
             case_sense: plan.case_sense,
             progress: Some(&sink),
             cancel: Some(control.as_ref()),
+            network_retry: Some(&network_retry),
             content_editor: None,
             content_rewriter: rewriter.as_deref(),
             directory_lister: Some(&lister),
@@ -1253,6 +1318,7 @@ fn run_apply(
         name_rules: platform::fs::name_rules(),
         progress: Some(&sink),
         cancel: Some(control.as_ref()),
+        network_retry: Some(&network_retry),
     };
     match apply_plan(&plan.plan, &options, &mut context) {
         Ok(outcome) => {
@@ -2541,6 +2607,33 @@ mod tests {
         assert!(events.iter().any(|(name, payload)| name == EVENT_STATE
             && payload.get("state").and_then(Value::as_str) == Some("cancelled")));
         assert!(events.iter().any(|(name, _)| name == EVENT_DONE));
+    }
+
+    #[test]
+    fn auto_pause_sets_reason_and_resume_clears_it() {
+        let temp = TempDir::new();
+        let queue = test_queue(paths_for(&temp), Arc::new(|_event, _payload| {}));
+        let task_id = new_ulid("auto-pause");
+        insert_control_task(&queue, &task_id);
+        queue
+            .inner
+            .auto_pause(&task_id, "网络路径在 3 次退避重试后仍不可达；已暂停");
+        let paused = queue.get(&task_id).unwrap();
+        assert_eq!(paused.summary.state, TaskState::Paused);
+        assert!(
+            paused
+                .summary
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("网络路径"),
+            "自动暂停必须带可操作原因：{:?}",
+            paused.summary.message
+        );
+        queue.resume(&task_id);
+        let resumed = queue.get(&task_id).unwrap();
+        assert_eq!(resumed.summary.state, TaskState::Running);
+        assert!(resumed.summary.message.is_none(), "恢复后不得留旧暂停原因");
     }
 
     #[test]

@@ -41,7 +41,12 @@ impl FileJournal {
         } else {
             Vec::new()
         };
-        Ok(Self { path, entries })
+        let (entries, changed) = reconcile_pending(entries);
+        let journal = Self { path, entries };
+        if changed {
+            journal.flush()?;
+        }
+        Ok(journal)
     }
 
     pub fn entries(&self) -> &[JournalEntry] {
@@ -113,6 +118,32 @@ impl FileJournal {
     }
 }
 
+/// D5：打开 Journal 时收敛待确认条目。
+///
+/// 两阶段写入的顺序是「先落 Pending → 移动 → 标记 Applied」。崩溃窗口只可能：
+/// - 移动已完成、Applied 未落盘：隔离路径存在 → 补成 Applied（撤销可见）；
+/// - 移动未发生：隔离路径不存在 → 丢弃 Pending（不留下假记录）。
+///
+/// 只处理隔离移动（`FsOp::Quarantine`）；其他 forward 的 Pending 视为未完成丢弃。
+fn reconcile_pending(mut entries: Vec<JournalEntry>) -> (Vec<JournalEntry>, bool) {
+    let before = entries.len();
+    let mut changed = false;
+    for entry in &mut entries {
+        if entry.status != JournalStatus::Pending {
+            continue;
+        }
+        if let FsOp::Quarantine { to, .. } = &entry.forward {
+            if crate::fs::fs_path(std::path::Path::new(to)).exists() {
+                entry.status = JournalStatus::Applied;
+                changed = true;
+            }
+        }
+    }
+    entries.retain(|entry| entry.status != JournalStatus::Pending);
+    changed |= entries.len() != before;
+    (entries, changed)
+}
+
 impl JournalSink for FileJournal {
     fn append(
         &mut self,
@@ -167,6 +198,52 @@ impl JournalSink for FileJournal {
             return Err(error);
         }
         Ok(entry)
+    }
+
+    fn append_pending_with_kind(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        plan_kind: &str,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> Result<JournalEntry, KernelError> {
+        let seq = self.entries.last().map(|entry| entry.seq).unwrap_or(0) + 1;
+        let entry = JournalEntry {
+            seq,
+            plan_id: plan_id.to_string(),
+            entry_id: entry_id.to_string(),
+            ts: ts.to_string(),
+            plan_kind: Some(plan_kind.to_string()),
+            forward,
+            reverse,
+            status: JournalStatus::Pending,
+        };
+        self.entries.push(entry.clone());
+        if let Err(error) = self.flush() {
+            self.entries.pop();
+            return Err(error);
+        }
+        Ok(entry)
+    }
+
+    fn mark_applied(&mut self, plan_id: &str, seq: u64) -> Result<(), KernelError> {
+        for entry in &mut self.entries {
+            if entry.plan_id == plan_id && entry.seq == seq {
+                entry.status = JournalStatus::Applied;
+            }
+        }
+        self.flush()
+    }
+
+    fn discard_pending(&mut self, plan_id: &str, seq: u64) -> Result<(), KernelError> {
+        self.entries.retain(|entry| {
+            !(entry.plan_id == plan_id
+                && entry.seq == seq
+                && entry.status == JournalStatus::Pending)
+        });
+        self.flush()
     }
 }
 
@@ -279,5 +356,64 @@ mod tests {
         let reopened = FileJournal::open(path).unwrap();
         let entries = reopened.entries_for_plan("plan-2").unwrap();
         assert_eq!(entries[0].plan_kind.as_deref(), Some("c05"));
+    }
+
+    #[test]
+    fn pending_quarantine_entry_recovers_applied_when_the_file_exists() {
+        // D5：移动已完成、Applied 确认未落盘（崩溃窗口）——重开 Journal 必须补成
+        // Applied，撤销才看得见隔离目录里的文件。
+        let dir = TempDir::new();
+        let path = dir.0.join("journal.jsonl");
+        let source = dir.0.join("source.txt");
+        let quarantine = dir.0.join("quarantine.txt");
+        fs::write(&quarantine, b"moved").unwrap();
+        let mut journal = FileJournal::open(path.clone()).unwrap();
+        journal
+            .append_pending_with_kind(
+                "plan-3",
+                "entry-1",
+                "2026-11-08T00:00:00Z",
+                "c09",
+                FsOp::Quarantine {
+                    from: source.to_string_lossy().into_owned(),
+                    to: quarantine.to_string_lossy().into_owned(),
+                },
+                rename_op(&quarantine.to_string_lossy(), &source.to_string_lossy()),
+            )
+            .unwrap();
+        drop(journal);
+
+        let reopened = FileJournal::open(path).unwrap();
+        let entries = reopened.entries_for_plan("plan-3").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, JournalStatus::Applied);
+    }
+
+    #[test]
+    fn pending_entry_is_dropped_when_the_move_never_happened() {
+        // D5：意图落盘后、移动前崩溃——隔离路径不存在，重开 Journal 应丢弃该条，
+        // 不能在撤销列表里留下指向不存在文件的假记录。
+        let dir = TempDir::new();
+        let path = dir.0.join("journal.jsonl");
+        let source = dir.0.join("source.txt");
+        let quarantine = dir.0.join("missing.txt");
+        let mut journal = FileJournal::open(path.clone()).unwrap();
+        journal
+            .append_pending_with_kind(
+                "plan-4",
+                "entry-1",
+                "2026-11-08T00:00:00Z",
+                "c09",
+                FsOp::Quarantine {
+                    from: source.to_string_lossy().into_owned(),
+                    to: quarantine.to_string_lossy().into_owned(),
+                },
+                rename_op(&quarantine.to_string_lossy(), &source.to_string_lossy()),
+            )
+            .unwrap();
+        drop(journal);
+
+        let reopened = FileJournal::open(path).unwrap();
+        assert!(reopened.entries_for_plan("plan-4").unwrap().is_empty());
     }
 }

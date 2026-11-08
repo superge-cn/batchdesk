@@ -77,6 +77,9 @@ impl FsOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JournalStatus {
+    /// D5：隔离移动的"意图已落盘、动作尚未确认"中间态；崩溃后由 Journal 打开时
+    /// 按隔离目录事实收敛为 Applied（移动已完成）或直接丢弃（移动未发生）。
+    Pending,
     Applied,
     Reverted,
 }
@@ -119,6 +122,30 @@ pub trait JournalSink {
     ) -> Result<JournalEntry, KernelError> {
         let _ = plan_kind;
         self.append(plan_id, entry_id, ts, forward, reverse)
+    }
+
+    /// D5：先落"待确认"条目，动作成功后再 `mark_applied`。默认实现直接按已完成
+    /// 写入（保持旧实现/测试替身行为不变）；生产 `FileJournal` 覆写为 Pending。
+    fn append_pending_with_kind(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        plan_kind: &str,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> Result<JournalEntry, KernelError> {
+        self.append_with_kind(plan_id, entry_id, ts, plan_kind, forward, reverse)
+    }
+
+    /// D5：动作已确认落盘，把待确认条目转为 Applied。
+    fn mark_applied(&mut self, _plan_id: &str, _seq: u64) -> Result<(), KernelError> {
+        Ok(())
+    }
+
+    /// D5：动作未执行就失败时丢弃待确认条目（避免 Journal 里留下假记录）。
+    fn discard_pending(&mut self, _plan_id: &str, _seq: u64) -> Result<(), KernelError> {
+        Ok(())
     }
 }
 

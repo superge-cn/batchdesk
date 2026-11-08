@@ -78,14 +78,17 @@
 
 **与验收的关系**：人工项**不进 CI 通过率**，但**进阶段级验收**——T v1.13 §4.2 的"回归通过"要求自动化与人工两栏都通过。当前自动化栏为 24 asserted／0 partial／0 pending（见 `crates/kernel/tests/assertions.tsv`），CI 绿灯仍不能代表"自动化语料零失败"。
 
-## 缺陷回归语料（D3/D4，不计入 28 条 T 基线）
+## 缺陷回归语料（D1–D5，不计入 28 条 T 基线）
 
-> **口径**：以下两条来自 2026-11-08 Windows 实机日第二轮查实的实机缺陷，**不属于 T v1.13 §3.2 的 28 条语料**，因此不建 `corpus/D3|D4` 目录、不写 `gen_*.py`、不改 `EXPECTED_TOTAL = 28` 与 `manual-only.txt`。编号用 `D` 前缀，避免落入 `check_scope.py` 的 `[KTERZ]\d{2}` 行解析与目录核对。真实断线/满盘场景仍按人工语料 R05／E04 重跑。
+> **口径**：以下五条来自 2026-11-08 Windows 实机日第二轮查实的实机缺陷，**不属于 T v1.13 §3.2 的 28 条语料**，因此不建 `corpus/D1…D5` 目录、不写 `gen_*.py`、不改 `EXPECTED_TOTAL = 28` 与 `manual-only.txt`。编号用 `D` 前缀，避免落入 `check_scope.py` 的 `[KTERZ]\d{2}` 行解析与目录核对。真实断线/满盘场景仍按人工语料 R05／E04 重跑。
 
 | 缺陷 | 实机表现（2026-11-08） | 修复与回归锚点 | 状态 |
 |---|---|---|---|
-| D3 复制非原子 | R05 断线瞬间 `FsAdapter::copy` 留 0 字节目标；恢复后重放被 E2007「目标已存在」跳过，任务报 completed 但文件 0 字节（全量 SHA256 对账唯一不符） | 同目录临时文件 → 校验写入字节数 → `fs::rename` 原子替换；锚点 `platform::fs::tests::failed_copy_preserves_an_existing_target`、`platform::fs::tests::short_or_failed_copy_never_reaches_the_target_path`、`platform::fs::tests::copy_replaces_existing_target_and_cleans_the_temp_file`、`platform::fs::tests::failed_copy_leaves_no_zero_byte_target`（`#[cfg(unix)]`）；[ADR-0083](../../docs/adr/0083-实机缺陷D3D4的安全默认修复.md) | 已修（故障注入红→绿）；R05 人工重跑待做 |
-| D4 磁盘预检只接 c09 | E04 剩 1 MiB 的卷上 F11 建档前 31 条成功、9 条 E2004；S01 未在预检期阻断（`preflight_gate` 仅 `plan.kind == "c09"` 时采集磁盘） | 按目标卷分组收集空间需求，kernel 每卷出一条 `disk-space`；锚点 `tasks::tests::preflight_gate_checks_disk_for_non_c09_write_plans`、`tasks::tests::disk_requirements_sum_within_a_volume`、`kernel::preflight::tests::each_affected_volume_gets_its_own_disk_item`、`kernel::preflight::tests::disk_pass_at_boundary_and_block_one_byte_below`；[ADR-0083](../../docs/adr/0083-实机缺陷D3D4的安全默认修复.md) | 已修（不可达余量下限红→绿）；E04 人工重跑待做 |
+| D1 断线无重试/退避/暂停 | R05 断线后 2263 条逐条一次即败、终态 partial-failed；方案 §4.9 的 3 次重试＋2/4/8 秒退避＋之后暂停未实现 | `NetworkRetry` 注入端口：UNC 路径最多 3 次、2/4/8 秒；耗尽后桌面壳 `auto_pause`、CLI 以 E2005 中止；锚点 `kernel::generic_apply::tests::network_disconnect_is_retried_three_times_then_pauses_and_resumes`、`kernel::apply::tests::c09_network_disconnect_is_retried_three_times_then_pauses`、`tasks::tests::auto_pause_sets_reason_and_resume_clears_it`；[ADR-0084](../../docs/adr/0084-实机缺陷D1D2D5的断线重试与两阶段Journal.md) | 已修（重试/退避/暂停均有自动化锚点）；R05 实机重跑见下 |
+| D2 Windows 网络错误码落 E2008 | R05 断线 `os error 64` 被 `io_error` 默认分支判成 E2008（不可重试），D1 判据等不到 | 64/59/121/1236 显式映射 E2005（retryable）；锚点 `platform::fs::tests::windows_network_disconnect_maps_to_e2005`；[ADR-0084](../../docs/adr/0084-实机缺陷D1D2D5的断线重试与两阶段Journal.md) | 已修；R05 实机重跑见下 |
+| D3 复制非原子 | R05 断线瞬间 `FsAdapter::copy` 留 0 字节目标；恢复后重放被 E2007「目标已存在」跳过，任务报 completed 但文件 0 字节（全量 SHA256 对账唯一不符） | 同目录临时文件 → 校验写入字节数 → `fs::rename` 原子替换；锚点 `platform::fs::tests::failed_copy_preserves_an_existing_target`、`platform::fs::tests::short_or_failed_copy_never_reaches_the_target_path`、`platform::fs::tests::copy_replaces_existing_target_and_cleans_the_temp_file`、`platform::fs::tests::failed_copy_leaves_no_zero_byte_target`（`#[cfg(unix)]`）；[ADR-0083](../../docs/adr/0083-实机缺陷D3D4的安全默认修复.md) | 已修；R05 实机重跑 0 空文件／0 SHA256 不符 |
+| D4 磁盘预检只接 c09 | E04 剩 1 MiB 的卷上 F11 建档前 31 条成功、9 条 E2004；S01 未在预检期阻断（`preflight_gate` 仅 `plan.kind == "c09"` 时采集磁盘） | 按目标卷分组收集空间需求，kernel 每卷出一条 `disk-space`；锚点 `tasks::tests::preflight_gate_checks_disk_for_non_c09_write_plans`、`tasks::tests::disk_requirements_sum_within_a_volume`、`kernel::preflight::tests::each_affected_volume_gets_its_own_disk_item`、`kernel::preflight::tests::disk_pass_at_boundary_and_block_one_byte_below`；[ADR-0083](../../docs/adr/0083-实机缺陷D3D4的安全默认修复.md) | 已修；E04 实机重跑已阻断（`available 1048576 < margin 209715200`） |
+| D5 隔离移动与 Journal 非原子 | S03 崩溃演练回滚 368 条全 reverted 但留 1 条孤儿：隔离目录有文件、Journal 无条目，撤销看不见 | 两阶段 Journal：Pending→移动→Applied；`FileJournal::open` 按隔离路径事实收敛，撤销只回滚 Applied；锚点 `kernel::apply::tests::c09_crash_after_quarantine_move_leaves_a_journal_entry`、`platform::journal::tests::pending_quarantine_entry_recovers_applied_when_the_file_exists`、`pending_entry_is_dropped_when_the_move_never_happened`；[ADR-0084](../../docs/adr/0084-实机缺陷D1D2D5的断线重试与两阶段Journal.md) | 已修（移动后 panic 仍留 Journal 意图）；S03 实机复跑待做 |
 
 
 ## 待补脚本的实施顺序建议

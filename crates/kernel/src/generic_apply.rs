@@ -97,6 +97,8 @@ pub struct GenericApplyContext<'a> {
     pub case_sense: CaseSense,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
+    /// D1：网络断线的退避等待与自动暂停（None＝不重试）。
+    pub network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
     /// `edit-content` 条目的内容变换函数（如转码）；其他动作为 None。
     pub content_editor: Option<ContentEditor<'a>>,
     /// 流式内容重写端口（C02 换行转换）；设置时优先于 `content_editor`。
@@ -318,6 +320,7 @@ pub fn apply_generic_plan(
             case_sense,
             progress,
             cancel,
+            network_retry,
             content_editor,
             content_rewriter,
             directory_lister,
@@ -331,6 +334,7 @@ pub fn apply_generic_plan(
             case_sense: *case_sense,
             progress: *progress,
             cancel: *cancel,
+            network_retry: *network_retry,
             task_id: task_id.as_str(),
             content_editor: *content_editor,
             content_rewriter: *content_rewriter,
@@ -343,6 +347,7 @@ pub fn apply_generic_plan(
         content_editor: exec.content_editor,
         content_rewriter: exec.content_rewriter,
         directory_lister: exec.directory_lister,
+        network_retry: exec.network_retry,
     };
 
     let (mut reports, applied, failed, cancelled) = if options.entry_concurrency > 1 {
@@ -418,6 +423,7 @@ struct ExecContext<'a> {
     case_sense: CaseSense,
     progress: Option<&'a dyn ProgressSink>,
     cancel: Option<&'a dyn CancelToken>,
+    network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
     task_id: &'a str,
     content_editor: Option<ContentEditor<'a>>,
     content_rewriter: Option<&'a dyn ContentRewriter>,
@@ -688,9 +694,9 @@ fn skips_permission_failures(plan: &PlanDocument) -> bool {
     )
 }
 
-/// 方案 §5.13 的"执行时重试一次"：只在 §5.13/§5.14 点名的功能族里重，且只重
-/// `retryable` 的错误（设计 06：`E2003` 被占用＝true、`E2002` 无权限/只读＝false——
-/// 只读不会因为再试一次就变成可写）。第二次仍失败就交给 `settle_entry` 落终态。
+/// 方案 §5.13 的"执行时重试一次"只处理 E2003（被占用）；D1 的断线重试单独处理
+/// E2005（网络不可达）：最多 3 次、退避 2/4/8 秒，之后交给注入的端口把任务切到
+/// 暂停并等待恢复（不直接失败）。两条都只重 `retryable` 的错误。
 fn perform_with_retry(
     view: &WorkerView<'_>,
     plan: &PlanDocument,
@@ -698,13 +704,56 @@ fn perform_with_retry(
     target: Option<&str>,
     overwrite: bool,
 ) -> Result<Result<Performed, KernelError>, KernelError> {
-    let outcome = perform(view, plan, entry, target, overwrite);
-    if let Ok(Err(error)) = &outcome {
-        if error.retryable && skips_permission_failures(plan) {
-            return perform(view, plan, entry, target, overwrite);
+    let mut network_attempts = 0u32;
+    loop {
+        let outcome = perform(view, plan, entry, target, overwrite);
+        if let Some(error) = network_error(&outcome) {
+            if let Some(retry) = view.network_retry {
+                if crate::retry::entry_touches_network(entry)
+                    && crate::retry::action_can_retry_network(entry.action)
+                {
+                    if network_attempts < crate::retry::NETWORK_RETRY_ATTEMPTS {
+                        let delay = std::time::Duration::from_secs(
+                            crate::retry::NETWORK_RETRY_BACKOFF_SECS[network_attempts as usize],
+                        );
+                        if retry.wait(delay) {
+                            network_attempts += 1;
+                            continue;
+                        }
+                    } else {
+                        match retry.pause(error) {
+                            crate::retry::PauseAction::Resumed => {
+                                // 用户恢复后重新从"首次尝试"开始（网络恢复前再次耗尽会再暂停）。
+                                network_attempts = 0;
+                                continue;
+                            }
+                            crate::retry::PauseAction::Cancel => {}
+                            crate::retry::PauseAction::Abort => {
+                                // CLI 没有暂停交互面：中止整个任务，不逐条重试。
+                                return Err(error.clone());
+                            }
+                        }
+                    }
+                }
+            }
         }
+        if let Ok(Err(error)) = &outcome {
+            if error.retryable && skips_permission_failures(plan) {
+                return perform(view, plan, entry, target, overwrite);
+            }
+        }
+        return outcome;
     }
-    outcome
+}
+
+fn network_error(
+    outcome: &Result<Result<Performed, KernelError>, KernelError>,
+) -> Option<&KernelError> {
+    match outcome {
+        Ok(Err(error)) if error.code == "E2005" => Some(error),
+        Err(error) if error.code == "E2005" => Some(error),
+        _ => None,
+    }
 }
 
 /// 执行并记账（主线程调用；串行路径与并发回收共用）：
@@ -1140,6 +1189,7 @@ pub(crate) struct WorkerView<'a> {
     content_editor: Option<ContentEditor<'a>>,
     content_rewriter: Option<&'a dyn ContentRewriter>,
     directory_lister: Option<&'a dyn DirectoryLister>,
+    network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
 }
 
 fn perform_listing(
@@ -3399,6 +3449,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Mutex;
+    use std::time::Duration;
 
     const PLAN_ID: &str = "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8";
 
@@ -3418,6 +3469,8 @@ mod tests {
         permission_failures: Mutex<HashMap<String, (String, bool, u64)>>,
         /// 计数：rename 被调用了几次——"执行时重试一次"必须数得出次数才不空转。
         rename_calls: std::sync::atomic::AtomicU64,
+        /// 计数：copy 被调用了几次——D1 的 3 次退避重试必须数得出次数。
+        copy_calls: std::sync::atomic::AtomicU64,
         /// 内存目录集合：支撑 create_dir / remove_dir_if_empty 臂（不模拟非空判定）。
         dirs: Mutex<Vec<String>>,
         /// read_stream 每次回调的块大小：既证"走了流式口"，也刻意把多字节序列切开。
@@ -3465,6 +3518,10 @@ mod tests {
             self.read_bytes_calls.load(Ordering::Relaxed)
         }
 
+        fn copy_calls(&self) -> u64 {
+            self.copy_calls.load(Ordering::Relaxed)
+        }
+
         fn open_stream_calls(&self) -> u64 {
             self.open_stream_calls.load(Ordering::Relaxed)
         }
@@ -3501,6 +3558,24 @@ mod tests {
 
         fn dir_exists(&self, path: &str) -> bool {
             self.dirs.lock().unwrap().iter().any(|dir| dir == path)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingRetry {
+        waits: Mutex<Vec<Duration>>,
+        pauses: AtomicU64,
+    }
+
+    impl crate::retry::NetworkRetry for RecordingRetry {
+        fn wait(&self, delay: Duration) -> bool {
+            self.waits.lock().unwrap().push(delay);
+            true
+        }
+
+        fn pause(&self, _error: &crate::error::KernelError) -> crate::retry::PauseAction {
+            self.pauses.fetch_add(1, Ordering::SeqCst);
+            crate::retry::PauseAction::Resumed
         }
     }
 
@@ -3722,6 +3797,7 @@ mod tests {
             to: &str,
             policy: ConflictPolicy,
         ) -> Result<PathOutcome, KernelError> {
+            self.copy_calls.fetch_add(1, Ordering::Relaxed);
             if let Some(error) = self.permission_error(to) {
                 return Err(error);
             }
@@ -4193,6 +4269,7 @@ mod tests {
             case_sense: CaseSense::Sensitive,
             progress: None,
             cancel: None,
+            network_retry: None,
             content_editor: None,
             content_rewriter: None,
             directory_lister: None,
@@ -4372,6 +4449,44 @@ mod tests {
         assert_eq!(journal.entries.len(), 1, "成功条目必须留撤销记录");
     }
 
+    /// D1：UNC 断线（E2005）最多重 3 次、退避 2/4/8 秒，之后暂停等待恢复；
+    /// 恢复后从首次尝试重新计数。这里第 5 枪成功，证明暂停后确实重试了。
+    #[test]
+    fn network_disconnect_is_retried_three_times_then_pauses_and_resumes() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        // 前 4 枪失败（首次＋3 次重试），暂停恢复后的第 5 枪成功。
+        fs.set_permission_failure("//server/share/b.txt", "E2005", true, 4);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = RecordingRetry::default();
+        let mut plan_doc = plan(vec![action_entry(
+            "e1",
+            "/data/a.txt",
+            Some("//server/share/b.txt"),
+            PlanAction::Copy,
+        )]);
+        plan_doc.kind = crate::c07::C07_KIND.to_string();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.network_retry = Some(&retry);
+        let outcome = apply_generic_plan(&plan_doc, &ApplyOptions::default(), &mut ctx).unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(fs.copy_calls(), 5, "首次＋3 次退避重试＋暂停恢复后 1 次");
+        assert_eq!(
+            *retry.waits.lock().unwrap(),
+            vec![
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(8)
+            ],
+            "退避必须按 2/4/8 秒，而不是忙重试"
+        );
+        assert_eq!(
+            retry.pauses.load(Ordering::SeqCst),
+            1,
+            "3 次重试耗尽后必须切到暂停，而不是直接失败"
+        );
+    }
+
     /// 只读不重试：设计 06 里 `E2002.retryable=false`——再试一次也不会变可写。
     #[test]
     fn non_retryable_permission_error_is_not_retried() {
@@ -4432,6 +4547,7 @@ mod tests {
             case_sense: CaseSense::Sensitive,
             progress: None,
             cancel: None,
+            network_retry: None,
             content_editor: None,
             content_rewriter: Some(&NoopRewriter),
             directory_lister: None,
