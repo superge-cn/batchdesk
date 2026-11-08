@@ -1073,7 +1073,7 @@ fn is_cross_device(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(18) | Some(17))
 }
 
-fn io_error(error: &io::Error, path: &Path) -> KernelError {
+pub(crate) fn io_error(error: &io::Error, path: &Path) -> KernelError {
     let (code, retryable) = match error.kind() {
         io::ErrorKind::NotFound => ("E2001", false),
         io::ErrorKind::PermissionDenied => ("E2002", false),

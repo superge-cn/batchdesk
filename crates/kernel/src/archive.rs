@@ -646,6 +646,22 @@ pub struct ArchiveApplyContext<'a> {
     pub password: Option<&'a str>,
     pub progress: Option<&'a dyn ProgressSink>,
     pub cancel: Option<&'a dyn CancelToken>,
+    /// D1：网络断线的退避等待与自动暂停（None＝不重试）。
+    pub network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
+}
+
+/// D1：归档读写的 E2005 重试包装。外层 `Err`＝宿主无暂停面、整单中止；
+/// 内层 `Err`＝条目失败，继续下一条。
+fn retry_archive_io<T>(
+    context: &ArchiveApplyContext<'_>,
+    network: bool,
+    op: impl FnMut() -> Result<T, KernelError>,
+) -> Result<Result<T, KernelError>, KernelError> {
+    match crate::retry::with_network_retry(context.network_retry, network, op) {
+        Ok(value) => Ok(Ok(value)),
+        Err(failure) if failure.abort => Err(failure.error),
+        Err(failure) => Ok(Err(failure.error)),
+    }
 }
 
 pub fn apply_archive_plan(
@@ -701,6 +717,15 @@ pub fn apply_archive_plan(
     let mut ok = 0usize;
     let mut cancelled = false;
     let total_entries = plan.entries.len() as u64;
+    // D1：只要计划里任一源/目标或压缩源是 UNC，整单的归档读/写都走同一套断线重试。
+    let network = plan.entries.iter().any(crate::retry::entry_touches_network)
+        || plan_param_sources(plan)
+            .map(|sources| {
+                sources
+                    .iter()
+                    .any(|source| crate::retry::is_network_path(source))
+            })
+            .unwrap_or(false);
     report_progress(context, 0, total_entries);
     for (position, entry) in plan.entries.iter().enumerate() {
         report_progress(context, position as u64, total_entries);
@@ -731,19 +756,21 @@ pub fn apply_archive_plan(
             });
             continue;
         }
-        let source_stat = match context.fs.stat(&entry.source) {
-            Ok(stat) => stat,
-            Err(error) => {
-                failed += 1;
-                reports.push(ApplyEntryReport {
-                    entry_id: entry.entry_id.clone(),
-                    status: ApplyStatus::Failed,
-                    error: Some(error),
-                    detail: None,
-                });
-                continue;
-            }
-        };
+        let source_stat =
+            match retry_archive_io(context, network, || context.fs.stat(&entry.source)) {
+                Ok(Ok(stat)) => stat,
+                Ok(Err(error)) => {
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                        detail: None,
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
         if entry
             .expected
             .as_ref()
@@ -832,7 +859,12 @@ pub fn apply_archive_plan(
                 });
                 continue;
             }
-            if context.fs.stat(&target).is_ok() {
+            let occupied = match retry_archive_io(context, network, || context.fs.stat(&target)) {
+                Ok(Ok(_)) => true,
+                Ok(Err(_)) => false,
+                Err(error) => return Err(error),
+            };
+            if occupied {
                 context.license.release(&plan.kind, 1);
                 reports.push(ApplyEntryReport {
                     entry_id: entry.entry_id.clone(),
@@ -870,9 +902,11 @@ pub fn apply_archive_plan(
                     continue;
                 }
             };
-            let bytes = match context.archive.compress(&sources, compression) {
-                Ok(bytes) => bytes,
-                Err(error) => {
+            let bytes = match retry_archive_io(context, network, || {
+                context.archive.compress(&sources, compression)
+            }) {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(error)) => {
                     context.license.release(&plan.kind, 1);
                     failed += 1;
                     reports.push(ApplyEntryReport {
@@ -883,17 +917,24 @@ pub fn apply_archive_plan(
                     });
                     continue;
                 }
+                Err(error) => return Err(error),
             };
-            if let Err(error) = context.fs.write_atomic(&target, &bytes) {
-                context.license.release(&plan.kind, 1);
-                failed += 1;
-                reports.push(ApplyEntryReport {
-                    entry_id: entry.entry_id.clone(),
-                    status: ApplyStatus::Failed,
-                    error: Some(error),
-                    detail: None,
-                });
-                continue;
+            match retry_archive_io(context, network, || {
+                context.fs.write_atomic(&target, &bytes)
+            }) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    context.license.release(&plan.kind, 1);
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                        detail: None,
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
             }
             let forward = FsOp::WriteAtomic {
                 path: target.clone(),
@@ -940,20 +981,22 @@ pub fn apply_archive_plan(
             });
             continue;
         }
-        let inspect = match context.archive.inspect(&entry.source) {
-            Ok(inspect) => inspect,
-            Err(error) => {
-                context.license.release(&plan.kind, 1);
-                failed += 1;
-                reports.push(ApplyEntryReport {
-                    entry_id: entry.entry_id.clone(),
-                    status: ApplyStatus::Failed,
-                    error: Some(error),
-                    detail: None,
-                });
-                continue;
-            }
-        };
+        let inspect =
+            match retry_archive_io(context, network, || context.archive.inspect(&entry.source)) {
+                Ok(Ok(inspect)) => inspect,
+                Ok(Err(error)) => {
+                    context.license.release(&plan.kind, 1);
+                    failed += 1;
+                    reports.push(ApplyEntryReport {
+                        entry_id: entry.entry_id.clone(),
+                        status: ApplyStatus::Failed,
+                        error: Some(error),
+                        detail: None,
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
         // 执行期只复核"压缩方法"这一条；加密条目不在这里拒绝——它在下面按"有没有
         // 密码"分流（有密码就解，没密码报 E3008）。ADR-0074：这条与 `select_entries`
         // 是同一处假设的两个副本，必须同时改。
@@ -1076,7 +1119,11 @@ pub fn apply_archive_plan(
             let Some(target) = join_target(&output_dir, &item.name, context.case_sense) else {
                 continue;
             };
-            let occupied = context.fs.stat(&target).is_ok();
+            let occupied = match retry_archive_io(context, network, || context.fs.stat(&target)) {
+                Ok(Ok(_)) => true,
+                Ok(Err(_)) => false,
+                Err(error) => return Err(error),
+            };
             if occupied {
                 continue;
             }
@@ -1087,12 +1134,23 @@ pub fn apply_archive_plan(
                 for part in relative_parent.split('/') {
                     current.push('/');
                     current.push_str(part);
-                    if context.fs.stat(&current).is_err() {
-                        if let Err(error) = context.fs.create_dir(&current) {
-                            first_error.get_or_insert(error);
-                            failures += 1;
-                            created_ok = false;
-                            break;
+                    let exists =
+                        match retry_archive_io(context, network, || context.fs.stat(&current)) {
+                            Ok(Ok(_)) => true,
+                            Ok(Err(_)) => false,
+                            Err(error) => return Err(error),
+                        };
+                    if !exists {
+                        match retry_archive_io(context, network, || context.fs.create_dir(&current))
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                first_error.get_or_insert(error);
+                                failures += 1;
+                                created_ok = false;
+                                break;
+                            }
+                            Err(error) => return Err(error),
                         }
                         let forward = FsOp::CreateDir {
                             path: current.clone(),
@@ -1113,10 +1171,14 @@ pub fn apply_archive_plan(
                 }
             }
             if item.kind == ArchiveEntryKind::Dir {
-                if let Err(error) = context.fs.create_dir(&target) {
-                    first_error.get_or_insert(error);
-                    failures += 1;
-                    continue;
+                match retry_archive_io(context, network, || context.fs.create_dir(&target)) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        first_error.get_or_insert(error);
+                        failures += 1;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
                 }
                 let forward = FsOp::CreateDir {
                     path: target.clone(),
@@ -1130,15 +1192,21 @@ pub fn apply_archive_plan(
                 }
                 continue;
             }
-            let write = context.fs.write_atomic_with(&target, &mut |writer| {
-                context
-                    .archive
-                    .extract_entry(&entry.source, item.index, password, writer)
+            let write = retry_archive_io(context, network, || {
+                context.fs.write_atomic_with(&target, &mut |writer| {
+                    context
+                        .archive
+                        .extract_entry(&entry.source, item.index, password, writer)
+                })
             });
-            if let Err(error) = write {
-                first_error.get_or_insert(error);
-                failures += 1;
-                continue;
+            match write {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    first_error.get_or_insert(error);
+                    failures += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
             }
             let forward = FsOp::WriteAtomic {
                 path: target.clone(),

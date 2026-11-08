@@ -76,6 +76,10 @@ impl ArchiveService for ZipArchiveService {
         };
         let encrypted = entry.encrypted();
         std::io::copy(&mut entry, writer).map_err(|error| {
+            let mapped = crate::fs::io_error(&error, Path::new(archive));
+            if mapped.code == "E2005" {
+                return mapped;
+            }
             // 加密条目的读取失败（ZipCrypto 的 CRC、AES 的认证码）与"密码错"不可区分，
             // 统一按 E3009 报（ADR-0074 §5.6）。
             if encrypted && secret.is_some() {
@@ -130,6 +134,10 @@ fn add_path<W: Write + std::io::Seek>(
     names: &mut BTreeSet<String>,
 ) -> Result<(), KernelError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
+        let mapped = crate::fs::io_error(&error, path);
+        if mapped.code == "E2005" {
+            return mapped;
+        }
         KernelError::new(
             "E1004",
             "source is not readable",
@@ -153,6 +161,10 @@ fn add_path<W: Write + std::io::Seek>(
             .map_err(zip_error)?;
         let mut children: Vec<_> = fs::read_dir(path)
             .map_err(|error| {
+                let mapped = crate::fs::io_error(&error, path);
+                if mapped.code == "E2005" {
+                    return mapped;
+                }
                 KernelError::new(
                     "E1004",
                     "source directory is not readable",
@@ -182,6 +194,10 @@ fn add_path<W: Write + std::io::Seek>(
     }
     writer.start_file(entry_name, options).map_err(zip_error)?;
     let mut file = fs::File::open(path).map_err(|error| {
+        let mapped = crate::fs::io_error(&error, path);
+        if mapped.code == "E2005" {
+            return mapped;
+        }
         KernelError::new(
             "E1004",
             "source is not readable",
@@ -190,6 +206,10 @@ fn add_path<W: Write + std::io::Seek>(
         )
     })?;
     std::io::copy(&mut file, writer).map_err(|error| {
+        let mapped = crate::fs::io_error(&error, path);
+        if mapped.code == "E2005" {
+            return mapped;
+        }
         KernelError::new(
             "E3005",
             "archive write failed",
@@ -332,6 +352,21 @@ fn zip_error(error: zip::result::ZipError) -> KernelError {
             Some(error.to_string()),
             false,
         ),
+        // D1：ZIP 中央目录/条目读取中遇到的网络断线要保持 E2005，才能让 C10 执行器
+        // 的重试端口接住；其余 I/O 仍按 E3003「换工具」处置。
+        ZipError::Io(io) => {
+            let mapped = crate::fs::io_error(io, Path::new("<archive>"));
+            if mapped.code == "E2005" {
+                mapped
+            } else {
+                KernelError::new(
+                    "E3003",
+                    "archive cannot be read",
+                    Some(error.to_string()),
+                    false,
+                )
+            }
+        }
         _ => KernelError::new(
             "E3003",
             "archive cannot be read",
@@ -342,6 +377,12 @@ fn zip_error(error: zip::result::ZipError) -> KernelError {
 }
 
 fn io_error(path: &str, error: &std::io::Error) -> KernelError {
+    // D1：网络断线的 I/O 错误必须保持 E2005（retryable），不能被归档层的
+    // E1004「不可读」吞掉，否则 C10 的 inspect/extract 重试永远等不到。
+    let mapped = crate::fs::io_error(error, Path::new(path));
+    if mapped.code == "E2005" {
+        return mapped;
+    }
     KernelError::new(
         "E1004",
         "archive is not readable",
@@ -441,5 +482,24 @@ mod tests {
             .unwrap();
         assert_eq!(output.len(), 41);
         assert!(!output.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn archive_network_io_error_keeps_e2005() {
+        let error = std::io::Error::from_raw_os_error(64);
+        let mapped = io_error(r"\\server\share\a.zip", &error);
+        assert_eq!(mapped.code, "E2005");
+        assert!(mapped.retryable);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn archive_zip_io_network_keeps_e2005() {
+        let mapped = zip_error(zip::result::ZipError::Io(
+            std::io::Error::from_raw_os_error(64),
+        ));
+        assert_eq!(mapped.code, "E2005");
+        assert!(mapped.retryable);
     }
 }

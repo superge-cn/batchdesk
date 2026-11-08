@@ -109,6 +109,7 @@ fn apply(
         password,
         progress: None,
         cancel: None,
+        network_retry: None,
     };
     apply_archive_plan(plan, &ApplyOptions::default(), &mut context)
 }

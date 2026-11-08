@@ -819,6 +819,7 @@ fn run_apply(args: &[String]) -> i32 {
             password: password.as_deref(),
             progress: None,
             cancel: None,
+            network_retry: Some(&network_retry),
         };
         run_generic_or_specific(
             apply_archive_plan(&plan, &ApplyOptions::default(), &mut context),

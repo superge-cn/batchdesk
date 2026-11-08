@@ -175,6 +175,7 @@ fn cancel_between_items_keeps_extracted_files_and_stays_undoable() {
         password: None,
         progress: None,
         cancel: Some(&cancel),
+        network_retry: None,
     };
 
     let outcome = apply_archive_plan(&plan, &ApplyOptions::default(), &mut context)
@@ -243,6 +244,7 @@ fn cancel_before_the_first_entry_touches_nothing() {
         password: None,
         progress: Some(&cancel),
         cancel: Some(&cancel),
+        network_retry: None,
     };
 
     let outcome =

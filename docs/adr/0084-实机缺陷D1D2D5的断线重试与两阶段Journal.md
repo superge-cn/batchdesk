@@ -60,7 +60,7 @@
 
 - **D1 只覆盖 UNC 路径**：盘符映射的网络盘无法从路径字符串识别；按 UNC 收口（与 R05 场景一致），映射盘留待后续需求。
 - **D1 不覆盖 `edit-content`/`transcode`**：这两个动作会先 `backup_to_quarantine`；重试会累积备份。若后续要覆盖，需先做备份去重/复用，不在本次范围。
-- **D1 不覆盖 C10 归档执行器与 undo**：`ArchiveApplyContext` 与 `UndoPorts` 未注入 `NetworkRetry`；C10 网络包与网络撤销仍按原路径失败，留待下一批。
+- **D1 覆盖范围**：已接通用执行器、c09 隔离移动与 **C10 归档执行器**（`ArchiveApplyContext.network_retry`：inspect/compress/write_atomic/write_atomic_with/stat/create_dir 均走重试；`platform::archive` 把 ZIP 读与源文件读的网络错误保持 E2005）。**未覆盖**：undo、盘符映射网络盘；`edit-content`/`transcode` 不在重试族。
 - **D1 暂停是「在途条目内」暂停**：与手动暂停（停止派发、在途条目完成）不同；断线时条目本来就阻塞在网络调用上，语义可接受。恢复后重试计数清零，若网络仍断会再次暂停。
 - **D2 的 59/121/1236 未在实机逐码验证**：只有 64 是 R05 实测；其余按 Windows 错误常量归族，错误码语义不变。
 - **D5 的 Pending 收敛依赖隔离路径存在性**：跨卷复制后删源失败可能同时存在源与隔离副本，此时收敛为 Applied（撤销会报冲突，但不会丢数据）；这是可接受的保守选择。
@@ -72,7 +72,8 @@
   - D1：`generic_apply::tests::network_disconnect_is_retried_three_times_then_pauses_and_resumes`（前 4 枪 E2005、第 5 枪成功；断言 copy 调用 5 次、退避 `[2,4,8]`、pause 1 次）；`apply::tests::c09_network_disconnect_is_retried_three_times_then_pauses`（隔离移动同序列）；`tasks::tests::auto_pause_sets_reason_and_resume_clears_it`（暂停状态、原因与恢复清理）。
   - D2：`platform::fs::tests::windows_network_disconnect_maps_to_e2005`（64/59/121/1236 → E2005、retryable）。
   - D5：`apply::tests::c09_crash_after_quarantine_move_leaves_a_journal_entry`（移动后 panic 仍留下 Journal 意图）；`platform::journal::tests::pending_quarantine_entry_recovers_applied_when_the_file_exists`、`pending_entry_is_dropped_when_the_move_never_happened`。
-  - 全量：`cargo test --workspace` 671 项、桌面壳 66＋6 项全绿；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、桌面壳 clippy 全绿。
+  - 全量：`cargo test --workspace` 674 项、桌面壳 66＋6 项全绿；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、桌面壳 clippy 全绿。
 - **R05 实机复跑**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1d5/r05/`）：3000 条 copy 至 SMB，t≈2.058s 停止 LanmanServer；stderr 依次出现 `2 秒/4 秒/8 秒后重试`，t≈16.188s 以 E2005（os error 64）中止；已复制 220 条、0 字节 0 条、SHA256 不符 0 条、Journal 220 条；未再出现「任务报 completed 但文件 0 字节」。
 - **E04 实机复跑**（2026-11-08，桌面壳预检路径，`E:/batchdesk-shijiri/fix-d1d5/e04/`）：F: 填至剩 1 MiB，f11 计划在预检阶段产生 `disk-space` 项：`Block`、`available 1048576 < required 0 + margin 209715200`、path `F:\batchdesk-e04-target`，整任务阻断；未产生 31 条副作用（临时测试代码已移除，日志留档）。
+- **C10 归档执行器实机复跑**（2026-11-08，CLI，`E:/batchdesk-shijiri/fix-d1d5/c10/`）：3000 条 ZIP 放在 SMB 共享、解压到本地；t≈1.087s 停 LanmanServer（已解 23 条），stderr 依次 `2/4/8 秒后重试`，t≈15.152s 以 **E2005（os error 64）** 中止；已解 23 条、0 字节 0 条、Journal 23 条。证明 C10 的 inspect/extract 网络错误已进入 D1 重试族。
 - **CI**：run 42449989630（2026-11-08，head `2a145bf`＝本批）七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。

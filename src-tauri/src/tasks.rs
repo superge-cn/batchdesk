@@ -1245,6 +1245,7 @@ fn run_apply(
             password: secret.as_deref(),
             progress: Some(&sink),
             cancel: Some(control.as_ref()),
+            network_retry: Some(&network_retry),
         };
         return match kernel::archive::apply_archive_plan(&plan.plan, &options, &mut context) {
             Ok(outcome) => JobResult {
