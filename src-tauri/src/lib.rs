@@ -1324,13 +1324,9 @@ fn undoDryRun(state: State<'_, AppState>, plan_id: String) -> Result<Value, IpcE
         FileJournal::open(state.paths.journal_path.clone()).map_err(IpcError::from)?;
     let adapter = CliFsAdapter::new(None);
     let retry = PreviewNetworkRetry;
-    let preview = kernel::apply::undo_dry_run_with_retry(
-        &plan_id,
-        &mut journal,
-        &adapter,
-        Some(&retry),
-    )
-    .map_err(IpcError::from)?;
+    let preview =
+        kernel::apply::undo_dry_run_with_retry(&plan_id, &mut journal, &adapter, Some(&retry))
+            .map_err(IpcError::from)?;
     serde_json::to_value(preview).map_err(|error| IpcError::new("E9001", error.to_string()))
 }
 

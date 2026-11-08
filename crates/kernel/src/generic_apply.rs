@@ -288,15 +288,16 @@ pub fn apply_generic_plan(
             _ => {}
         }
     }
-    if plan
-        .entries
-        .iter()
-        .any(|entry| entry.action == PlanAction::EditContent)
-        && context.content_editor.is_none()
+    if plan.entries.iter().any(|entry| {
+        matches!(
+            entry.action,
+            PlanAction::EditContent | PlanAction::Transcode
+        )
+    }) && context.content_editor.is_none()
         && context.content_rewriter.is_none()
     {
         return Err(KernelError::invalid_params(
-            "edit-content entries require a content editor or rewriter on the apply context",
+            "edit-content/transcode entries require a content editor or rewriter on the apply context",
         ));
     }
     let overwrite_requested = options.on_conflict == OnConflict::Overwrite
@@ -4643,6 +4644,32 @@ mod tests {
         .unwrap();
         assert_eq!(undo.reverted, 1);
         assert_eq!(fs.read_file("/data/a.txt"), b"abc");
+    }
+
+    /// `transcode` 同样要求上下文注入编辑器/重写器；缺失时在执行前拒绝（E1002），
+    /// 不能落到执行臂里的 `expect`。
+    #[test]
+    fn transcode_without_a_content_editor_is_rejected_before_touching_files() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let error = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                None,
+                PlanAction::Transcode,
+            )]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &mut journal, &license),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E1002");
+        assert_eq!(
+            fs.read_file("/data/a.txt"),
+            b"content",
+            "拒绝必须发生在落盘前"
+        );
     }
 
     /// 只读不重试：设计 06 里 `E2002.retryable=false`——再试一次也不会变可写。
