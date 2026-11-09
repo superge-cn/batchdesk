@@ -110,8 +110,19 @@ def collect_rust(reuse: str | None) -> dict[str, str]:
     return inventory
 
 
+def ledger_tmp(name: str) -> Path:
+    """台账中间文件落在仓库 target/ 下。
+
+    原实现写 `/tmp`：Windows 上会解析成当前盘符根目录（如 `E:\\tmp`），
+    在受限环境里既不可写、也可能被安全策略拦下；target/ 与构建产物同卷且可丢弃。
+    """
+    directory = ROOT / "target" / "case-ledger"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / name
+
+
 def collect_vitest(offline: bool) -> list[dict]:
-    out = Path("/tmp/case-ledger-vitest.json")
+    out = ledger_tmp("vitest.json")
     if out.exists():
         out.unlink()
     if offline:
@@ -131,7 +142,7 @@ def collect_vitest(offline: bool) -> list[dict]:
 
 
 def collect_playwright(offline: bool) -> list[dict]:
-    out = Path("/tmp/case-ledger-playwright.json")
+    out = ledger_tmp("playwright.json")
     if out.exists():
         out.unlink()
     if offline:
@@ -614,7 +625,7 @@ def main() -> None:
     json.dump(
         {"started": started, "head": head, "rust": len(rust), "vitest": len(vitest),
          "playwright": len(playwright), "verdicts": stats},
-        open("/tmp/case-ledger-meta.json", "w"),
+        open(ledger_tmp("meta.json"), "w", encoding="utf-8"),
         ensure_ascii=False,
     )
 

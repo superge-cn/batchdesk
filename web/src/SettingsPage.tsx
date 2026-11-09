@@ -127,7 +127,12 @@ const SCOPES: ScopeDef[] = [
     labelKey: "settings.scope.performance",
     hintKey: "settings.scope.performance.hint",
     fields: [
-      { key: "concurrency", labelKey: "settings.field.concurrency", kind: "auto" },
+      {
+        key: "concurrency",
+        labelKey: "settings.field.concurrency",
+        kind: "auto",
+        hintKey: "settings.hint.concurrency"
+      },
       { key: "memoryBudget", labelKey: "settings.field.memoryBudget", kind: "auto" },
       { key: "largeFileThreshold", labelKey: "settings.field.largeFileThreshold", kind: "auto" }
     ]
@@ -209,11 +214,17 @@ function asText(value: unknown): string {
  */
 export function SettingsPage({
   onBack,
-  onResetUiState
+  onResetUiState,
+  onExecutionSettingsChanged
 }: {
   onBack: () => void;
   /** 重置本机界面状态（设计 03 §11.3）。不传时该区块的按钮保持 disabled。 */
   onResetUiState?: () => Promise<void>;
+  /**
+   * 执行期设置（`performance.concurrency`）变化：方案 §7.10 要求运行中调整
+   * 只影响尚未派发的条目，界面提示「新设置将在下一批生效」；调用方据此让旧预览失效。
+   */
+  onExecutionSettingsChanged?: () => void;
 }) {
   const { t, lang, theme, setLang, setTheme } = useI18n();
   const [views, setViews] = useState<Partial<Record<ConfigScope, ScopeView>>>({});
@@ -253,6 +264,11 @@ export function SettingsPage({
     try {
       const view = await setConfig(scope, { [key]: value });
       applyResult(view);
+      // 方案 §7.10：并发是执行期设置，改了就不该沿用旧预览，且新值只影响下一批。
+      if (scope === "performance" && key === "concurrency") {
+        setNotice(t("settings.concurrency.nextBatch"));
+        onExecutionSettingsChanged?.();
+      }
     } catch (value) {
       const failure = toIpcError(value);
       setReadOnly(failure.code === "E1007");
@@ -273,6 +289,11 @@ export function SettingsPage({
       if (scope === "general") {
         setLang(DEFAULT_LANG);
         setTheme("light");
+      }
+      // 恢复本组默认同样会把并发从手动档改回自动档：旧预览一并失效。
+      if (scope === "performance") {
+        setNotice(t("settings.concurrency.nextBatch"));
+        onExecutionSettingsChanged?.();
       }
     } catch (value) {
       const failure = toIpcError(value);

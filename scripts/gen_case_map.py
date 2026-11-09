@@ -38,7 +38,8 @@ MANUAL_CARRIER = "真人工（Windows 实机/受控环境）"
 
 # ── 人工裁决（2026-11-09，依据 docs/testing/人工裁决改判清单-2026-11-09.md）──
 # 32 条 ⛔ 中 31 条已实机执行并逐条对账：本表集中写入裁决后的状态/载体/缺口，
-# 由 row() 在生成时覆盖逐槽默认值；C15-PRE-04（功能未实现）维持 ⛔，不在此表。
+# 由 row() 在生成时覆盖逐槽默认值；C15-PRE-04（功能未实现）于 2026-11-09 实现后
+# 直接在 C15 的 pre_slots 里改判，不在此表。
 # ✅ 行不挂缺口（门禁规则），证据回链写在载体列；◐ 行缺口保留未做的判定点。
 W1_GAP = ("①②实机通过（2026-11-07 B2，PowerShell FileShare.None 持句柄，"
           "E:/batchdesk-shijiri/B2-records.md：undo1 对被锁条目报 E2008 os error 32、"
@@ -93,7 +94,7 @@ ANCHOR_OVERRIDES = {
     "TC-F10-EXE-02": "platform::listing::tests::inspect_counts_files_dirs_and_depth"
                      "＋kernel::listing::tests::placeholder_and_skipped_entries_warn",
     "TC-F11-EXE-02": "kernel `preflight` 10 项（磁盘余量判定；D4 修复后按卷分组）",
-    "TC-F11-RBK-03": "platform `fs` 24 项（复制原子化/撤销改名/占用与只读）",
+    "TC-F11-RBK-03": "platform `fs` 25 项（复制原子化/撤销改名/占用与只读/崩溃临时文件清理与 PID 存活判定）",
     "TC-C07-EXE-04": "kernel `generic_apply` 59 项（含冲突二次裁决）",
     "TC-C07-EXE-05": "platform::fs::tests::short_or_failed_copy_never_reaches_the_target_path"
                      "＋platform::fs::tests::failed_copy_preserves_an_existing_target",
@@ -874,7 +875,7 @@ add("C10",
 
 add("C15",
     name="任务队列与进度", stage="阶段 0", prio="P0★", src="方案 §5.12、§7.5–7.7",
-    plan_tests="kernel `generic_apply` 55 项（含并发 6 项：限额 20 万条目 E3007/并发越界 E1002）",
+    plan_tests="kernel `generic_apply` 59 项（含并发 6 项：限额 20 万条目 E3007/并发越界 E1002）",
     exe1="壳层 generic_plan_kinds_execute_through_the_desktop_queue",
     rbk1="壳层 apply_and_undo_run_through_the_queue_with_events",
     pre=["多任务入队预览", "并发上限 1–16 与 20 万条目边界", "暂停/取消对预览的影响与队列重排标注", "改并发后旧预览失效"],
@@ -890,10 +891,15 @@ add("C15",
         # 只有排队态取消/暂停用例，没有"两条任务同时在队列"的预览排序断言。
         1: ("◐", SHELL, "tasks::tests::task_state_events_cover_pause_resume_and_queued_cancel",
             "多任务入队预览未单独测：现有壳层用例覆盖排队态取消与暂停/恢复，未断两条任务同时在队列时的预览与排序"),
-        # 2026-11-02 人类裁决：运行中调参 UI 未实现，该实例改判 ⛔（功能未实现），
-        # 不再挂"有锚点但断言不全"的 ◐——锚点列写「无」，解除条件是先做功能。
-        4: ("⛔", MANUAL_CARRIER, "无（运行中调参 UI 未实现）",
-            "待实现：运行中调参与面板重算 UI 未做（功能未实现，非测试缺口）"),
+        # 2026-11-02 人类裁决曾把该实例改判 ⛔（运行中调参 UI 未实现）；2026-11-09
+        # 实现后解除：设置页改并发即提示「新设置将在下一批生效」并让旧预览失效，
+        # 壳层在任务派发时读取 performance.concurrency（手动档夹取 1–16）。
+        4: ("✅", "CI（cargo test --manifest-path src-tauri/Cargo.toml ＋ pnpm test（Vitest））",
+            "tasks::tests::manual_concurrency_from_settings_is_read_once_at_dispatch＋"
+            "tasks::tests::entry_concurrency_follows_the_manual_setting_and_stays_in_contract_range＋"
+            "SettingsPage.test.tsx「改并发：当场提示下一批生效」＋"
+            "App.executionSettings.test.tsx「设置页改并发后提示下一批生效，旧预览失效且执行入口关闭」",
+            ""),
     },
     exe_slots={
         1: ("✅", SHELL, "generic_plan_kinds_execute_through_the_desktop_queue", ""),

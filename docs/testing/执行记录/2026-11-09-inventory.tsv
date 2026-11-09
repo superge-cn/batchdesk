@@ -611,6 +611,7 @@ platform::fs::tests::content_hash_matches_blake3_and_rejects_unknown_algorithm	o
 platform::fs::tests::copy_range_atomic_writes_only_the_requested_slice	ok
 platform::fs::tests::copy_ranges_atomic_writes_the_prefix_once_before_all_ranges	ok
 platform::fs::tests::copy_replaces_existing_target_and_cleans_the_temp_file	ok
+platform::fs::tests::exited_child_process_is_not_alive_even_while_a_handle_remains_open	ok
 platform::fs::tests::extended_path_normalizes_before_prefixing_and_keeps_relative_paths	ok
 platform::fs::tests::extended_path_prefixes_drive_and_unc_paths	ok
 platform::fs::tests::failed_copy_preserves_an_existing_target	ok
@@ -721,10 +722,12 @@ shell::tasks::tests::c03_replace_plan_executes_through_the_desktop_queue_and_und
 shell::tasks::tests::corrupt_snapshot_is_backed_up_and_the_queue_starts_empty	ok
 shell::tasks::tests::csv_dedup_plan_executes_through_the_desktop_queue_and_undoes	ok
 shell::tasks::tests::disk_requirements_sum_within_a_volume	ok
+shell::tasks::tests::entry_concurrency_follows_the_manual_setting_and_stays_in_contract_range	ok
 shell::tasks::tests::generic_plan_kinds_execute_through_the_desktop_queue	ok
 shell::tasks::tests::legacy_snapshots_recover_job_from_the_stored_job	ok
 shell::tasks::tests::legacy_task_snapshots_without_plan_id_still_deserialize	ok
 shell::tasks::tests::listing_plan_streams_csv_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::manual_concurrency_from_settings_is_read_once_at_dispatch	ok
 shell::tasks::tests::preflight_gate_blocks_dispatch_with_e2004_when_disk_margin_is_exceeded	ok
 shell::tasks::tests::preflight_gate_checks_disk_for_non_c09_write_plans	ok
 shell::tasks::tests::preflight_gate_is_recomputed_every_call_so_a_changed_environment_flips_the_verdict	ok
@@ -765,6 +768,7 @@ vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） �
 vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：取消但一条都没完成时不得打扰用户	ok
 vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：撤销任务被取消时不得问「是否撤销」（只对 apply 成立）	ok
 vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：正常完成的任务不得弹撤销询问	ok
+vitest::App.executionSettings.test.tsx::运行中调参与面板重算（C15-PRE-04） 设置页改并发后提示下一批生效，旧预览失效且执行入口关闭	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 侧栏每一项都渲染出对应功能页的参数区与执行区	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 默认视图是 C09 工作台，且能回到它	ok
 vitest::App.navigation.test.tsx::功能视图导航可达 「任务与撤销」是能点开的真实视图，不是 disabled 占位	ok
@@ -830,6 +834,9 @@ vitest::SettingsPage.test.tsx::设置页 改动字段即写 ConfigDocument 的�
 vitest::SettingsPage.test.tsx::设置页 语言切换即时生效并写 general.language	ok
 vitest::SettingsPage.test.tsx::设置页 「恢复本组默认」调 resetScope，不逐项写空值	ok
 vitest::SettingsPage.test.tsx::设置页 只读档（E1007）给出可读提示，而不是静默失败	ok
+vitest::SettingsPage.test.tsx::执行期设置（方案 §7.10 的「新设置将在下一批生效」） 改并发：当场提示下一批生效，并通知调用方让旧预览失效	ok
+vitest::SettingsPage.test.tsx::执行期设置（方案 §7.10 的「新设置将在下一批生效」） 改其它字段不触发执行期设置失效	ok
+vitest::SettingsPage.test.tsx::执行期设置（方案 §7.10 的「新设置将在下一批生效」） 「恢复本组默认」把并发改回自动档时同样让旧预览失效	ok
 vitest::SettingsPage.test.tsx::本机界面状态（设计 03 §11.3） 重置界面状态调用回调并给出提示，且不碰任何 ConfigDocument 命令	ok
 vitest::SettingsPage.test.tsx::本机界面状态（设计 03 §11.3） 不传回调时按钮保持禁用（独立渲染不假装能重置）	ok
 vitest::TaskHistory.test.tsx::任务与撤销视图 列出任务并把状态、进度如实呈现（不是只显示 id）	ok

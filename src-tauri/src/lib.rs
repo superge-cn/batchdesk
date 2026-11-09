@@ -1365,6 +1365,7 @@ pub fn run() {
             // LicenseService 装配点（方案 13.8：接口不变、只换实现）：
             // 单机版注入 AlwaysAllow；商业版/QuotaBased 只替换此处实现。
             let config_dir = paths.config_dir.clone();
+            let concurrency_config_dir = config_dir.clone();
             let tasks = TaskQueue::with_license(
                 TaskPaths {
                     quarantine_dir: paths.quarantine_dir.clone(),
@@ -1386,6 +1387,15 @@ pub fn run() {
                         .and_then(|load| load.document.scopes.logging)
                         .and_then(|logging| logging.log_full_paths)
                         .unwrap_or(false)
+                }),
+                // C15-PRE-04：任务派发时读 `performance.concurrency`（设计 03 §6.7），
+                // 运行中调整只影响尚未派发的条目（方案 §7.10）。
+                Arc::new(move || {
+                    ConfigStore::new(concurrency_config_dir.clone())
+                        .load_config()
+                        .ok()
+                        .and_then(|load| load.document.scopes.performance)
+                        .and_then(|performance| performance.concurrency)
                 }),
             );
             app.manage(AppState::new(paths, tasks));

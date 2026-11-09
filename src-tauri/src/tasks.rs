@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 
 use kernel::apply::{
     apply_plan, undo_plan_with_ports, ApplyContext, ApplyEntryReport, ApplyOptions, ApplyReport,
-    ApplyState, ApplyStatus, UndoPorts,
+    ApplyState, ApplyStatus, UndoPorts, MAX_ENTRY_CONCURRENCY,
 };
+use kernel::config::AutoOrNumber;
 use kernel::encoding::TranscodeRewriter;
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
@@ -292,6 +293,9 @@ struct Inner {
     oplog: Mutex<Option<SqliteOperationLog>>,
     /// `logging.logFullPaths`（03 §4.1）读取口；默认 false，写入前实时取值。
     log_full_paths: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// `performance.concurrency`（设计 03 §6.7）读取口：**任务派发时**取值，
+    /// 运行中调整只影响尚未派发的条目（方案 §7.10）。
+    performance_concurrency: Arc<dyn Fn() -> Option<AutoOrNumber> + Send + Sync>,
 }
 
 struct Job {
@@ -333,12 +337,15 @@ struct JobResult {
 impl TaskQueue {
     /// 唯一构造器即注入口（方案 13.8：接口不变、只换实现）：
     /// - `license`：单机版注入 AlwaysAllow，商业版/QuotaBased 只换注入实现；
-    /// - `log_full_paths`：`logging.logFullPaths` 读取口（03 §4.1，默认 false）。
+    /// - `log_full_paths`：`logging.logFullPaths` 读取口（03 §4.1，默认 false）；
+    /// - `performance_concurrency`：`performance.concurrency` 读取口（设计 03 §6.7），
+    ///   派发时取值（方案 §7.10 的「新设置将在下一批生效」）。
     pub fn with_license(
         paths: TaskPaths,
         emit: EventEmitter,
         license: Arc<dyn LicenseService>,
         log_full_paths: Arc<dyn Fn() -> bool + Send + Sync>,
+        performance_concurrency: Arc<dyn Fn() -> Option<AutoOrNumber> + Send + Sync>,
     ) -> Self {
         let _ = std::fs::create_dir_all(&paths.quarantine_dir);
         // 崩溃残留：隔离目录里上一进程留下的 `.batchdesk-copy-*` 中间态文件
@@ -408,6 +415,7 @@ impl TaskQueue {
             license,
             oplog: Mutex::new(oplog),
             log_full_paths,
+            performance_concurrency,
         });
         let (sender, receiver) = mpsc::channel::<Job>();
         let worker = Arc::clone(&inner);
@@ -1217,6 +1225,19 @@ fn edit_content_rewriter(
     Ok(None)
 }
 
+/// 执行期条目并发的解析（方案 §5.12：用户可调 1–16；§7.10：运行中调整只影响尚未派发的条目）。
+///
+/// `configured` 是设置页的 `performance.concurrency`，**派发时**读取；`requested` 是调用方
+/// 随计划请求带来的 `entryConcurrency`（设计 01 §4）。手动档以设置为准并夹取到 1–16
+/// （配置文件可被手工改写，执行层仍按 `validate_apply_limits` 复核）；自动档/未设置沿用
+/// 请求值——介质自适应的自动档仍未落地，缺省 1＝串行（ADR-0033 §4 的已知缺口）。
+pub fn resolve_entry_concurrency(configured: Option<AutoOrNumber>, requested: usize) -> usize {
+    match configured {
+        Some(AutoOrNumber::Number(value)) => value.clamp(1, MAX_ENTRY_CONCURRENCY as u64) as usize,
+        _ => requested,
+    }
+}
+
 fn run_apply(
     inner: &Arc<Inner>,
     task_id: &str,
@@ -1226,6 +1247,15 @@ fn run_apply(
     secret: Option<String>,
 ) -> JobResult {
     let plan_id = plan.plan.plan_id.clone();
+    // 方案 §7.10：并发设置在任务**派发时**读取一次——运行中的任务不改写在途批次，
+    // 界面提示「新设置将在下一批生效」（设置页）。
+    let options = ApplyOptions {
+        entry_concurrency: resolve_entry_concurrency(
+            (inner.performance_concurrency)(),
+            options.entry_concurrency,
+        ),
+        ..options
+    };
     let mut journal = match FileJournal::open(inner.paths.journal_path.clone()) {
         Ok(journal) => journal,
         Err(error) => return failed_result(plan_id, task_id, error),
@@ -1969,11 +1999,20 @@ mod tests {
     }
 
     fn test_queue(paths: TaskPaths, emit: EventEmitter) -> TaskQueue {
+        test_queue_with_concurrency(paths, emit, Arc::new(|| None))
+    }
+
+    fn test_queue_with_concurrency(
+        paths: TaskPaths,
+        emit: EventEmitter,
+        performance_concurrency: Arc<dyn Fn() -> Option<AutoOrNumber> + Send + Sync>,
+    ) -> TaskQueue {
         TaskQueue::with_license(
             paths,
             emit,
             Arc::new(kernel::license::AlwaysAllowLicense),
             Arc::new(|| false),
+            performance_concurrency,
         )
     }
 
@@ -3266,6 +3305,107 @@ mod tests {
         let undone = wait_terminal(&queue, &undo_id);
         assert_eq!(undone.summary.state, TaskState::Completed);
         assert!(root.join("a.txt").exists());
+    }
+
+    #[test]
+    fn entry_concurrency_follows_the_manual_setting_and_stays_in_contract_range() {
+        // 方案 §5.12（手动档 1–16）＋§7.10（运行中调整只影响尚未派发的条目）。
+        assert_eq!(resolve_entry_concurrency(None, 1), 1, "未设置＝串行");
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Auto), 3),
+            3,
+            "自动档沿用调用方请求值（介质自适应仍未落地，见 ADR-0033 §4）"
+        );
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(4)), 1),
+            4
+        );
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(0)), 1),
+            1,
+            "越界下沿夹到 1"
+        );
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(99)), 1),
+            16,
+            "越界上沿夹到契约上限 16"
+        );
+    }
+
+    #[test]
+    fn manual_concurrency_from_settings_is_read_once_at_dispatch() {
+        // 派发时读取：设置读一次，越界值夹取后任务照常完成。
+        // 若把 99 原样透传，kernel 的 validate_apply_limits 会以 E1002 拒单——这条即红。
+        let dir = TempDir::new();
+        let root = dir.0.join("src");
+        let dst = dir.0.join("dst");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        fs::write(root.join("b.txt"), b"b").unwrap();
+        let entries = ["a.txt", "b.txt"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| PlanEntry {
+                entry_id: format!("e{}", index + 1),
+                source: root.join(name).to_string_lossy().into_owned(),
+                target: Some(dst.join(name).to_string_lossy().into_owned()),
+                action: kernel::plan::PlanAction::Copy,
+                relation: None,
+                reason: "c15 concurrency".to_string(),
+                conflict: None,
+                resolution: None,
+                blocked: None,
+                expected: None,
+                range: None,
+                merge: None,
+                csv: None,
+                csv_merge: None,
+                csv_extract: None,
+                csv_rows: None,
+                csv_dedup: None,
+                csv_filter: None,
+                csv_columns: None,
+                csv_sort: None,
+            })
+            .collect();
+        let plan = kernel::plan::PlanDocument {
+            plan_id: new_ulid("c15-concurrency"),
+            kind: "c07".to_string(),
+            params: BTreeMap::new(),
+            entries,
+            stats: kernel::plan::PlanStats::default(),
+            warnings: Vec::new(),
+        };
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&reads);
+        let queue = test_queue_with_concurrency(
+            paths_for(&dir),
+            Arc::new(|_, _| {}),
+            Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some(AutoOrNumber::Number(99))
+            }),
+        );
+        let task_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+            None,
+        );
+        let done = wait_terminal(&queue, &task_id);
+        assert_eq!(done.summary.state, TaskState::Completed);
+        assert_eq!(done.entries.len(), 2);
+        assert!(dst.join("a.txt").exists() && dst.join("b.txt").exists());
+        assert_eq!(
+            reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "设置只在任务派发时读取一次"
+        );
     }
 
     #[test]

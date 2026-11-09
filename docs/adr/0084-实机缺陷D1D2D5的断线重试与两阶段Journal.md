@@ -141,3 +141,15 @@ run 42498459881（2026-11-08，head `fb53020`＝本批）：七 job 全 success�
 不做：用户目标目录（非隔离目录）的 `.batchdesk-copy-*` 清理（目录可能不属于工具，属 §7 有意边界）。
 
 计划登记提交 CI：run 42576979117（2026-11-09，head `357b1e8`）七 job 全 success、95 步零 skipped 零失败。
+
+### 实机走查结果（2026-11-09 执行）
+
+**步骤 1–2（残留制造与取证）**：数据集 150 组 8 MB 重复对（300 文件／2,516,582,400 字节），源在 `E:\batchdesk-shijiri\s03-cleanup\data`，隔离目录在 `%APPDATA%\com.batchdesk.desktop\quarantine`（跨卷）。计划 299 条，执行到第 103 条时 `taskkill /F /T` 强杀（应用 PID 30464）：留下 `.batchdesk-copy-30464-103`（8,388,608 字节）、`tasks.json` 记 `running 0/299`；`Get-Process -Id 30464` 为空，PID 已退出。
+
+**发现 D8（启动清理对"已退出但进程对象仍在"的 PID 误判存活）**：第一次重启（构建 16:55）后残留文件**未删**。用 P/Invoke 复核：对已退出的 30464，`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 仍成功返回句柄，`GetExitCodeProcess` 退出码＝1（非 `STILL_ACTIVE=259`）——进程对象因仍有句柄而可打开。原 `pid_is_alive` 只看 `OpenProcess` 是否成功，于是把崩溃残留当成"另一实例在途"永久保留。**先红**：`platform::fs::tests::exited_child_process_is_not_alive_even_while_a_handle_remains_open`（子进程 wait 后保留 `Child` 句柄，断言 `!pid_is_alive`）失败，`EXIT=101`。**修复**：`pid_is_alive` 再读 `GetExitCodeProcess`，仅 `STILL_ACTIVE` 算存活（`crates/platform/src/fs.rs`）。**后绿**：同一测试通过，`EXIT=0`。
+
+**步骤 3–5（正向清理与反向保护，构建 17:02 重启）**：重启后 `.batchdesk-copy-30464-103` 已删除；启动前另造的存活 PID 探针 `.batchdesk-copy-28184-1`（`ping -t` 的 PID 28184）与普通文件 `probe-normal.txt` 均保留；应用正常启动，任务队列可用。
+
+**放弃路补验**：重启后界面出现「检测到未完成任务 01M6ZRF4T0QWBVEKG3M0PHR4HR」横幅，点「放弃」→ 提示「已放弃恢复；已执行条目仍可通过 Journal 撤销。」、横幅消失、`tasks.json` 终态剪枝为空（`{"tasks":[]}`）；Journal 中该计划 51 条 `applied`、0 条 `reverted`／`discarded`（原始 103 行＝51 applied＋52 pending，其中 51 条 pending 各有一条 applied 配对，剩 1 条孤儿 pending 的临时文件已被启动清理删除）；隔离目录保留 51 个最终文件。**已知边界（非本单缺陷）**：终态任务从快照剪枝后，重启界面的「任务与撤销」不再列出该任务，撤销只能按 planId 走 Journal——与 2026-11-08 记录的"重启后终态任务不在列表"一致。
+
+**证据**：`E:/batchdesk-shijiri/s03-cleanup/`（`ls-before.txt`、`ls-after.txt`、`before-count.txt`、`tasks-interrupted.json`、`tasks-after-discard.json`、`residue-copy.tmp`、`live-pid.txt`、`ui-after-discard.png`）。监控脚本的输出文件因沙箱限制未能落盘，残留文件名改由重启前的目录清单固定。

@@ -1188,18 +1188,23 @@ pub fn cleanup_abandoned_copy_temps(dir: &Path) -> usize {
 
 #[cfg(windows)]
 fn pid_is_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    // SAFETY: 只查询进程是否存在；成功取得的句柄立即关闭。
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: 只查询进程状态；成功取得的句柄在任何分支都立即关闭。
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
         return false;
     }
-    // SAFETY: `handle` 由 OpenProcess 返回且尚未关闭。
+    // 已退出但句柄仍被他人持有的进程对象照样能 OpenProcess（ADR-0084 §7 实机查实），
+    // 故必须再读退出码：只有 STILL_ACTIVE 才算存活。
+    let mut code = 0u32;
     unsafe {
+        let ok = GetExitCodeProcess(handle, &mut code);
         CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE as u32
     }
-    true
 }
 
 #[cfg(unix)]
@@ -1697,6 +1702,24 @@ mod tests {
     fn cleanup_of_missing_directory_is_a_noop() {
         let dir = TempDir::new();
         assert_eq!(cleanup_abandoned_copy_temps(&dir.0.join("missing")), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_child_process_is_not_alive_even_while_a_handle_remains_open() {
+        // 实机 2026-11-09（ADR-0084 §7 走查）：强杀后的 PID 已退出，但进程对象仍可被
+        // OpenProcess 打开（调用方还持有句柄时会一直如此），只看 OpenProcess 是否成功
+        // 会把崩溃残留误判为"另一实例在途"而永不清理。必须再读退出码排除 STILL_ACTIVE。
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        let mut child = std::process::Command::new(shell)
+            .args(["/C", "exit 0"])
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id();
+        assert!(child.wait().expect("wait child").success());
+        // 刻意保留 `child`（持有进程句柄）：这正是实机上 OpenProcess 仍成功的条件。
+        assert!(!pid_is_alive(pid), "已退出进程不得判为存活");
+        drop(child);
     }
 
     #[cfg(windows)]

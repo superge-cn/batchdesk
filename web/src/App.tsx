@@ -288,6 +288,12 @@ function AppShell() {
   const [plan, setPlan] = useState<PlanDocument | null>(null);
   /** 上次成功预览所依据的参数快照；任一参数变化即判定旧计划失效（T 配方 P4）。 */
   const [plannedSnapshot, setPlannedSnapshot] = useState<string | null>(null);
+  /**
+   * 执行期设置（`performance.concurrency`）版本号：设置页每改一次并发就递增。
+   * 方案 §7.10 的「新设置将在下一批生效」——已生成的预览不再代表下一批的执行参数，
+   * 与表单参数改动同等对待（旧预览失效，须重新生成）。
+   */
+  const [executionSettingsEpoch, setExecutionSettingsEpoch] = useState(0);
   /** 保护目录命中的危险二次确认（方案 §3.3＋§7.11）；仅在有待执行条目时出现。 */
   const [dangerOpen, setDangerOpen] = useState(false);
   /**
@@ -535,7 +541,9 @@ function AppShell() {
     root: root.trim(),
     keep,
     quickWindowBytes: quickWindow.trim(),
-    protectedDirs
+    protectedDirs,
+    // 执行期设置也参与签名：改了并发后旧预览与下一批的执行参数不再一致（方案 §7.10）。
+    executionSettingsEpoch
   });
   // 预检是异步的：等待期间用户可能又改了参数，落地后须按当前签名复核（方案 §7.3）。
   const latestSignatureRef = useRef(planSignature);
@@ -612,6 +620,11 @@ function AppShell() {
     setSidebarWidth(null);
     uiTables.forget();
   }, [uiTables]);
+
+  /** 设置页改了执行期并发：已生成的预览失效，新值从下一批起生效（方案 §7.10）。 */
+  const onExecutionSettingsChanged = useCallback(() => {
+    setExecutionSettingsEpoch((value) => value + 1);
+  }, []);
 
   async function onPlan() {
     if (!root.trim()) {
@@ -1510,7 +1523,11 @@ function AppShell() {
             ) : activeView === "templates" ? (
               <TemplatesPage onBack={() => selectView("c09")} />
             ) : activeView === "settings" ? (
-              <SettingsPage onBack={() => selectView("c09")} onResetUiState={resetUiStateMemory} />
+              <SettingsPage
+                onBack={() => selectView("c09")}
+                onResetUiState={resetUiStateMemory}
+                onExecutionSettingsChanged={onExecutionSettingsChanged}
+              />
             ) : (
               <FeaturePages view={activeView} onBack={() => selectView("c09")} />
             )}

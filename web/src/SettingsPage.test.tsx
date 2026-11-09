@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -75,10 +75,19 @@ function views(): Record<string, ScopeView> {
 
 let store: Record<string, ScopeView> = views();
 
-function renderPage(options: { onResetUiState?: () => Promise<void> } = {}) {
+function renderPage(
+  options: {
+    onResetUiState?: () => Promise<void>;
+    onExecutionSettingsChanged?: () => void;
+  } = {}
+) {
   return render(
     <I18nProvider initialLang="zh-CN" initialTheme="light">
-      <SettingsPage onBack={() => undefined} onResetUiState={options.onResetUiState} />
+      <SettingsPage
+        onBack={() => undefined}
+        onResetUiState={options.onResetUiState}
+        onExecutionSettingsChanged={options.onExecutionSettingsChanged}
+      />
     </I18nProvider>
   );
 }
@@ -156,6 +165,49 @@ describe("设置页", () => {
     expect(
       await screen.findByText(/配置文件由更高版本写入，当前为只读/)
     ).toBeVisible();
+  });
+});
+
+describe("执行期设置（方案 §7.10 的「新设置将在下一批生效」）", () => {
+  it("改并发：当场提示下一批生效，并通知调用方让旧预览失效", async () => {
+    const onExecutionSettingsChanged = vi.fn();
+    renderPage({ onExecutionSettingsChanged });
+    const input = await screen.findByLabelText("并发数");
+    // 受控输入：一次 change 完成整值替换（auto → 4），不逐键触发中间值保存。
+    fireEvent.change(input, { target: { value: "4" } });
+    await waitFor(() =>
+      expect(setConfig).toHaveBeenCalledWith("performance", { concurrency: 4 })
+    );
+    expect(await screen.findByText(/新设置将在下一批生效/)).toBeVisible();
+    expect(onExecutionSettingsChanged).toHaveBeenCalledTimes(1);
+    // 字段提示必须写清手动档范围与「尚未派发的条目」口径，而不是只靠保存后的横幅。
+    const field = input.closest(".field");
+    expect(field?.textContent).toContain("1–16");
+    expect(field?.textContent).toContain("尚未派发的条目");
+  });
+
+  it("改其它字段不触发执行期设置失效", async () => {
+    const onExecutionSettingsChanged = vi.fn();
+    renderPage({ onExecutionSettingsChanged });
+    const check = await screen.findByLabelText("保留备份（查找替换类）");
+    await userEvent.click(check);
+    await waitFor(() =>
+      expect(setConfig).toHaveBeenCalledWith("processing", { keepBackup: false })
+    );
+    expect(onExecutionSettingsChanged).not.toHaveBeenCalled();
+  });
+
+  it("「恢复本组默认」把并发改回自动档时同样让旧预览失效", async () => {
+    const onExecutionSettingsChanged = vi.fn();
+    renderPage({ onExecutionSettingsChanged });
+    const performanceCard = (await screen.findByRole("heading", { name: "性能" })).closest(
+      "section"
+    );
+    const resetButton = performanceCard?.querySelector("button");
+    expect(resetButton).toBeTruthy();
+    await userEvent.click(resetButton as HTMLElement);
+    await waitFor(() => expect(resetScope).toHaveBeenCalledWith("performance"));
+    expect(onExecutionSettingsChanged).toHaveBeenCalledTimes(1);
   });
 });
 
