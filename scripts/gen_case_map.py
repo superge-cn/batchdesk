@@ -36,7 +36,76 @@ WEBDRIVER = "WebDriver 待建（功能视图已挂载并由 App.navigation.test.
 PW = "CI（pnpm test:e2e，Playwright＋Chromium ＋ 浏览器 mock 夹具；真 WebView 仍走 e2e-tauri.mjs）"
 MANUAL_CARRIER = "真人工（Windows 实机/受控环境）"
 
+# ── 人工裁决（2026-11-09，依据 docs/testing/人工裁决改判清单-2026-11-09.md）──
+# 32 条 ⛔ 中 31 条已实机执行并逐条对账：本表集中写入裁决后的状态/载体/缺口，
+# 由 row() 在生成时覆盖逐槽默认值；C15-PRE-04（功能未实现）维持 ⛔，不在此表。
+# ✅ 行不挂缺口（门禁规则），证据回链写在载体列；◐ 行缺口保留未做的判定点。
+W1_GAP = ("①②实机通过（2026-11-07 B2，PowerShell FileShare.None 持句柄，"
+          "E:/batchdesk-shijiri/B2-records.md：undo1 对被锁条目报 E2008 os error 32、"
+          "被锁文件 sha256 原样、解锁后二次 undo 补完）；③「提示满足三层结构」UI 走查未做")
+W5_CARRIER = "Windows 实机（2026-11-07 轮次 8，fixtures/bench/results.md；C-4/记录2）"
+ADJUDICATED = {
+    **{
+        f"TC-{fid}-RBK-03": ("◐", "Windows 实机（2026-11-07 B2，FileShare.None 持句柄）", W1_GAP)
+        for fid in ("F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09",
+                    "F10", "F13", "C01", "C02", "C03", "C07", "C10")
+    },
+    "TC-F11-RBK-03": (
+        "◐",
+        "Windows 实机（2026-11-07 B2，FileShare.None 持句柄）",
+        "①②实机通过（E:/batchdesk-shijiri/B2-records.md：beta 报 E2008 os error 32、"
+        "alpha 级联 E2008 os error 145 目录非空、二次 undo 补完、root 清空）；"
+        "③「提示满足三层结构」UI 走查未做",
+    ),
+    "TC-F10-EXE-02": ("✅", "Windows 实机（2026-11-08 第二轮，证据 E:/batchdesk-shijiri/b1/e02/）", ""),
+    "TC-C09-EXE-03": ("✅", "Windows 实机（2026-11-08 第二轮，证据 E:/batchdesk-shijiri/b1/e02/c09-scan.json）", ""),
+    "TC-F11-EXE-02": ("✅", "Windows 实机（2026-11-08 第二轮，证据 E:/batchdesk-shijiri/b1/e04/ 与 fix-d1d5/e04/preflight.log）", ""),
+    "TC-C07-EXE-04": ("✅", "Windows 实机（2026-11-08 第二轮，证据 E:/batchdesk-shijiri/b1/e01/）", ""),
+    "TC-C07-EXE-05": ("✅", "Windows 实机（2026-11-08 第二轮，证据 E:/batchdesk-shijiri/b1/r05/ 与 fix-d1d5/r05/）", ""),
+    "TC-F01-EXE-05": ("✅", W5_CARRIER, ""),
+    "TC-F02-EXE-05": ("✅", W5_CARRIER, ""),
+    "TC-F03-EXE-05": ("✅", W5_CARRIER, ""),
+    "TC-F10-EXE-05": ("✅", W5_CARRIER, ""),
+    "TC-C02-EXE-05": ("✅", W5_CARRIER, ""),
+    "TC-C01-EXE-05": (
+        "◐",
+        W5_CARRIER,
+        "Windows 数值已出（ASCII 486.9 MiB/s 达标）；GB18030 变体源 96.8／产物 135.4 MiB/s "
+        "未达 NVMe ≥200 档，待 T §4.2 豁免裁决",
+    ),
+    "TC-C03-EXE-05": (
+        "◐",
+        W5_CARRIER,
+        "Windows 数值已出（plain 231.1 MiB/s 达标）；regex 83.5／cell 26.6 MiB/s 未达 NVMe ≥200 档，"
+        "待 T §4.2 豁免裁决；界定不出的正则仍整段读（ADR-0064 边界）",
+    ),
+    "TC-C06-EXE-02": ("✅", "Windows 实机（2026-11-07，NTFS 不敏感卷，证据 E:/batchdesk-shijiri/b3/c06/）", ""),
+    "TC-C09-EXE-05": ("✅", "Windows 实机（2026-11-07，R-44，fixtures/bench/results.md）", ""),
+}
+
+# 改判后暴露的锚点质量问题（台账 2026-11-09 重跑）：原 ⛔ 行的锚点是文字描述，
+# 改判为 ✅/◐ 后必须可机器定位；另有 3 条模块级条数随新增测试漂移。此处集中修正，
+# 不改各功能 spec 的逐槽文本（避免把长行 diff 打散）。
+ANCHOR_OVERRIDES = {
+    "TC-F01-EXE-05": "platform `text` 19 项（split_layout 分块/行边界）",
+    "TC-F02-EXE-05": "platform `text` 19 项（estimate_lines/split_layout_by_lines 流式）",
+    "TC-F03-EXE-05": "platform `text` 19 项（split_layout_by_parts 预扫描＋第二遍流式）",
+    "TC-F10-EXE-02": "platform::listing::tests::inspect_counts_files_dirs_and_depth"
+                     "＋kernel::listing::tests::placeholder_and_skipped_entries_warn",
+    "TC-F11-EXE-02": "kernel `preflight` 10 项（磁盘余量判定；D4 修复后按卷分组）",
+    "TC-F11-RBK-03": "platform `fs` 24 项（复制原子化/撤销改名/占用与只读）",
+    "TC-C07-EXE-04": "kernel `generic_apply` 59 项（含冲突二次裁决）",
+    "TC-C07-EXE-05": "platform::fs::tests::short_or_failed_copy_never_reaches_the_target_path"
+                     "＋platform::fs::tests::failed_copy_preserves_an_existing_target",
+    "TC-C09-EXE-05": "platform `scan` 10 项＋kernel `duplicate` 9 项＋C-6 assert_c09.py（本地手动）",
+    "TC-F06-EXE-04": "kernel `generic_apply` 59 项（含冲突二次裁决）",
+    "TC-S01-PRE-01": "kernel `preflight` 10 项",
+}
+
 STATUS_BY_CORPUS = {"asserted": "✅", "partial": "◐", "pending": "⛔"}
+
+
+
 
 
 def corpus_cell(ids):
@@ -171,6 +240,9 @@ def add_arm_anchor(row, fid):
 
 def row(fid, meta, slot, recipe, point, status, carrier, anchor, gap):
     kind, number = slot.split("-")
+    override = ADJUDICATED.get(f"TC-{fid}-{kind}-{number}")
+    if override is not None:
+        status, carrier, gap = override
     if status == "✅" and gap:
         # 「X 台账＝asserted」是信息性注记，挪进锚点列；真实缺口必须把状态降为 ◐，不许两者并存。
         segments = [seg for seg in gap.split("；") if seg]
@@ -199,6 +271,9 @@ def row(fid, meta, slot, recipe, point, status, carrier, anchor, gap):
     }
     if kind == "EXE" and recipe == "E4":
         add_arm_anchor(built, fid)
+    anchor_override = ANCHOR_OVERRIDES.get(built["实例ID"])
+    if anchor_override:
+        built["自动化锚点"] = anchor_override
     return built
 
 
