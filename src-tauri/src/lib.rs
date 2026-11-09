@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use kernel::apply::ApplyOptions;
@@ -39,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{Emitter, Manager, State};
 
+mod ai;
 mod plan_csv;
 mod plan_kinds;
 mod plan_manifest;
@@ -139,6 +141,8 @@ struct AppState {
     /// 所以密码不进它们；进程重启或崩溃恢复后这张表是空的，加密包任务将以 E3008
     /// 失败并提示重新预览。
     plan_secrets: Mutex<HashMap<String, String>>,
+    /// F15：进行中的 AI 请求取消标记（messageId → flag）；请求结束即移除。
+    ai_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     paths: DataPaths,
     tasks: TaskQueue,
 }
@@ -148,6 +152,7 @@ impl AppState {
         Self {
             plans: Mutex::new(HashMap::new()),
             plan_secrets: Mutex::new(HashMap::new()),
+            ai_cancels: Mutex::new(HashMap::new()),
             paths,
             tasks,
         }
@@ -195,6 +200,74 @@ fn getStorageInfo(state: State<'_, AppState>) -> StorageInfo {
     }
 }
 
+/// F15：AI 能力/阶段/目录/同意状态；仅显示，不参与授权判定（设计 14 §3.1）。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn getAiStatus() -> ai::AiStatus {
+    ai::AiService::new(ai::production_provider(), Arc::new(|_, _| {})).status()
+}
+
+/// F15：发起单轮请求。Provider 未配置时 `aiAsk` 以 E6001 降级（设计 14 §8）。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn aiAsk(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    input: ai::AiAskInput,
+) -> Result<ai::AiAskOutput, IpcError> {
+    let message_id = new_ulid("ai-msg");
+    let flag = Arc::new(AtomicBool::new(false));
+    state
+        .ai_cancels
+        .lock()
+        .unwrap()
+        .insert(message_id.clone(), Arc::clone(&flag));
+    let emit_app = app.clone();
+    let service = ai::AiService::new(
+        ai::production_provider(),
+        Arc::new(move |event, payload| {
+            if let Err(error) = emit_app.emit(event, payload) {
+                eprintln!("E9001: failed to emit {event}: {error}");
+            }
+        }),
+    );
+    let plans = ShellPlans { state: &state };
+    let cancelled = {
+        let flag = Arc::clone(&flag);
+        move || flag.load(Ordering::SeqCst)
+    };
+    let outcome = service.ask_with_id(message_id.clone(), input, &plans, &cancelled);
+    state.ai_cancels.lock().unwrap().remove(&message_id);
+    outcome.map_err(IpcError::from)
+}
+
+/// F15：取消进行中的 AI 请求（幂等；设计 14 §3.1）。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn aiCancel(state: State<'_, AppState>, message_id: String) -> bool {
+    let cancels = state.ai_cancels.lock().unwrap();
+    match cancels.get(&message_id) {
+        Some(flag) => {
+            flag.store(true, Ordering::SeqCst);
+            true
+        }
+        None => false,
+    }
+}
+
+/// AI 的计划出口：与手动 `planOperation` 共用同一段壳层路由，AI 不碰 PlanEntry。
+struct ShellPlans<'a> {
+    state: &'a State<'a, AppState>,
+}
+
+impl ai::PlanFactory for ShellPlans<'_> {
+    fn plan(&self, kind: &str, params: &Value) -> Result<PlanDocument, KernelError> {
+        plan_operation_impl(self.state, kind.to_string(), params.clone(), Vec::new()).map_err(
+            |error| KernelError::new(&error.code, error.message, error.detail, error.retryable),
+        )
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 fn planOperation(
@@ -203,34 +276,43 @@ fn planOperation(
     params: Value,
     source_paths: Vec<String>,
 ) -> Result<PlanDocument, IpcError> {
+    plan_operation_impl(&state, kind, params, source_paths)
+}
+
+/// `planOperation` 的可复用实现：F15 的计划工厂也走这里，保证 AI 与手动预览
+/// 生成计划的是同一段 kernel 路由（设计 14 §7.1：AI 不直接构造 PlanEntry）。
+fn plan_operation_impl(
+    state: &State<'_, AppState>,
+    kind: String,
+    params: Value,
+    source_paths: Vec<String>,
+) -> Result<PlanDocument, IpcError> {
     // kind 路由（UI 接入切片，设计 12 §3.1）：c09 既有路径；
     // f05/f11/f12 主流程在此采集事实并生成计划；其余 kind E1002 明确拒绝。
     match kind.as_str() {
         "c09" => {}
-        "f05" => return plan_f05_shell(&state, params, source_paths),
-        "f11" => return plan_f11_shell(&state, params, source_paths),
-        "f12" => return plan_f12_shell(&state, params, source_paths),
+        "f05" => return plan_f05_shell(state, params, source_paths),
+        "f11" => return plan_f11_shell(state, params, source_paths),
+        "f12" => return plan_f12_shell(state, params, source_paths),
         "f01" | "f02" | "f03" => {
-            return plan_kinds::plan_split_shell(&state, &kind, params).map_err(IpcError::from)
+            return plan_kinds::plan_split_shell(state, &kind, params).map_err(IpcError::from)
         }
-        "f04" => return plan_kinds::plan_merge_shell(&state, params).map_err(IpcError::from),
-        "c01" => return plan_kinds::plan_transcode_shell(&state, params).map_err(IpcError::from),
-        "c02" => {
-            return plan_kinds::plan_line_endings_shell(&state, params).map_err(IpcError::from)
-        }
-        "c03" => return plan_kinds::plan_replace_shell(&state, params).map_err(IpcError::from),
+        "f04" => return plan_kinds::plan_merge_shell(state, params).map_err(IpcError::from),
+        "c01" => return plan_kinds::plan_transcode_shell(state, params).map_err(IpcError::from),
+        "c02" => return plan_kinds::plan_line_endings_shell(state, params).map_err(IpcError::from),
+        "c03" => return plan_kinds::plan_replace_shell(state, params).map_err(IpcError::from),
         "f06" | "f07" | "f08" | "f09" => {
-            return plan_csv::plan_csv_shell(&state, &kind, params).map_err(IpcError::from)
+            return plan_csv::plan_csv_shell(state, &kind, params).map_err(IpcError::from)
         }
-        "f10" => return plan_csv::plan_listing_shell(&state, params).map_err(IpcError::from),
+        "f10" => return plan_csv::plan_listing_shell(state, params).map_err(IpcError::from),
         "c04" | "c11" | "c12" | "c13" | "c14" => {
-            return plan_ops::plan_op_shell(&state, &kind, params).map_err(IpcError::from)
+            return plan_ops::plan_op_shell(state, &kind, params).map_err(IpcError::from)
         }
-        "c07" => return plan_manifest::plan_manifest_shell(&state, params).map_err(IpcError::from),
+        "c07" => return plan_manifest::plan_manifest_shell(state, params).map_err(IpcError::from),
         "c08" => {
-            return plan_manifest::plan_rule_archive_shell(&state, params).map_err(IpcError::from)
+            return plan_manifest::plan_rule_archive_shell(state, params).map_err(IpcError::from)
         }
-        "c10" => return plan_manifest::plan_zip_shell(&state, params).map_err(IpcError::from),
+        "c10" => return plan_manifest::plan_zip_shell(state, params).map_err(IpcError::from),
         other => {
             return Err(IpcError::new(
                 "E1002",
@@ -278,7 +360,7 @@ fn planOperation(
             include_zero_byte,
         },
     );
-    let (config_protected, _, _) = security_settings(&state);
+    let (config_protected, _, _) = security_settings(state);
     let (protected_list, protected_source) = match params.protected_dirs.as_deref() {
         Some(list) => (list.to_vec(), ProtectedSource::Params),
         None => (config_protected, ProtectedSource::Config),
@@ -1480,6 +1562,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             getIpcMeta,
             getStorageInfo,
+            getAiStatus,
+            aiAsk,
+            aiCancel,
             planOperation,
             applyPlan,
             preflightPlan,

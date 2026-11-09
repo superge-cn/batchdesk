@@ -1,0 +1,34 @@
+{
+  "id": "AI-13",
+  "purpose": "unknown function kind must be rejected with E6003",
+  "input": {
+    "text": "把这批文件转成 PDF",
+    "context": {
+      "fileCount": 5,
+      "kinds": ["docx"],
+      "locale": "zh-CN",
+      "includeFileNames": false
+    }
+  },
+  "mock_model": {
+    "text": "ok",
+    "intent": {
+      "steps": [
+        {
+          "stepId": "s1",
+          "kind": "c09",
+          "params": {},
+          "dependsOn": []
+        }
+      ]
+    },
+    "tool_calls": []
+  },
+  "expected": {
+    "intent_kind": "c09",
+    "tool_calls": [],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": false,
+    "error_code": "E6003"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "id": "AI-01",
+  "purpose": "normal rename intent",
+  "input": {
+    "text": "文件名前加 2026_",
+    "context": {
+      "fileCount": 12,
+      "kinds": ["pdf"],
+      "locale": "zh-CN",
+      "includeFileNames": false
+    }
+  },
+  "mock_model": {
+    "text": "已生成重命名计划，请在预览里核对。",
+    "intent": {
+      "steps": [
+        {
+          "stepId": "s1",
+          "kind": "f12",
+          "params": { "prefix": "2026_" },
+          "dependsOn": []
+        }
+      ]
+    },
+    "tool_calls": [
+      {
+        "callId": "c1",
+        "name": "planOperation",
+        "arguments": { "kind": "f12", "params": { "prefix": "2026_" } }
+      }
+    ]
+  },
+  "expected": {
+    "intent_kind": "f12",
+    "tool_calls": ["planOperation"],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "error_code": null
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "AI-05",
+  "purpose": "clarification without plan",
+  "input": {
+    "text": "帮我整理一下",
+    "context": {
+      "fileCount": 0,
+      "kinds": [],
+      "locale": "zh-CN",
+      "includeFileNames": false
+    }
+  },
+  "mock_model": {
+    "text": "需要更多信息",
+    "intent": {
+      "steps": [
+        {
+          "stepId": "s1",
+          "kind": "",
+          "params": {},
+          "dependsOn": [],
+          "needsClarification": true,
+          "question": "要把哪些文件改名？"
+        }
+      ]
+    },
+    "tool_calls": []
+  },
+  "expected": {
+    "intent_kind": null,
+    "tool_calls": [],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": false,
+    "error_code": null
+  }
+}
