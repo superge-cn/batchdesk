@@ -341,6 +341,9 @@ impl TaskQueue {
         log_full_paths: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
         let _ = std::fs::create_dir_all(&paths.quarantine_dir);
+        // 崩溃残留：隔离目录里上一进程留下的 `.batchdesk-copy-*` 中间态文件
+        // 不在 Journal 里，保留期清理看不见；启动时按写入 PID 是否存活清理。
+        let _ = platform::fs::cleanup_abandoned_copy_temps(&paths.quarantine_dir);
         if let Some(parent) = paths.journal_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -2628,6 +2631,17 @@ mod tests {
         assert!(events.iter().any(|(name, payload)| name == EVENT_STATE
             && payload.get("state").and_then(Value::as_str) == Some("cancelled")));
         assert!(events.iter().any(|(name, _)| name == EVENT_DONE));
+    }
+
+    #[test]
+    fn startup_cleans_abandoned_copy_temps_in_quarantine() {
+        let temp = TempDir::new();
+        let quarantine = temp.0.join("quarantine");
+        std::fs::create_dir_all(&quarantine).unwrap();
+        let dead = quarantine.join(".batchdesk-copy-4294967295-1");
+        std::fs::write(&dead, b"partial").unwrap();
+        let _queue = test_queue(paths_for(&temp), Arc::new(|_event, _payload| {}));
+        assert!(!dead.exists(), "启动必须清理上一进程崩溃留下的复制临时文件");
     }
 
     #[test]

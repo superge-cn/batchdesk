@@ -101,10 +101,22 @@ D5 的 Pending→Applied 最初用「每次状态变化重写整个 JSONL」实�
 
 ### 实机证据（`E:/batchdesk-shijiri/s03/`）
 
-- **S03 执行中强杀→回滚**（1199 条计划、跨卷隔离）：强杀落在 72 条已移动处，重启横幅三选项→回滚；Journal 1270 行全 reverted、data 1200、**quarantine 0 个 Journal 孤儿**（仅 1 个 0 字节 `.batchdesk-copy-*` 复制临时文件，属 §4 已登记的崩溃窗口边界，不是撤销看不见的隔离文件）。
+- **S03 执行中强杀→回滚**（1199 条计划、跨卷隔离）：强杀落在 72 条已移动处，重启横幅三选项→回滚；Journal 1270 行全 reverted、data 1200、**quarantine 0 个 Journal 孤儿**（仅 1 个 0 字节 `.batchdesk-copy-*` 复制临时文件；启动清理已覆盖该残留，见 §7）。
 - **S03 执行中强杀→续跑**（1199 条计划）：强杀落在 68 条已移动处，重启→续跑 total 1131（1199−68），按 Journal 幂等跳过，最终 data 1（保留最早）、quarantine 1200、applied 1199、pending 0。
 - **断线自动暂停→继续**（5135 条计划）：新增 50 条隔离后停 LanmanServer，14 秒重试耗尽后 `state=paused`、message 含 os error 64；界面显示原因（截图 `ui-completed.png` 为完成后状态，暂停态文本由 UI 树取证）；恢复服务点继续→完成 5135/5135，共享目录剩 1 个保留文件、隔离总计 7999。
 
 ### CI
 
 run 42498459881（2026-11-08，head `fb53020`＝本批）：七 job 全 success、95 步零 skipped 零失败（bench 11／desktop 15／deny 12／lint 10／test·ubuntu 16／web 15／test·windows 16，逐 job／逐 step 核对，匿名 REST）。
+
+## 7. 2026-11-09 补记：崩溃临时文件启动清理（D5 收尾）
+
+`copy_file_atomic` 先写同目录 `.batchdesk-copy-<pid>-<n>` 临时文件再改名；崩溃落在复制中间态会留下该文件。它不在 Journal 里、保留期清理看不见，实机 S03 强杀后隔离目录就留下过 0 字节残留。桌面壳启动时调用 `platform::fs::cleanup_abandoned_copy_temps(quarantine_dir)`：
+
+- 只扫描隔离目录的非递归常规文件，匹配 `.batchdesk-copy-` 前缀；
+- 文件名里的 PID 等于当前进程 → 跳过（本进程在途）；其他 PID 仍存活（Windows `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`；Linux `/proc/<pid>`）→ 保留，避免误删另一实例的在途复制；
+- PID 已不存在 → 删除；删除失败不阻断启动，返回删除条数（壳层忽略）。
+
+只扩 `windows-sys` 的 `Win32_System_Threading` feature（同一依赖，不新增 crate）。CLI 不自动清理用户指定的隔离目录（目录可能不属于工具）。
+
+验证：`platform::fs::tests::cleanup_removes_copy_temps_of_dead_pids_only`（死 PID 文件删除、当前 PID 与普通文件保留）、`cleanup_of_missing_directory_is_a_noop`；`tasks::tests::startup_cleans_abandoned_copy_temps_in_quarantine`（壳层启动入口）。workspace 689、桌面壳 67＋6、Vitest 120、Playwright 18 全绿；fmt/clippy 全绿。

@@ -1144,6 +1144,74 @@ fn mapped_drive_is_remote(_path: &str) -> bool {
     false
 }
 
+/// 崩溃残留清理：隔离目录里的 `.batchdesk-copy-<pid>-<n>` 是 `copy_file_atomic`
+/// 的中间态临时文件，正常复制成功后立即改名为最终隔离文件。进程崩溃会把它留下，
+/// 而 Journal/保留期清理只认最终文件，故启动时按写入进程是否存活判定：
+/// - 当前进程 PID 的文件跳过（本进程可能正在复制）；
+/// - 其他 PID 仍存活则保留（可能是另一个实例的在途复制）；
+/// - PID 已不存在的才删除（崩溃残留）。
+///
+/// 只扫描指定目录的非递归常规文件；删除失败不阻断启动。返回删除条数。
+pub fn cleanup_abandoned_copy_temps(dir: &Path) -> usize {
+    let Ok(reader) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let current = std::process::id();
+    let mut removed = 0;
+    for entry in reader.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let Some(rest) = name.strip_prefix(".batchdesk-copy-") else {
+            continue;
+        };
+        let Some(pid) = rest
+            .split('-')
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == current || pid_is_alive(pid) {
+            continue;
+        }
+        if fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[cfg(windows)]
+fn pid_is_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: 只查询进程是否存在；成功取得的句柄立即关闭。
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    // SAFETY: `handle` 由 OpenProcess 返回且尚未关闭。
+    unsafe {
+        CloseHandle(handle);
+    }
+    true
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    pid != 0 && Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(not(any(windows, unix)))]
+fn pid_is_alive(_pid: u32) -> bool {
+    false
+}
+
 pub fn now_rfc3339() -> String {
     format_rfc3339(SystemTime::now())
 }
@@ -1601,6 +1669,34 @@ mod tests {
         assert_eq!(error.code, "E2005", "断线错误要映射为网络不可达");
         assert_eq!(fs::read(&target).unwrap(), b"keep");
         assert!(!temp.exists());
+    }
+
+    #[test]
+    fn cleanup_removes_copy_temps_of_dead_pids_only() {
+        // 实机 2026-11-08：S03 强杀落在跨卷复制中间态，隔离目录留下 `.batchdesk-copy-*`
+        // 临时文件；Journal 与保留期清理都看不见它。启动清理只删写入 PID 已不存在的
+        // 文件，保留本进程与其他存活实例的在途临时文件。
+        let dir = TempDir::new();
+        let dead = dir.0.join(".batchdesk-copy-4294967295-1");
+        fs::write(&dead, b"partial").unwrap();
+        let live = dir
+            .0
+            .join(format!(".batchdesk-copy-{}-1", std::process::id()));
+        fs::write(&live, b"in-flight").unwrap();
+        let unrelated = dir.0.join("normal.txt");
+        fs::write(&unrelated, b"keep").unwrap();
+
+        let removed = cleanup_abandoned_copy_temps(&dir.0);
+        assert_eq!(removed, 1);
+        assert!(!dead.exists(), "死 PID 的临时文件必须清理");
+        assert!(live.exists(), "当前进程的临时文件不得清理");
+        assert!(unrelated.exists(), "非临时文件不得清理");
+    }
+
+    #[test]
+    fn cleanup_of_missing_directory_is_a_noop() {
+        let dir = TempDir::new();
+        assert_eq!(cleanup_abandoned_copy_temps(&dir.0.join("missing")), 0);
     }
 
     #[cfg(windows)]
