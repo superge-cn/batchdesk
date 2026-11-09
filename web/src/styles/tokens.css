@@ -180,6 +180,8 @@
   --layout-sidebar-width: 232px;
   --layout-sidebar-min: 176px;
   --layout-sidebar-max: 384px;
+  /* F15 AI 面板宽度：U v1.3 尚未登记，占位值待其升版收编（TODO(U-v1.3)）。 */
+  --layout-ai-panel-width: 360px;
   --resize-handle-width: 5px;
   --resize-step: 16px;
   --table-column-min: 88px;

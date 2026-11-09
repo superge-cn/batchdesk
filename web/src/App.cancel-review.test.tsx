@@ -51,6 +51,22 @@ vi.mock("./lib/ipc", () => ({
   })),
   setConfig: vi.fn(async (scope: string) => ({ scope, values: {} })),
   resetScope: vi.fn(async (scope: string) => ({ scope, values: {} })),
+  // F15：App 挂载即渲染 AiPanel（关闭态也会读状态并订阅事件），这里桩掉 AI 通道。
+  getAiStatus: vi.fn(async () => ({
+    available: false,
+    configured: false,
+    phase: 1,
+    catalogVersion: "test",
+    supportedKinds: [],
+    consentRequired: true
+  })),
+  aiAsk: vi.fn(async () => ({ messageId: "ai-msg-test" })),
+  aiCancel: vi.fn(async () => true),
+  listenAiDelta: () => Promise.resolve(() => undefined),
+  listenAiTool: () => Promise.resolve(() => undefined),
+  listenAiBundle: () => Promise.resolve(() => undefined),
+  listenAiDone: () => Promise.resolve(() => undefined),
+  listenAiError: () => Promise.resolve(() => undefined),
   toIpcError: (value: unknown) => value
 }));
 

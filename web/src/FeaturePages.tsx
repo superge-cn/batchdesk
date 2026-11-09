@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Info, Loader2, Save, Undo2 } from "lucide-react";
 import {
   applyPlan,
@@ -771,7 +771,16 @@ function contentFromForm(
 }
 
 
-export function FeaturePages({ view, onBack }: { view: View; onBack: () => void }) {
+export function FeaturePages({
+  view,
+  onBack,
+  initialPlan = null
+}: {
+  view: View;
+  onBack: () => void;
+  /** F15：AI 面板交接的计划；只进预览，执行仍由本页的确认按钮发起。 */
+  initialPlan?: PlanDocument | null;
+}) {
   const { t } = useI18n();
   const title = t(FEATURE_TITLES[view] ?? "nav.c09");
   // 列宽/排序把手（设计 03 §11.2 的 tables）：按功能页各留一份，表 id 用功能码，
@@ -797,6 +806,8 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
   const [templateDescription, setTemplateDescription] = useState("");
   const [templateExtensions, setTemplateExtensions] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
+  /** F15：已应用的 AI 计划 id；同一计划在切视图往返时不重复套用。 */
+  const appliedAiPlan = useRef<string | null>(null);
 
   const setField = (name: string, value: string) =>
     setForm((previous) => ({ ...previous, [name]: value }));
@@ -839,6 +850,27 @@ export function FeaturePages({ view, onBack }: { view: View; onBack: () => void 
     );
     return () => unlisteners.forEach((unlisten) => unlisten());
   }, []);
+
+  // F15：AI 面板交接的计划只落到既有预览（设计 14 §7.1），不触发任何执行。
+  // 快照取当前表单，避免交接瞬间被 §7.3 的 stale 判定误伤；用户之后改参数仍会失效。
+  useEffect(() => {
+    if (!initialPlan || initialPlan.kind !== view) return;
+    if (appliedAiPlan.current === initialPlan.planId) return;
+    appliedAiPlan.current = initialPlan.planId;
+    setPlan(initialPlan);
+    setPlannedForm(JSON.stringify(form));
+    setPreview(null);
+    setDryRun(null);
+    setCanUndo(false);
+    setError(null);
+    setDangerOpen(false);
+    setNotice(t("feature.notice.aiPlan", { count: initialPlan.entries.length }));
+    if (view === "f12") {
+      renamePreview(initialPlan.planId)
+        .then(setPreview)
+        .catch(() => setPreview(null));
+    }
+  }, [initialPlan, view, form, t]);
 
   const onPlan = async () => {
     setBusy("plan");

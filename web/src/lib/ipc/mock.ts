@@ -1,7 +1,11 @@
 // Browser-only demo adapter. It never touches the filesystem and is used only
 // when the Vite app runs outside Tauri; real desktop runs call Rust commands.
 import type {
+  AiAskInput,
+  AiAskOutput,
+  AiStatus,
   ApplyEntryReport,
+  PlanBundle,
   RenamePreviewCounts,
   RenamePreviewRow,
   ApplyReport,
@@ -67,6 +71,201 @@ function fail(code: string, message: string): never {
   const error: IpcError = { code, message, retryable: false };
   throw error;
 }
+
+// ── F15 AI 助手（设计 14 §3／§4；Phase 1）────────────────────────────
+// 浏览器 mock 只验证 UI 契约，不代表真实 Provider；场景开关只在 isTauri()===false
+// 分支生效（Playwright 用 ?aiScenario=，Vitest 用 mockSetAiScenario）。
+export const AI_EVENT = {
+  delta: "ai://delta",
+  tool: "ai://tool",
+  bundle: "ai://bundle",
+  done: "ai://done",
+  error: "ai://error"
+} as const;
+
+export type AiScenario =
+  | "unconfigured"
+  | "ready"
+  | "clarify"
+  | "forbidden-tool"
+  | "bad-schema"
+  | "multi-step"
+  | "blocked-content"
+  | "cycle"
+  | "timeout"
+  | "cancelled";
+
+const AI_PLAN_ID = "01JAI0PLAN0000000000000000";
+const AI_BUNDLE_ID = "01JAIBUNDLE000000000000000";
+let aiScenario: AiScenario | null = null;
+let aiAskCount = 0;
+let aiCancelCount = 0;
+let aiApplyCount = 0;
+let aiMessageCounter = 0;
+let lastAiAskInput: AiAskInput | null = null;
+const aiCancelled = new Set<string>();
+const aiEmitted: string[] = [];
+
+/** 发事件前记名：测试据此断言事件顺序（delta → tool → bundle → done）。 */
+function emitAi(event: keyof typeof AI_EVENT, payload: unknown) {
+  aiEmitted.push(AI_EVENT[event]);
+  emit(AI_EVENT[event], payload);
+}
+
+function scenarioFromQuery(): AiScenario | null {
+  if (typeof window === "undefined") return null;
+  const value = new URLSearchParams(window.location.search).get("aiScenario");
+  return value ? (value as AiScenario) : null;
+}
+
+function currentAiScenario(): AiScenario {
+  return aiScenario ?? scenarioFromQuery() ?? "ready";
+}
+
+/** Vitest 用：显式指定场景（优先于 ?aiScenario=）。 */
+export function mockSetAiScenario(scene: AiScenario | null) {
+  aiScenario = scene;
+}
+
+/** 每个用例前重置场景、计数、取消标记与 AI 事件订阅。 */
+export function resetAiMock() {
+  aiScenario = null;
+  aiAskCount = 0;
+  aiCancelCount = 0;
+  aiApplyCount = 0;
+  aiMessageCounter = 0;
+  lastAiAskInput = null;
+  aiCancelled.clear();
+  aiEmitted.length = 0;
+  for (const event of Object.values(AI_EVENT)) listeners.delete(event);
+}
+
+/** 测试断言用：mock 实际收到的请求与调用次数。 */
+export function mockAiStats() {
+  return {
+    scenario: currentAiScenario(),
+    askCount: aiAskCount,
+    cancelCount: aiCancelCount,
+    applyCount: aiApplyCount,
+    lastAskInput: lastAiAskInput,
+    emitted: [...aiEmitted]
+  };
+}
+
+function aiError(code: string, message: string): IpcError {
+  return { code, message, retryable: false };
+}
+
+function aiPlanFixture(): PlanDocument {
+  const plan: PlanDocument = {
+    planId: AI_PLAN_ID,
+    kind: "f12",
+    params: { prefix: "2026_" },
+    entries: [
+      {
+        entryId: `${AI_PLAN_ID}-0001`,
+        source: "/mock/ai/合同.pdf",
+        target: "/mock/ai/2026_合同.pdf",
+        action: "rename",
+        reason: "AI 预览夹具：真实执行与撤销需桌面壳"
+      }
+    ],
+    stats: { total: 1, conflict: 0, warning: 0, blocked: 0 },
+    warnings: []
+  };
+  lastPlan = plan;
+  return plan;
+}
+
+export function mockAiStatus(): AiStatus {
+  const configured = currentAiScenario() !== "unconfigured";
+  return {
+    available: configured,
+    configured,
+    phase: 1,
+    catalogVersion: "mock.p1",
+    supportedKinds: ["f12", "f05", "f07", "c07"],
+    provider: configured ? "mock" : undefined,
+    model: configured ? "mock-phase1" : undefined,
+    consentRequired: true
+  };
+}
+
+export function mockAiAsk(input: AiAskInput): AiAskOutput {
+  aiAskCount += 1;
+  lastAiAskInput = input;
+  const messageId = `ai-msg-${++aiMessageCounter}`;
+  const scenario = currentAiScenario();
+  let finished = false;
+  const cancelled = () => aiCancelled.has(messageId);
+  const finishError = (code: string, message: string) => {
+    if (finished) return;
+    finished = true;
+    emitAi("error", { messageId, error: aiError(code, message) });
+  };
+  const finishDone = (message: string, bundle?: PlanBundle) => {
+    if (finished) return;
+    finished = true;
+    emitAi("done", { messageId, message, ...(bundle ? { bundle } : {}) });
+  };
+  const guard = () => {
+    if (finished) return true;
+    if (!cancelled()) return false;
+    finishError("E6007", "cancelled by the user");
+    return true;
+  };
+
+  void (async () => {
+    await wait(10);
+    if (guard()) return;
+    if (scenario === "unconfigured") return finishError("E6001", "AI provider is not configured");
+    if (scenario === "timeout") return finishError("E6006", "model request timed out");
+    if (scenario === "bad-schema") return finishError("E6003", "model output failed schema validation");
+    if (scenario === "multi-step") return finishError("E6011", "multi-step intents are not supported");
+    if (scenario === "blocked-content") return finishError("E6005", "content policy rejected the request");
+    if (scenario === "cycle") return finishError("E6010", "plan bundle has a dependency cycle");
+    if (scenario === "forbidden-tool") {
+      emitAi("delta", { messageId, text: "正在尝试直接执行…" });
+      emitAi("tool", {
+        messageId,
+        call: { callId: "c1", name: "applyPlan", arguments: {} },
+        allowed: false
+      });
+      return finishError("E6004", "tool is forbidden for the AI assistant");
+    }
+    emitAi("delta", { messageId, text: "已理解你的目标。" });
+    // cancelled 场景留出足够窗口让用户点到「取消」：其余场景保持短时序。
+    await wait(scenario === "cancelled" ? 300 : 10);
+    if (guard()) return;
+    if (scenario === "clarify") {
+      return finishDone("要把哪些文件改名？");
+    }
+    emitAi("delta", { messageId, text: "正在生成计划…" });
+    emitAi("tool", {
+      messageId,
+      call: { callId: "c1", name: "planOperation", arguments: { kind: "f12" } },
+      allowed: true
+    });
+    const plan = aiPlanFixture();
+    const bundle: PlanBundle = {
+      bundleId: AI_BUNDLE_ID,
+      steps: [{ stepId: "s1", plan, dependsOn: [], status: "ready" }],
+      conflicts: [],
+      status: "ready"
+    };
+    emitAi("bundle", { messageId, bundle });
+    finishDone("已生成计划，请在预览里核对。", bundle);
+  })();
+
+  return { messageId };
+}
+
+export function mockAiCancel(messageId: string): boolean {
+  aiCancelCount += 1;
+  aiCancelled.add(messageId);
+  return true;
+}
+
 
 export function mockMeta(): IpcMeta {
   return { contractVersion: 1, kernelVersion: "mock" };
@@ -353,6 +552,8 @@ function createTask(
 }
 
 export async function mockApply(planId: string): Promise<TaskHandle> {
+  // AI 验证用：任何 AI 流程都不得走到 apply（测试断言此计数恒为 0）。
+  aiApplyCount += 1;
   if (!lastPlan || lastPlan.planId !== planId) fail("E1001", "计划不存在，请重新生成预览");
   const entries: ApplyEntryReport[] = lastPlan.entries.map((entry) => {
     if (entry.blocked) {

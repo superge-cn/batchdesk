@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  mockAiAsk,
+  mockAiCancel,
+  mockAiStatus,
   mockApply,
   mockCancel,
   mockCleanup,
@@ -34,6 +37,14 @@ import {
   mockUndo
 } from "./mock";
 import type {
+  AiAskInput,
+  AiAskOutput,
+  AiBundleEvent,
+  AiDeltaEvent,
+  AiDoneEvent,
+  AiErrorEvent,
+  AiStatus,
+  AiToolEvent,
   CleanupOutcome,
   ConfigDocument,
   ConfigScope,
@@ -63,6 +74,11 @@ import type {
 export const TASK_PROGRESS = "task://progress";
 export const TASK_STATE = "task://state";
 export const TASK_DONE = "task://done";
+export const AI_DELTA = "ai://delta";
+export const AI_TOOL = "ai://tool";
+export const AI_BUNDLE = "ai://bundle";
+export const AI_DONE = "ai://done";
+export const AI_ERROR = "ai://error";
 
 export const isTauri = (): boolean =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -334,4 +350,53 @@ export async function importRecipe(payload: string): Promise<RecipeDocument> {
   return isTauri()
     ? invoke<RecipeDocument>("importRecipe", { payload })
     : mockImportRecipe(payload);
+}
+
+// ── F15 AI 助手（设计 14 §3；Phase 1）────────────────────────────────
+export async function getAiStatus(): Promise<AiStatus> {
+  return isTauri() ? invoke<AiStatus>("getAiStatus") : mockAiStatus();
+}
+
+export async function aiAsk(input: AiAskInput): Promise<AiAskOutput> {
+  return isTauri() ? invoke<AiAskOutput>("aiAsk", { input }) : mockAiAsk(input);
+}
+
+/** 取消进行中的 AI 请求；幂等（壳层按 messageId 找取消标记）。 */
+export async function aiCancel(messageId: string): Promise<boolean> {
+  return isTauri() ? invoke<boolean>("aiCancel", { messageId }) : mockAiCancel(messageId);
+}
+
+export function listenAiDelta(handler: (event: AiDeltaEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(mockListen(AI_DELTA, (payload) => handler(payload as AiDeltaEvent)));
+  }
+  return listen<AiDeltaEvent>(AI_DELTA, (event) => handler(event.payload));
+}
+
+export function listenAiTool(handler: (event: AiToolEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(mockListen(AI_TOOL, (payload) => handler(payload as AiToolEvent)));
+  }
+  return listen<AiToolEvent>(AI_TOOL, (event) => handler(event.payload));
+}
+
+export function listenAiBundle(handler: (event: AiBundleEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(mockListen(AI_BUNDLE, (payload) => handler(payload as AiBundleEvent)));
+  }
+  return listen<AiBundleEvent>(AI_BUNDLE, (event) => handler(event.payload));
+}
+
+export function listenAiDone(handler: (event: AiDoneEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(mockListen(AI_DONE, (payload) => handler(payload as AiDoneEvent)));
+  }
+  return listen<AiDoneEvent>(AI_DONE, (event) => handler(event.payload));
+}
+
+export function listenAiError(handler: (event: AiErrorEvent) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(mockListen(AI_ERROR, (payload) => handler(payload as AiErrorEvent)));
+  }
+  return listen<AiErrorEvent>(AI_ERROR, (event) => handler(event.payload));
 }

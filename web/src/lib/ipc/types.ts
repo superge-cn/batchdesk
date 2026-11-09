@@ -458,3 +458,102 @@ export interface RecipeApplySpec {
 export interface RecipeExportPayload {
   payload: string;
 }
+
+// ── F15 AI 助手（设计 14 §3／§4；Phase 1）────────────────────────────
+export interface AiStatus {
+  available: boolean;
+  configured: boolean;
+  phase: number;
+  catalogVersion: string;
+  supportedKinds: string[];
+  provider?: string;
+  model?: string;
+  consentRequired: boolean;
+  dataPolicyUrl?: string;
+}
+
+export interface AiContext {
+  fileCount: number;
+  kinds: string[];
+  locale: string;
+  includeFileNames: boolean;
+  fileNames?: string[];
+}
+
+export interface AiAskInput {
+  sessionId?: string;
+  text: string;
+  context: AiContext;
+  consentToken?: string;
+}
+
+export interface AiAskOutput {
+  messageId: string;
+}
+
+export interface AiIntentStep {
+  stepId: string;
+  kind: string;
+  params: Record<string, unknown>;
+  dependsOn: string[];
+  needsClarification?: boolean;
+  question?: string;
+}
+
+export interface AiIntentGraph {
+  steps: AiIntentStep[];
+}
+
+export interface AiToolCall {
+  callId: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface AiToolEvent {
+  messageId: string;
+  call: AiToolCall;
+  allowed: boolean;
+}
+
+export interface PlanBundleStep {
+  stepId: string;
+  plan: PlanDocument;
+  dependsOn: string[];
+  status: string;
+}
+
+export interface BundleConflict {
+  kind: string;
+  stepIds: string[];
+  riskLevel: RiskLevel;
+}
+
+export interface PlanBundle {
+  bundleId: string;
+  steps: PlanBundleStep[];
+  conflicts: BundleConflict[];
+  status: string;
+}
+
+export interface AiDeltaEvent {
+  messageId: string;
+  text: string;
+}
+
+export interface AiBundleEvent {
+  messageId: string;
+  bundle: PlanBundle;
+}
+
+export interface AiDoneEvent {
+  messageId: string;
+  message: string;
+  bundle?: PlanBundle | null;
+  bundleId?: string;
+}
+
+export interface AiErrorEvent {
+  messageId: string;
+  error: IpcError;
+}

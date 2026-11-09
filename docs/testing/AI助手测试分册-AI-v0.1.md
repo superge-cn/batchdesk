@@ -66,7 +66,8 @@
 - **自动化候选**：AI-01/05/06/12/13/14/15/17/18/19/20/21/23/24/25/26 用 mock model + fixtures/ai 做确定性测试；不接真实 provider。
 - **人工**：AI-09/10/11/16/22 的提示注入/隐私/配额/失败停止；在 staging/隔离环境执行，抓包检查请求体。
 - **真实 provider**：仅手工/staging；API key 不进 CI；记录 provider/model 版本与数据政策。
-- **Web（Phase 3）**：另列 TW-G 用例；Phase 1/2 不执行。
+- **前端面板（Phase 1 附加层，2026-11-09）**：`web/src/AiPanel.test.tsx`（组件 18 条）与 `web/src/App.aiPanel.test.tsx`（集成 4 条）走 Vitest＋浏览器 mock；`web/e2e/ai-panel.spec.ts`（6 条）走 Playwright＋Chromium；场景开关（`?aiScenario=`／`mockSetAiScenario`）与断言依据见《AI助手前端面板-mock验证方案-v0.1.md》。这一层只验证 UI 契约（同意/流式/工具卡/计划束交接/取消/E6xxx 文案/双语/a11y）与「永不直接 apply」，不替代真实 Provider/WebView 验收。
+- **Web（Phase 3）**：另列 TW-G 用例；Phase 1/2 不执行（Phase 1 的浏览器面板 mock 验证见上一条，不属 TW-G）。
 
 ## 4. fixtures/ai 格式
 

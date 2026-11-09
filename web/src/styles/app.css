@@ -971,3 +971,199 @@ button {
   background: var(--accent);
   outline: none;
 }
+
+/* ── F15 AI 助手面板（设计 14；Phase 1 mock 验证）──────────────────────────
+   覆盖在 glass-shell 内的右侧浮层：不新增 grid 列，既有三栏布局不变。
+   宽度取 --layout-ai-panel-width（U v1.3 未登记，占位 token 见 tokens.css）。 */
+.ai-panel {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: min(var(--layout-ai-panel-width), calc(100% - 2 * var(--space-4)));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-glass-panel);
+  background: var(--glass-bg-card);
+  box-shadow: var(--shadow-2);
+  backdrop-filter: blur(var(--glass-blur-card)) saturate(var(--glass-saturate-card));
+  overflow: hidden;
+}
+
+.ai-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-panel-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.ai-status {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
+.ai-log {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.ai-log .empty {
+  min-height: 96px;
+}
+
+.ai-message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.ai-message.user {
+  border-color: var(--brand-500);
+  background: var(--accent);
+}
+
+.ai-message-role {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+}
+
+.ai-message-text {
+  font-size: var(--text-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-tool-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--status-safe-border);
+  border-radius: var(--radius-sm);
+  background: var(--status-safe-surface);
+  color: var(--status-safe-fg);
+  font-size: var(--text-xs);
+}
+
+.ai-tool-card.danger {
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-surface);
+  color: var(--status-danger-fg);
+}
+
+.ai-tool-card code {
+  font-family: var(--font-mono);
+}
+
+.ai-bundle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--brand-500);
+  border-radius: var(--radius);
+  background: var(--accent);
+}
+
+.ai-bundle-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.ai-bundle-meta {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
+.ai-thinking {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
+.ai-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.ai-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.ai-consent {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--dialog-backdrop);
+}
+
+.ai-consent-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  max-height: 100%;
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-2);
+  overflow-y: auto;
+}
+
+.ai-consent-card h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.ai-consent-card p {
+  margin: 0;
+  font-size: var(--text-base);
+}
+
+.ai-consent-names {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+

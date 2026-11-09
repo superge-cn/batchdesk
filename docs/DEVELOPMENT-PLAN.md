@@ -143,7 +143,7 @@
 
 - C37 Phase A（单步模板）→ Phase B（多步模板、一键+逐步骤降级）；**进度（2026-11-05）**：Phase A 的「存取」半边已落 UI（ADR-0072），「一键套用」那一半阻塞于 OQ-36；
 - ConfigDocument/UiState/Recipe 的 UI 与导入导出；
-- F15 Phase 1（4 个功能）→ Phase 2/3（全量可计划+多计划）；**进度（2026-11-09，切片）**：Provider 无关的编排骨架已落地——FunctionCatalog（f12/f05/f07/c07 单一来源）、意图/工具校验（E6003/E6004/E6005/E6010/E6011）、单计划 `PlanBundle`、`getAiStatus`/`aiAsk`/`aiCancel` 与 `ai://*` 事件、`fixtures/ai/` 4 条与 12 条确定性单测（ADR-0085）；**真实 Provider 阻断于 OQ-44**（base URL allowlist＋密钥存放），生产 `configured=false` 以 E6001 降级；前端 AI 面板与 Phase 2/3 未建；
+- F15 Phase 1（4 个功能）→ Phase 2/3（全量可计划+多计划）；**进度（2026-11-09，切片）**：Provider 无关的编排骨架已落地——FunctionCatalog（f12/f05/f07/c07 单一来源）、意图/工具校验（E6003/E6004/E6005/E6010/E6011）、单计划 `PlanBundle`、`getAiStatus`/`aiAsk`/`aiCancel` 与 `ai://*` 事件、`fixtures/ai/` 4 条与 12 条确定性单测（ADR-0085）；**前端 AI 面板与浏览器 mock 验证已落地**（`docs/testing/AI助手前端面板-mock验证方案-v0.1.md`）：`web/src/AiPanel.tsx`（同意弹窗＋文件名 opt-in、流式消息、工具卡、计划束唯一出口「去预览」、取消、E6xxx 逐码本地化、中英双语与 a11y）、`web/src/lib/ipc/{types,mock,index}.ts` 的 AI DTO/场景/监听、`FeaturePages.initialPlan` 交接（执行仍由用户显式确认）；验证 `pnpm build`、`pnpm test` 146 项（`AiPanel.test.tsx` 18＋`App.aiPanel.test.tsx` 4）、`pnpm test:e2e` 24 项（`e2e/ai-panel.spec.ts` 6）、`check_locales.py`/`check_docs.py` 全绿，`mockAiStats().applyCount` 恒为 0；**真实 Provider 阻断于 OQ-44**（base URL allowlist＋密钥存放），生产 `configured=false` 以 E6001 降级；真实 WebView/Provider staging 验收与 Phase 2/3 未做；
 - 每步仍走 plan/apply，AI 永不直接 apply。
 
 ### Wave 5：P1/P2、Web、商业与发布

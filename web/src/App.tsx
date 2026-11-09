@@ -55,6 +55,7 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { FeaturePages } from "./FeaturePages";
+import { AiPanel } from "./AiPanel";
 import {
   NAV_ENTRIES,
   NAV_LABEL_BY_ID,
@@ -280,7 +281,7 @@ function TaskPanel({
 }
 
 function AppShell() {
-  const { t, resolvedTheme, setTheme } = useI18n();
+  const { t, lang, resolvedTheme, setTheme } = useI18n();
   const [root, setRoot] = useState("");
   const [keep, setKeep] = useState<KeepPolicy>("earliest");
   const [quickWindow, setQuickWindow] = useState("");
@@ -318,6 +319,9 @@ function AppShell() {
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [recoverableTasks, setRecoverableTasks] = useState<TaskSummary[]>([]);
   const [activeView, setActiveView] = useState<View>("c09");
+  /** F15：右侧 AI 面板开关与最近一次计划的交接目标（执行仍走既有预览）。 */
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPlan, setAiPlan] = useState<PlanDocument | null>(null);
   // 设计 03 §11.2：最近目录只用于"预填 + 候选"，不参与任何业务判定。
   const [recentDirs, setRecentDirs] = useState<string[]>([]);
   const navigationRef = useRef<UiNavigationState>({});
@@ -1012,6 +1016,15 @@ function AppShell() {
                 {resolvedTheme === "light" ? <Moon size={14} /> : <Sun size={14} />}
                 {resolvedTheme === "light" ? t("app.theme.toDark") : t("app.theme.toLight")}
               </button>
+              <button
+                className="theme-toggle"
+                type="button"
+                data-testid="ai-toggle"
+                aria-pressed={aiOpen}
+                onClick={() => setAiOpen((value) => !value)}
+              >
+                <Sparkles size={14} /> {t("ai.title")}
+              </button>
             </div>
           </header>
 
@@ -1529,10 +1542,26 @@ function AppShell() {
                 onExecutionSettingsChanged={onExecutionSettingsChanged}
               />
             ) : (
-              <FeaturePages view={activeView} onBack={() => selectView("c09")} />
+              <FeaturePages
+                view={activeView}
+                onBack={() => selectView("c09")}
+                initialPlan={aiPlan}
+              />
             )}
           </div>
         </main>
+
+        <AiPanel
+          open={aiOpen}
+          onClose={() => setAiOpen(false)}
+          onOpenPlan={(plan) => {
+            setAiPlan(plan);
+            if ((FEATURE_VIEWS as readonly string[]).includes(plan.kind)) {
+              selectView(plan.kind as View);
+            }
+          }}
+          context={{ fileCount: 0, kinds: [], locale: lang, includeFileNames: false }}
+        />
       </div>
 
       {/* 方案 §7.7：取消只停止派发，已完成项默认保留；有写入时才问是否一并撤销。
