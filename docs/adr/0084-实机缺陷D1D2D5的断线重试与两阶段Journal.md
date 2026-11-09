@@ -119,4 +119,4 @@ run 42498459881（2026-11-08，head `fb53020`＝本批）：七 job 全 success�
 
 只扩 `windows-sys` 的 `Win32_System_Threading` feature（同一依赖，不新增 crate）。CLI 不自动清理用户指定的隔离目录（目录可能不属于工具）。
 
-验证：`platform::fs::tests::cleanup_removes_copy_temps_of_dead_pids_only`（死 PID 文件删除、当前 PID 与普通文件保留）、`cleanup_of_missing_directory_is_a_noop`；`tasks::tests::startup_cleans_abandoned_copy_temps_in_quarantine`（壳层启动入口）。workspace 689、桌面壳 67＋6、Vitest 120、Playwright 18 全绿；fmt/clippy 全绿。
+验证：`platform::fs::tests::cleanup_removes_copy_temps_of_dead_pids_only`（死 PID 文件删除、当前 PID 与普通文件保留）、`cleanup_of_missing_directory_is_a_noop`；`tasks::tests::startup_cleans_abandoned_copy_temps_in_quarantine`（壳层启动入口）。workspace 689、桌面壳 67＋6、Vitest 120、Playwright 18 全绿；fmt/clippy 全绿。CI：run 42575708898（2026-11-09，head `2a7aef9`＝本批）七 job 全 success、95 步零 skipped 零失败。
