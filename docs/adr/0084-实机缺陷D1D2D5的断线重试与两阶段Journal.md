@@ -120,3 +120,22 @@ run 42498459881（2026-11-08，head `fb53020`＝本批）：七 job 全 success�
 只扩 `windows-sys` 的 `Win32_System_Threading` feature（同一依赖，不新增 crate）。CLI 不自动清理用户指定的隔离目录（目录可能不属于工具）。
 
 验证：`platform::fs::tests::cleanup_removes_copy_temps_of_dead_pids_only`（死 PID 文件删除、当前 PID 与普通文件保留）、`cleanup_of_missing_directory_is_a_noop`；`tasks::tests::startup_cleans_abandoned_copy_temps_in_quarantine`（壳层启动入口）。workspace 689、桌面壳 67＋6、Vitest 120、Playwright 18 全绿；fmt/clippy 全绿。CI：run 42575708898（2026-11-09，head `2a7aef9`＝本批）七 job 全 success、95 步零 skipped 零失败。
+
+### 实机走查计划（2026-11-09 登记，待执行）
+
+前提：release 桌面壳含 §7 清理；数据集跨卷隔离（源在 E:、隔离目录在 C: 的 app data），确保 `copy_file_atomic` 会在隔离目录留下 `.batchdesk-copy-<pid>-*` 中间态。
+
+1. **残留制造**：生成 C09 计划（600 组重复对、约 2.4 GB），执行；监控隔离目录出现 `.batchdesk-copy-*` 时 `taskkill /F`（强杀落在跨卷复制中间态）。先记录隔离目录基线计数与任务快照（应为非终态）。
+2. **取证**：记录残留文件名、文件名内 PID、`ls-before.txt`；确认该 PID 已不存在（任务管理器或 `Get-Process -Id` 失败）。
+3. **正向清理**：重启 release 应用（`TaskQueue::with_license` 调 `cleanup_abandoned_copy_temps`）；断言该 `.batchdesk-copy-*` 已删除，`ls-after.txt` 中无该文件。
+4. **保护反向**：启动前另造 `.batchdesk-copy-<存活进程PID>-1`（如新开 `ping -t` 取其 PID），启动后断言该文件仍存在（存活 PID 不得误删）；结束后手动删除。
+5. **普通文件不动**：隔离目录同时放入 `probe-normal.txt`，断言启动前后都在。
+6. **启动不受阻（可选）**：把残留文件设为只读后启动，断言应用仍正常启动、任务队列可用（删除失败只跳过，不阻断）。
+
+判据：死 PID 残留 = 0；存活 PID 临时文件保留；普通文件保留；应用正常启动且任务队列可用；`tasks.json` 与 Journal 不受清理影响。
+
+证据：`E:/batchdesk-shijiri/s03-cleanup/`（`ls-before.txt`、`ls-after.txt`、PID 记录、命令与退出码、启动后截图）；回填 ADR-0084 §7「实机结果」、DEVELOPMENT-PLAN §6.1 清理行、检查清单 B6 行。
+
+失败处理：若死 PID 文件未被删，先用任务管理器确认 PID 确已消失并检查文件权限/占用；按缺陷五步闭环（先红后绿、影响面、最小改动、全量回归、沉淀）处理，不得只删文件了事。
+
+不做：用户目标目录（非隔离目录）的 `.batchdesk-copy-*` 清理（目录可能不属于工具，属 §7 有意边界）。

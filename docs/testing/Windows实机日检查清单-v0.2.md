@@ -152,6 +152,7 @@ PowerShell `FileShare.None` 持句柄法（§5），逐功能的 apply→undo �
 |---|---|---|
 | C09 T 全量 UI 验收（W0-6 剩余） | 桌面 app（`pnpm tauri dev` 或 release 包）真机走查：扫描→计划预览→危险二次确认→执行→进度/暂停/取消→撤销→保留期演练/永久清理；对照 TC v0.4 §3 的 C09 行逐条勾 | 映射表 C09 行＋功能级签署表单（TS 模板 A） |
 | S03 实机崩溃演练 | 执行中强杀进程（任务管理器或 `taskkill /F`）→ 重启 → 验证中断任务 `interrupted` 提示与 resume/rollback/discard 三条路 | 壳层恢复切片已有单测（Linux）；实机已执行（2026-11-08 第二/三轮）：回滚 71/71 全 reverted 且零 Journal 孤儿、续跑 1131/1131 幂等跳过、断线自动暂停显示原因后继续 5135/5135；证据 `E:/batchdesk-shijiri/s03/`，台账见 DEVELOPMENT-PLAN §6.1 |
+| 崩溃临时文件启动清理（ADR-0084 §7） | release 壳执行中强杀，隔离目录留下 `.batchdesk-copy-<pid>-*`；重启后死 PID 残留应被删，存活 PID 临时文件与普通文件保留；步骤见 ADR-0084 §7「实机走查计划」 | `E:/batchdesk-shijiri/s03-cleanup/`；回填 ADR-0084 §7「实机结果」与 DEVELOPMENT-PLAN §6.1 清理行 |
 | UNC/长路径矩阵抽样 | >260 字符深树的扫描/改名/撤销、`\\?\` 前缀显示值、UNC 共享上的 canonicalize 行为 | 长路径计划级断言 R01/R06 已 asserted；实机抽样结论记台账＋映射表缺口栏 |
 | CSP 真 WebView 核对 | release 构建加载，确认控制台无 CSP 违规报告；装了 tauri-driver 则跑 `node scripts/e2e-tauri.mjs` 的真 WebView 链路 | `scripts/e2e-tauri.mjs` 手动项清账；装不上驱动则手动核对留截图 |
 
