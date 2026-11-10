@@ -72,13 +72,13 @@ ADJUDICATED = {
         "◐",
         W5_CARRIER,
         "Windows 数值已出（ASCII 486.9 MiB/s 达标）；GB18030 变体源 96.8／产物 135.4 MiB/s "
-        "未达 NVMe ≥200 档，待 T §4.2 豁免裁决",
+        "未达 NVMe ≥200 档，EX-01 已签发（2026-11-10，补测节点 2026-11-30）",
     ),
     "TC-C03-EXE-05": (
         "◐",
         W5_CARRIER,
         "Windows 数值已出（plain 231.1 MiB/s 达标）；regex 83.5／cell 26.6 MiB/s 未达 NVMe ≥200 档，"
-        "待 T §4.2 豁免裁决；界定不出的正则仍整段读（ADR-0064 边界）",
+        "EX-01 已签发（2026-11-10，补测节点 2026-11-30）；界定不出的正则仍整段读（ADR-0064 边界）",
     ),
     "TC-C06-EXE-02": ("✅", "Windows 实机（2026-11-07，NTFS 不敏感卷，证据 E:/batchdesk-shijiri/b3/c06/）", ""),
     "TC-C09-EXE-05": ("✅", "Windows 实机（2026-11-07，R-44，fixtures/bench/results.md）", ""),
