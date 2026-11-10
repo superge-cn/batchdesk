@@ -226,6 +226,7 @@ impl ConfigStore {
             KernelError::invalid_params(format!("invalid recipe payload: {error}"))
         })?;
         let mut recipe = migrate_recipe_value(value)?;
+        recipe.mark_imported();
         self.save_recipe(&mut recipe)?;
         Ok(recipe)
     }
@@ -302,6 +303,7 @@ mod tests {
     use super::*;
     use kernel::config::CURRENT_CONFIG_VERSION;
     use kernel::plan::PlanAction;
+    use kernel::recipe::RecipeOrigin;
     use serde_json::{json, Map};
 
     struct TempDir(PathBuf);
@@ -503,6 +505,34 @@ mod tests {
         .to_string();
         let error = store.import_recipe(&high).unwrap_err();
         assert_eq!(error.code, "E1007");
+    }
+
+    #[test]
+    fn import_marks_the_copy_as_imported_even_if_payload_claims_local() {
+        let (_dir, store) = store();
+        // 导出件里的 origin 只是「历史」：导入这份副本的来源是 imported（方案 §15.2.3）。
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8C",
+            "schemaVersion": kernel::recipe::CURRENT_RECIPE_SCHEMA_VERSION,
+            "name": "自称本机新建的导入件",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "csv-dedup",
+                "paramsSnapshot": {"key": "row"},
+                "source": "original",
+                "feature": "c11"
+            }],
+            "origin": "local",
+            "createdAt": "2026-11-09T00:00:00Z"
+        })
+        .to_string();
+        let imported = store.import_recipe(&payload).unwrap();
+        assert_eq!(imported.origin, Some(RecipeOrigin::Imported));
+        // 落盘件读回同值（save_recipe 不会把 origin 改回 local）
+        assert_eq!(
+            store.get_recipe(&imported.recipe_id).unwrap().origin,
+            Some(RecipeOrigin::Imported)
+        );
     }
 
     #[test]

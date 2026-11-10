@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Send, Sparkles, Wrench, X } from "lucide-react";
+import { Loader2, Layers, Send, Sparkles, Wrench, X } from "lucide-react";
 import {
   aiAsk,
   aiCancel,
   getAiStatus,
+  getTask,
+  isTauri,
   listenAiBundle,
   listenAiDelta,
   listenAiDone,
   listenAiError,
   listenAiTool,
+  listenTaskDone,
+  listenTaskState,
+  setAiApiKey,
   toIpcError
 } from "./lib/ipc";
 import type {
@@ -17,7 +22,8 @@ import type {
   AiToolCall,
   IpcError,
   PlanBundle,
-  PlanDocument
+  PlanDocument,
+  TaskState
 } from "./lib/ipc/types";
 import { ErrorBanner } from "./ErrorBanner";
 import { useI18n } from "./i18n";
@@ -27,6 +33,8 @@ export interface AiPanelProps {
   onClose: () => void;
   /** 计划束的唯一出口：交给既有预览面板；AI 面板不提供执行按钮。 */
   onOpenPlan: (plan: PlanDocument) => void;
+  /** 配方套用是本地 UI 流程：跳到既有模板库选配方/填路径，配方名与路径不出端。 */
+  onOpenTemplates: () => void;
   context: AiContext;
 }
 
@@ -59,7 +67,7 @@ const emptyAssistant = (messageId: string): AiMessage => ({
  * `PlanBundle` 的计划交给既有预览面板，执行仍由用户确认。事件按 messageId 归档，
  * 容忍事件早于 `aiAsk` 返回、迟到与重复；所有错误走 E6xxx 本地化文案。
  */
-export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
+export function AiPanel({ open, onClose, onOpenPlan, onOpenTemplates, context }: AiPanelProps) {
   const { t } = useI18n();
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [statusError, setStatusError] = useState<IpcError | null>(null);
@@ -71,6 +79,14 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
   const [pendingText, setPendingText] = useState("");
   const [includeNames, setIncludeNames] = useState(false);
   const [consentGiven, setConsentGiven] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyNotice, setKeyNotice] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<IpcError | null>(null);
+  /** 计划束各步骤的执行终态：planId → task state（只跟踪 apply 任务）。 */
+  const [planStates, setPlanStates] = useState<Record<string, TaskState>>({});
+  const taskPlanIds = useRef(new Map<string, string>());
+  const taskFetching = useRef(new Set<string>());
   const logRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -180,6 +196,54 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    const record = (taskId: string, state?: TaskState) => {
+      const known = taskPlanIds.current.get(taskId);
+      if (known) {
+        if (state) {
+          setPlanStates((previous) => ({ ...previous, [known]: state }));
+          return;
+        }
+        // done 事件不带终态：再读一次任务，避免最后一条 state 早于 done 丢失。
+        void getTask(taskId)
+          .then((detail) => {
+            if (!alive || detail.summary.job !== "apply" || !detail.summary.planId) return;
+            setPlanStates((previous) => ({
+              ...previous,
+              [detail.summary.planId as string]: detail.summary.state
+            }));
+          })
+          .catch(() => undefined);
+        return;
+      }
+      if (taskFetching.current.has(taskId)) return;
+      taskFetching.current.add(taskId);
+      void getTask(taskId)
+        .then((detail) => {
+          taskFetching.current.delete(taskId);
+          if (!alive || detail.summary.job !== "apply") return;
+          const planId = detail.summary.planId;
+          if (!planId) return;
+          taskPlanIds.current.set(taskId, planId);
+          setPlanStates((previous) => ({
+            ...previous,
+            [planId]: detail.summary.state
+          }));
+        })
+        .catch(() => {
+          taskFetching.current.delete(taskId);
+        });
+    };
+    const stateSubscription = listenTaskState((event) => record(event.taskId, event.state));
+    const doneSubscription = listenTaskDone((event) => record(event.taskId));
+    return () => {
+      alive = false;
+      void stateSubscription.then((unlisten) => unlisten());
+      void doneSubscription.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
     logRef.current?.scrollTo?.({ top: logRef.current.scrollHeight });
   }, [messages]);
 
@@ -189,6 +253,10 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
   const canSend = !busy && !unavailable && draft.trim().length > 0;
 
   const sendNow = (text: string, withNames: boolean) => {
+    const history = messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.text)
+      .filter((item) => item.length > 0);
     setDraft("");
     const userMessage: AiMessage = {
       messageId: `user-${Date.now()}`,
@@ -202,6 +270,7 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
     setConsentOpen(false);
     void aiAsk({
       text,
+      history,
       context: {
         ...context,
         includeFileNames: withNames,
@@ -255,6 +324,22 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
       )
     );
 
+  const saveApiKey = () => {
+    const value = apiKey.trim();
+    if (!value || savingKey) return;
+    setSavingKey(true);
+    setKeyError(null);
+    setKeyNotice(null);
+    void setAiApiKey(value)
+      .then(() => {
+        setApiKey("");
+        setKeyNotice(t("ai.config.saved"));
+        return getAiStatus().then((next) => setStatus(next));
+      })
+      .catch((error) => setKeyError(toIpcError(error)))
+      .finally(() => setSavingKey(false));
+  };
+
   return (
     <aside
       className="ai-panel"
@@ -296,6 +381,52 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
         </div>
       )}
 
+      {status && !status.configured && isTauri() && (
+        <div className="ai-config" data-testid="ai-config">
+          <div className="ai-config-title">{t("ai.config.title")}</div>
+          <p className="muted">{t("ai.config.hint")}</p>
+          <input
+            className="input"
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            placeholder={t("ai.config.placeholder")}
+            aria-label={t("ai.config.title")}
+            onChange={(event) => setApiKey(event.target.value)}
+            data-testid="ai-config-key"
+          />
+          <div className="button-row">
+            <button
+              className="button button-secondary"
+              type="button"
+              data-testid="ai-config-save"
+              disabled={savingKey || apiKey.trim().length === 0}
+              onClick={saveApiKey}
+            >
+              {savingKey ? t("ai.config.saving") : t("ai.config.save")}
+            </button>
+          </div>
+          {keyNotice && (
+            <div className="muted" role="status">
+              {keyNotice}
+            </div>
+          )}
+          {keyError && <ErrorBanner error={keyError} onClose={() => setKeyError(null)} />}
+        </div>
+      )}
+
+      <div className="ai-shortcuts">
+        <button
+          className="button button-secondary"
+          type="button"
+          data-testid="ai-open-templates"
+          onClick={onOpenTemplates}
+        >
+          <Layers size={14} /> {t("ai.templates.open")}
+        </button>
+        <div className="muted">{t("ai.templates.hint")}</div>
+      </div>
+
       <div className="ai-log" role="log" aria-live="polite" data-testid="ai-log" ref={logRef}>
         {messages.length === 0 ? (
           <div className="empty">{t("ai.empty")}</div>
@@ -320,23 +451,131 @@ export function AiPanel({ open, onClose, onOpenPlan, context }: AiPanelProps) {
                   <code>{tool.call.name}</code>
                 </div>
               ))}
-              {message.bundle && message.bundle.steps[0] && (
+              {message.bundle && message.bundle.steps.length > 0 && (
                 <div className="ai-bundle" data-testid="ai-bundle">
                   <div className="ai-bundle-title">{t("ai.bundle.title")}</div>
                   <div className="ai-bundle-meta">
                     {t("ai.bundle.meta", {
                       steps: message.bundle.steps.length,
-                      entries: message.bundle.steps[0].plan.entries.length
+                      entries: message.bundle.steps.reduce(
+                        (total, step) => total + step.plan.entries.length,
+                        0
+                      )
                     })}
                   </div>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    data-testid="ai-open-preview"
-                    onClick={() => onOpenPlan(message.bundle!.steps[0].plan)}
-                  >
-                    {t("ai.bundle.openPreview")}
-                  </button>
+                  {message.bundle.steps.length > 1 && (
+                    <div className="ai-bundle-progress" data-testid="ai-bundle-progress">
+                      {t("ai.bundle.progress", {
+                        done: message.bundle.steps.filter(
+                          (step) => planStates[step.plan.planId] === "completed"
+                        ).length,
+                        total: message.bundle.steps.length
+                      })}
+                    </div>
+                  )}
+                  {message.bundle.steps.some((step) => {
+                    const state = planStates[step.plan.planId];
+                    return (
+                      state === "failed" || state === "partial-failed" || state === "cancelled"
+                    );
+                  }) && (
+                    <div
+                      className="ai-bundle-conflict"
+                      data-testid="ai-bundle-stopped"
+                      role="alert"
+                    >
+                      {t("ai.bundle.stopped")}
+                    </div>
+                  )}
+                  {message.bundle.conflicts.map((conflict, index) => (
+                    <div
+                      className="ai-bundle-conflict"
+                      data-testid="ai-bundle-conflict"
+                      role="alert"
+                      key={`${conflict.kind}-${index}`}
+                    >
+                      {t("ai.bundle.conflict", { steps: conflict.stepIds.length })}
+                      {conflict.paths && conflict.paths.length > 0 && (
+                        <div className="muted">{conflict.paths.join(", ")}</div>
+                      )}
+                    </div>
+                  ))}
+                  <ol className="ai-bundle-steps">
+                    {message.bundle.steps.map((step, index) => {
+                      const state = planStates[step.plan.planId];
+                      const dependencyStates = step.dependsOn.map((dependencyId) => {
+                        const dependency = message.bundle!.steps.find(
+                          (item) => item.stepId === dependencyId
+                        );
+                        return dependency ? planStates[dependency.plan.planId] : undefined;
+                      });
+                      const failedDependency = dependencyStates.some(
+                        (value) =>
+                          value === "failed" ||
+                          value === "partial-failed" ||
+                          value === "cancelled"
+                      );
+                      const waitingDependency = dependencyStates.some(
+                        (value) => value !== "completed"
+                      );
+                      const disabled =
+                        step.status === "skipped" || failedDependency || waitingDependency;
+                      const label =
+                        step.status === "skipped"
+                          ? t("ai.bundle.blocked")
+                          : failedDependency
+                            ? t("ai.bundle.stoppedStep")
+                            : waitingDependency
+                              ? t("ai.bundle.waiting")
+                              : t("ai.bundle.openPreview");
+                      const stateLabel =
+                        state === "completed"
+                          ? t("ai.bundle.state.completed")
+                          : state === "failed" || state === "partial-failed"
+                            ? t("ai.bundle.state.failed")
+                            : state === "cancelled"
+                              ? t("ai.bundle.state.cancelled")
+                              : state
+                                ? t("ai.bundle.state.running")
+                                : null;
+                      return (
+                        <li className="ai-bundle-step" key={step.stepId}>
+                          <div className="ai-bundle-step-head">
+                            <span>
+                              {t("ai.bundle.step", { index: index + 1, kind: step.plan.kind })}
+                            </span>
+                            <span className="muted">
+                              {t("ai.bundle.entries", { count: step.plan.entries.length })}
+                            </span>
+                            {stateLabel && (
+                              <span
+                                className="ai-bundle-step-state"
+                                data-testid={`ai-step-state-${step.stepId}`}
+                              >
+                                {stateLabel}
+                              </span>
+                            )}
+                          </div>
+                          {step.dependsOn.length > 0 && (
+                            <div className="muted">
+                              {t("ai.bundle.dependsOn", { steps: step.dependsOn.join(", ") })}
+                            </div>
+                          )}
+                          <button
+                            className="button button-secondary"
+                            type="button"
+                            data-testid={
+                              index === 0 ? "ai-open-preview" : `ai-open-preview-${step.stepId}`
+                            }
+                            disabled={disabled}
+                            onClick={() => onOpenPlan(step.plan)}
+                          >
+                            {label}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ol>
                 </div>
               )}
               {message.error && (

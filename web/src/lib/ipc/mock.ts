@@ -12,6 +12,7 @@ import type {
   CleanupOutcome,
   ConfigDocument,
   ConfigScope,
+  DiagnosticLogRecord,
   IpcError,
   IpcMeta,
   PlanDocument,
@@ -26,9 +27,13 @@ import type {
   RecipeApplySpec,
   RecipePage,
   SaveRecipeInput,
+  StepApplySpec,
   ScopeView,
   SettingValue,
   StorageInfo,
+  SupportCodeCount,
+  SupportPackage,
+  SupportPackageInput,
   TaskDetail,
   TaskHandle,
   TaskPage,
@@ -46,6 +51,8 @@ const TASK_EVENT = {
   done: "task://done"
 } as const;
 let lastPlan: PlanDocument | null = null;
+/** 多计划场景按 planId 回查：lastPlan 只保留最后一次生成的计划。 */
+const plansById = new Map<string, PlanDocument>();
 let taskCounter = 0;
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -89,7 +96,8 @@ export type AiScenario =
   | "clarify"
   | "forbidden-tool"
   | "bad-schema"
-  | "multi-step"
+  | "multi-plan"
+  | "multi-conflict"
   | "blocked-content"
   | "cycle"
   | "timeout"
@@ -156,17 +164,22 @@ function aiError(code: string, message: string): IpcError {
   return { code, message, retryable: false };
 }
 
-function aiPlanFixture(): PlanDocument {
+function aiPlanFixture(
+  kind = "f12",
+  planId = AI_PLAN_ID,
+  source = "/mock/ai/合同.pdf",
+  target = "/mock/ai/2026_合同.pdf"
+): PlanDocument {
   const plan: PlanDocument = {
-    planId: AI_PLAN_ID,
-    kind: "f12",
-    params: { prefix: "2026_" },
+    planId,
+    kind,
+    params: kind === "f12" ? { prefix: "2026_" } : { key: "row" },
     entries: [
       {
-        entryId: `${AI_PLAN_ID}-0001`,
-        source: "/mock/ai/合同.pdf",
-        target: "/mock/ai/2026_合同.pdf",
-        action: "rename",
+        entryId: `${planId}-0001`,
+        source,
+        target,
+        action: kind === "f12" ? "rename" : "csv-dedup",
         reason: "AI 预览夹具：真实执行与撤销需桌面壳"
       }
     ],
@@ -174,6 +187,7 @@ function aiPlanFixture(): PlanDocument {
     warnings: []
   };
   lastPlan = plan;
+  plansById.set(plan.planId, plan);
   return plan;
 }
 
@@ -182,11 +196,37 @@ export function mockAiStatus(): AiStatus {
   return {
     available: configured,
     configured,
-    phase: 1,
-    catalogVersion: "mock.p1",
-    supportedKinds: ["f12", "f05", "f07", "c07"],
+    phase: 3,
+    catalogVersion: "mock.p3",
+    // 与 src-tauri/src/ai.rs 的 CATALOG 同步（24 个壳层可计划功能）。
+    supportedKinds: [
+      "f12",
+      "f05",
+      "f07",
+      "c07",
+      "c09",
+      "f01",
+      "f02",
+      "f03",
+      "f04",
+      "f06",
+      "f08",
+      "f09",
+      "f10",
+      "f11",
+      "c01",
+      "c02",
+      "c03",
+      "c04",
+      "c08",
+      "c10",
+      "c11",
+      "c12",
+      "c13",
+      "c14"
+    ],
     provider: configured ? "mock" : undefined,
-    model: configured ? "mock-phase1" : undefined,
+    model: configured ? "mock-phase2" : undefined,
     consentRequired: true
   };
 }
@@ -221,7 +261,6 @@ export function mockAiAsk(input: AiAskInput): AiAskOutput {
     if (scenario === "unconfigured") return finishError("E6001", "AI provider is not configured");
     if (scenario === "timeout") return finishError("E6006", "model request timed out");
     if (scenario === "bad-schema") return finishError("E6003", "model output failed schema validation");
-    if (scenario === "multi-step") return finishError("E6011", "multi-step intents are not supported");
     if (scenario === "blocked-content") return finishError("E6005", "content policy rejected the request");
     if (scenario === "cycle") return finishError("E6010", "plan bundle has a dependency cycle");
     if (scenario === "forbidden-tool") {
@@ -241,11 +280,88 @@ export function mockAiAsk(input: AiAskInput): AiAskOutput {
       return finishDone("要把哪些文件改名？");
     }
     emitAi("delta", { messageId, text: "正在生成计划…" });
-    emitAi("tool", {
-      messageId,
-      call: { callId: "c1", name: "planOperation", arguments: { kind: "f12" } },
-      allowed: true
+    const multi = scenario === "multi-plan" || scenario === "multi-conflict";
+    const planKinds = multi ? ["c11", "f12"] : ["f12"];
+    planKinds.forEach((kind, index) => {
+      emitAi("tool", {
+        messageId,
+        call: { callId: `c${index + 1}`, name: "planOperation", arguments: { kind } },
+        allowed: true
+      });
     });
+    if (scenario === "multi-plan") {
+      const bundle: PlanBundle = {
+        bundleId: AI_BUNDLE_ID,
+        steps: [
+          {
+            stepId: "s1",
+            plan: aiPlanFixture(
+              "c11",
+              "01JAI0PLAN0000000000000001",
+              "/mock/ai/input.csv",
+              "/mock/ai/dedup.csv"
+            ),
+            dependsOn: [],
+            status: "ready"
+          },
+          {
+            stepId: "s2",
+            plan: aiPlanFixture(
+              "f12",
+              "01JAI0PLAN0000000000000002",
+              "/mock/ai/合同.pdf",
+              "/mock/ai/2026_合同.pdf"
+            ),
+            dependsOn: ["s1"],
+            status: "ready"
+          }
+        ],
+        conflicts: [],
+        status: "ready"
+      };
+      emitAi("bundle", { messageId, bundle });
+      return finishDone("已生成 2 步计划，请在预览里逐步核对。", bundle);
+    }
+    if (scenario === "multi-conflict") {
+      const bundle: PlanBundle = {
+        bundleId: AI_BUNDLE_ID,
+        steps: [
+          {
+            stepId: "s1",
+            plan: aiPlanFixture(
+              "c11",
+              "01JAI0PLAN0000000000000003",
+              "/mock/ai/input.csv",
+              "/mock/ai/shared.csv"
+            ),
+            dependsOn: [],
+            status: "skipped"
+          },
+          {
+            stepId: "s2",
+            plan: aiPlanFixture(
+              "f12",
+              "01JAI0PLAN0000000000000004",
+              "/mock/ai/合同.pdf",
+              "/mock/ai/shared.csv"
+            ),
+            dependsOn: [],
+            status: "skipped"
+          }
+        ],
+        conflicts: [
+          {
+            kind: "target-overlap",
+            stepIds: ["s1", "s2"],
+            paths: ["/mock/ai/shared.csv"],
+            riskLevel: "danger"
+          }
+        ],
+        status: "ready"
+      };
+      emitAi("bundle", { messageId, bundle });
+      return finishDone("计划里有目标重叠，冲突步骤已阻断。", bundle);
+    }
     const plan = aiPlanFixture();
     const bundle: PlanBundle = {
       bundleId: AI_BUNDLE_ID,
@@ -276,6 +392,65 @@ export function mockGetStorageInfo(): StorageInfo {
     quarantineDir: "~/.local/share/com.batchdesk.desktop/quarantine",
     journalFile: "~/.local/share/com.batchdesk.desktop/journal.jsonl"
   };
+}
+
+/** 支持包夹具：形状与壳层 `support::SupportPackage` 一致，内容不代表真机运行结果。 */
+const SUPPORT_LOG: DiagnosticLogRecord[] = [
+  {
+    ts: "2026-11-10T12:00:00Z",
+    level: "info",
+    target: "task-queue",
+    taskId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8A",
+    message: "task started",
+    fields: { failed: 0, total: 12 }
+  },
+  {
+    ts: "2026-11-10T12:00:04Z",
+    level: "warn",
+    target: "task-queue",
+    taskId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8A",
+    code: "E2002",
+    message: "task finished with partial failures",
+    fields: { failed: 2, total: 12, failedCode: "E2002" }
+  },
+  {
+    ts: "2026-11-10T12:01:10Z",
+    level: "warn",
+    target: "oplog",
+    code: "E5009",
+    message: "operation log is corrupt; a backup was kept and the store was rebuilt"
+  }
+];
+
+function countSupportCodes(records: DiagnosticLogRecord[]): SupportCodeCount[] {
+  const counts = new Map<string, number>();
+  for (const record of records) {
+    if (record.code) counts.set(record.code, (counts.get(record.code) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([code, count]) => ({ code, count }))
+    .sort((left, right) => right.count - left.count || left.code.localeCompare(right.code));
+}
+
+export function mockBuildSupportPackage(input: SupportPackageInput): SupportPackage {
+  const maxLogLines = input.maxLogLines ?? 200;
+  const log =
+    input.includeDiagnosticLog === false ? [] : SUPPORT_LOG.slice(-maxLogLines);
+  return {
+    version: "0.1.0",
+    build: "dev",
+    os: "windows",
+    arch: "x86_64",
+    generatedAt: new Date().toISOString(),
+    diagnosticLog: log,
+    errorCodeStats:
+      input.includeErrorCodeStats === false ? [] : countSupportCodes(log),
+    reproSteps: input.reproSteps ?? ""
+  };
+}
+
+export function mockWriteSupportPackage(_pkg: SupportPackage): string {
+  return "~/.local/share/com.batchdesk.desktop/exports/batchdesk-support-mock.json";
 }
 
 export async function mockPlan(input: PlanOperationInput): Promise<PlanDocument> {
@@ -551,11 +726,25 @@ function createTask(
   return task;
 }
 
+/**
+ * 应用夹具场景：默认 `fail-last`（演示 C16 重试链路：最后一个未受阻条目失败）；
+ * `?applyScenario=ok` 让全部条目成功——多步模板的浏览器演示需要成功链路
+ * （真实语义里"某步失败停止后续"，失败夹具会让多步永远走不完）。
+ * 与 AI 的场景开关同构（见 `scenarioFromQuery`）。
+ */
+function applyScenario(): "fail-last" | "ok" {
+  if (typeof window === "undefined") return "fail-last";
+  return new URLSearchParams(window.location.search).get("applyScenario") === "ok"
+    ? "ok"
+    : "fail-last";
+}
+
 export async function mockApply(planId: string): Promise<TaskHandle> {
   // AI 验证用：任何 AI 流程都不得走到 apply（测试断言此计数恒为 0）。
   aiApplyCount += 1;
-  if (!lastPlan || lastPlan.planId !== planId) fail("E1001", "计划不存在，请重新生成预览");
-  const entries: ApplyEntryReport[] = lastPlan.entries.map((entry) => {
+  const plan = plansById.get(planId) ?? (lastPlan?.planId === planId ? lastPlan : null);
+  if (!plan) fail("E1001", "计划不存在，请重新生成预览");
+  const entries: ApplyEntryReport[] = plan.entries.map((entry) => {
     if (entry.blocked) {
       return {
         entryId: entry.entryId,
@@ -570,25 +759,28 @@ export async function mockApply(planId: string): Promise<TaskHandle> {
     return { entryId: entry.entryId, status: "ok" };
   });
   // 演示 C16 重试链路：最后一个未受阻条目模拟“文件被占用”失败，重试后成功。
-  const demoFailure = [...lastPlan.entries].reverse().find((entry) => !entry.blocked);
-  const target = demoFailure
-    ? entries.find((entry) => entry.entryId === demoFailure.entryId)
-    : undefined;
-  if (target) {
-    target.status = "failed";
-    target.error = {
-      code: "E2003",
-      message: "mock: file was locked by another process",
-      retryable: true
-    };
+  if (applyScenario() === "fail-last") {
+    const demoFailure = [...plan.entries].reverse().find((entry) => !entry.blocked);
+    const target = demoFailure
+      ? entries.find((entry) => entry.entryId === demoFailure.entryId)
+      : undefined;
+    if (target) {
+      target.status = "failed";
+      target.error = {
+        code: "E2003",
+        message: "mock: file was locked by another process",
+        retryable: true
+      };
+    }
   }
   const task = createTask("apply", entries, planId);
   return { taskId: task.taskId };
 }
 
 export async function mockUndo(planId: string): Promise<TaskHandle> {
-  if (!lastPlan || lastPlan.planId !== planId) fail("E1001", "计划不存在，请重新生成预览");
-  const entries: ApplyEntryReport[] = lastPlan.entries
+  const plan = plansById.get(planId) ?? (lastPlan?.planId === planId ? lastPlan : null);
+  if (!plan) fail("E1001", "计划不存在，请重新生成预览");
+  const entries: ApplyEntryReport[] = plan.entries
     .filter((entry) => !entry.blocked)
     .map((entry) => ({ entryId: entry.entryId, status: "ok" }));
   const task = createTask("undo", entries, planId);
@@ -866,11 +1058,17 @@ export function mockResetUiState(): UiState {
 // 只是一份同形状夹具：不碰磁盘、不做版本迁移（迁移与拒绝高版本由内核/壳层负责），
 // 但**保留两条语义**——缺 schemaVersion 报 E1001、高版本报 E1007，
 // 否则浏览器里永远看不到「导入被拒」那条界面路径。
+/**
+ * 浏览器夹具的模板 schema 版本：与内核 `CURRENT_RECIPE_SCHEMA_VERSION` 一致
+ * （v7 增 `origin`）。夹具不得比壳层更宽松或更严格，否则浏览器里会走出真机没有的路径。
+ */
+const MOCK_RECIPE_SCHEMA_VERSION = 7;
+
 let recipeCounter = 0;
 let recipes: RecipeDocument[] = [
   {
     recipeId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8R1",
-    schemaVersion: 5,
+    schemaVersion: MOCK_RECIPE_SCHEMA_VERSION,
     name: "CSV 分片（每片 5 万行）",
     description: "演示夹具：真实模板由桌面壳落盘",
     steps: [
@@ -885,9 +1083,39 @@ let recipes: RecipeDocument[] = [
       }
     ],
     match: { extensions: ["csv"], tags: ["分割"] },
+    origin: "local",
     createdAt: "2026-11-01T09:00:00Z",
     updatedAt: "2026-11-04T10:00:00Z",
     usageCount: 3
+  },
+  {
+    recipeId: "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8R2",
+    schemaVersion: MOCK_RECIPE_SCHEMA_VERSION,
+    name: "清单后转码（两步）",
+    description: "演示夹具：多步模板，第二步输入取自第一步产物",
+    steps: [
+      {
+        stepId: "step-1",
+        kind: "listing",
+        feature: "f10",
+        paramsSnapshot: { format: "csv" },
+        source: "original"
+      },
+      {
+        // c01 没有输出槽位（就地改写），一键的自动推进因此能走完；
+        // 需要输出目录的后续步骤会因「取不到输出」降级逐步骤，那是另一条路径。
+        stepId: "step-2",
+        kind: "edit-content",
+        feature: "c01",
+        paramsSnapshot: { target: "utf-8" },
+        source: "previous"
+      }
+    ],
+    match: { extensions: ["csv"] },
+    origin: "local",
+    createdAt: "2026-11-02T09:00:00Z",
+    updatedAt: "2026-11-04T10:00:00Z",
+    usageCount: 1
   }
 ];
 
@@ -977,11 +1205,13 @@ export function mockSaveRecipe(input: SaveRecipeInput): RecipeDocument {
   recipeCounter += 1;
   const document: RecipeDocument = {
     recipeId: input.recipeId ?? `01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8S${recipeCounter}`,
-    schemaVersion: 5,
+    schemaVersion: MOCK_RECIPE_SCHEMA_VERSION,
     name: input.name,
     description: input.description,
     steps,
     match: input.match,
+    // 保存＝本机新建（方案 §15.2.3）；导入在 mockImportRecipe 里强制改写为 imported。
+    origin: "local",
     createdAt: existing?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     usageCount: existing?.usageCount
@@ -1050,51 +1280,69 @@ const APPLY_SLOTS: Record<string, { required: [string, boolean][]; outputs: [str
   c14: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] }
 };
 
-/** 浏览器夹具的 loadRecipe：槽位校验与壳层同语义（缺/多/空都报），事实采集是夹具（同 mockPlan），返回同形状的预览计划。 */
-export function mockLoadRecipe(recipeId: string, pathParams: Record<string, unknown>): Promise<PlanDocument> {
+/**
+ * 浏览器夹具的 loadRecipe：按 `stepIndex` 取那一步的评估做槽位校验（缺/多/空都报，
+ * 与壳层同语义），事实采集是夹具（同 mockPlan），返回同形状的预览计划。
+ *
+ * Phase B：多步模板**按步调用**——第 2 步起的输入由调用方给，夹具不预生成所有
+ * 步骤（§15.2.3）。越界步号如实报「没有这一步」。
+ */
+export function mockLoadRecipe(
+  recipeId: string,
+  pathParams: Record<string, unknown>,
+  stepIndex = 0
+): Promise<PlanDocument> {
+  const document = mockGetRecipe(recipeId);
   const spec = mockDescribeRecipe(recipeId);
-  if (!spec.applicable || !spec.feature) {
-    fail("E1002", `loadRecipe: ${spec.reason ?? "recipe is not applicable"}`);
+  const stepSpec = spec.steps[stepIndex];
+  if (!stepSpec) {
+    fail(
+      "E1002",
+      `loadRecipe: recipe has no step ${stepIndex} (${spec.steps.length} steps)`
+    );
   }
-  const declared = new Set([...spec.required, ...spec.outputs].map((slot) => slot.key));
+  if (!stepSpec.applicable || !stepSpec.feature) {
+    fail("E1002", `loadRecipe: ${stepSpec.reason ?? "step is not applicable"}`);
+  }
+  const declared = new Set([...stepSpec.required, ...stepSpec.outputs].map((slot) => slot.key));
   for (const key of Object.keys(pathParams)) {
     if (!declared.has(key)) {
       fail(
         "E1002",
-        `loadRecipe: ${spec.feature} has no path slot ${key}; declared slots are ${[...declared].join(", ")}`
+        `loadRecipe: ${stepSpec.feature} has no path slot ${key}; declared slots are ${[...declared].join(", ")}`
       );
     }
   }
-  const missing = spec.required.filter((slot) => {
+  const missing = stepSpec.required.filter((slot) => {
     const value = pathParams[slot.key];
     return value === undefined || (typeof value === "string" && value.trim().length === 0);
   });
   if (missing.length > 0) {
     fail(
       "E1002",
-      `loadRecipe: ${spec.feature} needs the path slots: ${missing.map((slot) => slot.key).join(", ")}`
+      `loadRecipe: ${stepSpec.feature} needs the path slots: ${missing.map((slot) => slot.key).join(", ")}`
     );
   }
   if (
-    spec.outputs.length > 0 &&
-    !spec.outputs.some((slot) => {
+    stepSpec.outputs.length > 0 &&
+    !stepSpec.outputs.some((slot) => {
       const value = pathParams[slot.key];
       return typeof value === "string" ? value.trim().length > 0 : value !== undefined;
     })
   ) {
     fail(
       "E1002",
-      `loadRecipe: ${spec.feature} needs one of the output slots: ${spec.outputs.map((slot) => slot.key).join(", ")}`
+      `loadRecipe: ${stepSpec.feature} needs one of the output slots: ${stepSpec.outputs.map((slot) => slot.key).join(", ")}`
     );
   }
-  const step = mockGetRecipe(recipeId).steps[0];
+  const step = document.steps[stepIndex];
   // 正文白名单外的键拒绝（与壳层同语义，方案 §15.2.4 不静默丢）
-  const contentSpec2 = CONTENT_KEYS[spec.feature];
+  const contentSpec2 = CONTENT_KEYS[stepSpec.feature];
   if (contentSpec2 && step.content) {
     const declared = new Set([...contentSpec2.required, ...contentSpec2.any.flat()]);
     for (const key of Object.keys(step.content)) {
       if (!declared.has(key)) {
-        fail("E1002", `loadRecipe: ${spec.feature} has no content key ${key}`);
+        fail("E1002", `loadRecipe: ${stepSpec.feature} has no content key ${key}`);
       }
     }
   }
@@ -1107,62 +1355,94 @@ export function mockLoadRecipe(recipeId: string, pathParams: Record<string, unkn
   });
 }
 
+/**
+ * 浏览器夹具的 describeRecipe：**逐段评估**（Phase B，§15.2.3）。
+ *
+ * 判定与壳层 `recipe_apply::describe` 同口径：每步单独判绑定/正文/槽位；
+ * `oneClickAllowed`＝全部步骤可套用且无高风险步骤；单步语义的
+ * `applicable`/`feature`/`required`/`outputs` 只在一步模板上成立。
+ */
 export function mockDescribeRecipe(recipeId: string): RecipeApplySpec {
   const document = mockGetRecipe(recipeId);
-  const step = document.steps[0];
-  const base = {
-    recipeId: document.recipeId,
-    feature: step?.feature,
-    kind: step?.kind
-  };
-  if (!step || document.steps.length > 1 || !step.feature) {
-    return {
-      ...base,
-      applicable: false,
-      reason: step
-        ? document.steps.length > 1
-          ? "multi-step recipe is not applied in one click; plan each step separately"
-          : "recipe step has no feature binding; re-save it from that feature page"
-        : "recipe has no step to apply",
-      required: [],
-      outputs: []
+  const steps: StepApplySpec[] = document.steps.map((step, index) => {
+    const highRisk = step.kind === "delete";
+    const base = {
+      stepId: step.stepId,
+      index,
+      feature: step.feature,
+      kind: step.kind,
+      source: step.source
     };
-  }
-  const feature = step.feature;
-  const contentSpec = CONTENT_KEYS[feature];
-  if (contentSpec) {
-    // 缺正文＝回放不了该功能的变换语义：如实拒绝并提示重存（v6 起保存通道采集正文）
-    const content = (step.content ?? {}) as Record<string, unknown>;
-    const has = (key: string) =>
-      content[key] !== undefined && content[key] !== null;
-    const missingRequired = contentSpec.required.filter((key) => !has(key));
-    const anyMissed = contentSpec.any.some((group) => !group.some(has));
-    if (missingRequired.length > 0 || anyMissed) {
+    if (!step.feature) {
       return {
         ...base,
         applicable: false,
-        reason:
-          "transformation content is not stored in this template; re-save it from the feature page (schema v6)",
+        reason: "recipe step has no feature binding; re-save it from that feature page",
         required: [],
-        outputs: []
+        outputs: [],
+        highRisk
       };
     }
-  }
-  const slots = APPLY_SLOTS[feature];
-  if (!slots) {
+    const feature = step.feature;
+    const contentSpec = CONTENT_KEYS[feature];
+    if (contentSpec) {
+      // 缺正文＝回放不了该功能的变换语义：如实拒绝并提示重存（v6 起保存通道采集正文）
+      const content = (step.content ?? {}) as Record<string, unknown>;
+      const has = (key: string) => content[key] !== undefined && content[key] !== null;
+      const missingRequired = contentSpec.required.filter((key) => !has(key));
+      const anyMissed = contentSpec.any.some((group) => !group.some(has));
+      if (missingRequired.length > 0 || anyMissed) {
+        return {
+          ...base,
+          applicable: false,
+          reason:
+            "transformation content is not stored in this template; re-save it from the feature page (schema v6)",
+          required: [],
+          outputs: [],
+          highRisk
+        };
+      }
+    }
+    const slots = APPLY_SLOTS[feature];
+    if (!slots) {
+      return {
+        ...base,
+        applicable: false,
+        reason: `browser fixture has no slots registered for ${feature}`,
+        required: [],
+        outputs: [],
+        highRisk
+      };
+    }
     return {
       ...base,
-      applicable: false,
-      reason: `browser fixture has no slots registered for ${feature}`,
-      required: [],
-      outputs: []
+      applicable: true,
+      required: slots.required.map(([key, many]) => ({ key, many })),
+      outputs: slots.outputs.map(([key, many]) => ({ key, many })),
+      highRisk
     };
+  });
+  const single = document.steps.length === 1;
+  const first = steps[0];
+  const applicable = single && first?.applicable === true;
+  const oneClickAllowed =
+    steps.length > 0 && steps.every((step) => step.applicable) && !steps.some((step) => step.highRisk);
+  let reason: string | undefined;
+  if (!applicable) {
+    if (!first) reason = "recipe has no step to apply";
+    else if (!single) reason = `multi-step recipe has ${document.steps.length} steps; apply step by step`;
+    else reason = first.reason;
   }
   return {
-    ...base,
-    applicable: true,
-    required: slots.required.map(([key, many]) => ({ key, many })),
-    outputs: slots.outputs.map(([key, many]) => ({ key, many }))
+    recipeId: document.recipeId,
+    applicable,
+    reason,
+    feature: applicable ? first?.feature : undefined,
+    kind: applicable ? first?.kind : undefined,
+    required: applicable ? first?.required ?? [] : [],
+    outputs: applicable ? first?.outputs ?? [] : [],
+    steps,
+    oneClickAllowed
   };
 }
 
@@ -1179,7 +1459,9 @@ export function mockImportRecipe(payload: string): RecipeDocument {
   };
   const version = value.schemaVersion;
   if (typeof version !== "number") fail("E1001", "schemaVersion is required");
-  if (version > 3) fail("E1007", `模板版本 ${version} 高于本版支持的 3`);
+  if (version > MOCK_RECIPE_SCHEMA_VERSION) {
+    fail("E1007", `模板版本 ${version} 高于本版支持的 ${MOCK_RECIPE_SCHEMA_VERSION}`);
+  }
   const steps: TemplateStep[] = value.steps
     ? value.steps.map((step) => ({ ...step, paramsSnapshot: stripPaths(step.paramsSnapshot) }))
     : [
@@ -1190,10 +1472,13 @@ export function mockImportRecipe(payload: string): RecipeDocument {
           source: "original"
         }
       ];
-  return mockSaveRecipe({
+  const imported = mockSaveRecipe({
     name: value.name ?? "导入的模板",
     description: value.description,
     match: value.match,
     steps
   });
+  // 导入副本的来源一律是 imported（方案 §15.2.3）：载荷里的 origin 只是「历史」，不可信。
+  imported.origin = "imported";
+  return imported;
 }

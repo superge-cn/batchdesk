@@ -5,6 +5,7 @@ import {
   mockAiCancel,
   mockAiStatus,
   mockApply,
+  mockBuildSupportPackage,
   mockCancel,
   mockCleanup,
   mockDeleteRecipe,
@@ -33,8 +34,9 @@ import {
   mockSaveRecipe,
   mockSetConfig,
   mockSetUiState,
+  mockUndo,
   mockUndoDryRun,
-  mockUndo
+  mockWriteSupportPackage
 } from "./mock";
 import type {
   AiAskInput,
@@ -50,6 +52,8 @@ import type {
   ConfigScope,
   RenamePreview,
   ScopeView,
+  SupportPackage,
+  SupportPackageInput,
   UndoDryRun,
   IpcMeta,
   PreflightReport,
@@ -319,13 +323,26 @@ export async function describeRecipe(recipeId: string): Promise<RecipeApplySpec>
     : mockDescribeRecipe(recipeId);
 }
 
+/**
+ * 生成第 `stepIndex` 步的预览计划（Phase B：缺省第 1 步）。
+ *
+ * 多步模板**按步调用**：第 2 步起的输入由调用方给（`source: previous`＝上一步
+ * 实际产物），壳层不预生成所有步骤——第 2 步的输入在第 1 步执行前不存在
+ * （方案 §15.2.3）。只出计划不执行（§15.2.2）。
+ */
 export async function loadRecipe(
   recipeId: string,
-  pathParams: Record<string, unknown>
+  pathParams: Record<string, unknown>,
+  stepIndex?: number
 ): Promise<PlanDocument> {
   return isTauri()
-    ? invoke<PlanDocument>("loadRecipe", { recipeId, pathParams })
-    : mockLoadRecipe(recipeId, pathParams);
+    ? // 缺省第 1 步：显式传 null（`Option<usize>` ← null），不依赖"缺 key 即 None"的序列化细节。
+      invoke<PlanDocument>("loadRecipe", {
+        recipeId,
+        pathParams,
+        stepIndex: stepIndex ?? null
+      })
+    : mockLoadRecipe(recipeId, pathParams, stepIndex);
 }
 
 export async function saveRecipe(input: SaveRecipeInput): Promise<RecipeDocument> {
@@ -364,6 +381,31 @@ export async function aiAsk(input: AiAskInput): Promise<AiAskOutput> {
 /** 取消进行中的 AI 请求；幂等（壳层按 messageId 找取消标记）。 */
 export async function aiCancel(messageId: string): Promise<boolean> {
   return isTauri() ? invoke<boolean>("aiCancel", { messageId }) : mockAiCancel(messageId);
+}
+
+/** 把 API key 写入系统凭据库；浏览器/非 Windows 不提供该入口（OQ-44）。 */
+export async function setAiApiKey(apiKey: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke<void>("setAiApiKey", { apiKey });
+}
+
+// ── 支持包（设计 10 §5；方案 §9.7／§12.5）──────────────────────────────
+//
+// 两步是刻意的：`buildSupportPackage` 只读，给界面做**预览**（方案 §9.7「用户可在界面
+// 预览将上传的内容」）；`writeSupportPackage` 写回的就是刚预览过的那份，不重新组装。
+// 落点由壳层定（`<app_data>/exports/`），界面拿到的只是路径。
+
+export async function buildSupportPackage(
+  input: SupportPackageInput
+): Promise<SupportPackage> {
+  return isTauri()
+    ? invoke<SupportPackage>("buildSupportPackage", { input })
+    : mockBuildSupportPackage(input);
+}
+
+/** 把预览过的支持包落盘，返回落盘路径（壳层 `<app_data>/exports/`）。 */
+export async function writeSupportPackage(pkg: SupportPackage): Promise<string> {
+  return isTauri() ? invoke<string>("writeSupportPackage", { package: pkg }) : mockWriteSupportPackage(pkg);
 }
 
 export function listenAiDelta(handler: (event: AiDeltaEvent) => void): Promise<UnlistenFn> {

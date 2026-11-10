@@ -213,6 +213,45 @@ export interface StorageInfo {
   journalFile: string;
 }
 
+// ── 支持包（设计 10 §5；方案 §9.7／§12.5）──────────────────────────────
+//
+// 诊断记录与 `platform::diaglog::DiagnosticLogRecord` 同形（设计 10 §2）。
+// `fields` 的值只能是标量（契约规定），界面只渲染不编辑。
+export interface DiagnosticLogRecord {
+  ts: string;
+  level: string;
+  target: string;
+  code?: string;
+  taskId?: string;
+  traceId?: string;
+  message: string;
+  fields?: Record<string, string | number | boolean>;
+}
+
+export interface SupportCodeCount {
+  code: string;
+  count: number;
+}
+
+export interface SupportPackage {
+  version: string;
+  /** `"dev"`／`"release"`；方案 §12.5 的 B/C 通道未实现，壳层只如实标构建类型。 */
+  build: string;
+  os: string;
+  arch: string;
+  generatedAt: string;
+  diagnosticLog: DiagnosticLogRecord[];
+  errorCodeStats: SupportCodeCount[];
+  reproSteps: string;
+}
+
+export interface SupportPackageInput {
+  reproSteps?: string;
+  maxLogLines?: number;
+  includeDiagnosticLog?: boolean;
+  includeErrorCodeStats?: boolean;
+}
+
 export interface IpcMeta {
   contractVersion: number;
   kernelVersion: string;
@@ -312,6 +351,7 @@ export interface UiNavigationState {
 export interface UiLayoutState {
   sidebarWidth?: number;
   sidebarCollapsed?: boolean;
+  aiPanelOpen?: boolean;
 }
 
 /** 排序方向（内核 `SortDirection`，线协议小写）。 */
@@ -335,12 +375,23 @@ export interface UiState {
   navigation?: UiNavigationState;
   layout?: UiLayoutState;
   tables?: Record<string, UiTableState>;
+  /**
+   * 模板运行偏好（设计 03 §11.2）：本机、可重置、不导出（§15.3）。
+   * 运行模式（一键/逐步骤）是 UI 偏好，不写进 `RecipeDocument`（设计 03 §5.2）。
+   */
+  templatePrefs?: Record<string, { runMode?: "stepwise" | "one-click" }>;
 }
 
 // ── 处理模板（C37；设计 03 §5／§6，方案 §15）──────────────────────────
 /** 步骤取哪份输入：`original`＝原始选择，`previous`＝上一步实际产物（方案 §15.2.3）。 */
 export type StepSource = "original" | "previous";
 export type RecipeFormat = "desktop" | "web";
+/**
+ * 模板来源（schema v7，OQ-45 裁决）：本机新建 `local`／导入 `imported`。
+ * 决定「一键/逐步骤」的缺省（本机新建默认一键、导入默认逐步骤，方案 §15.2.3）；
+ * `undefined`＝来源未知（v6 及更早模板迁移后的状态），按导入默认处理。
+ */
+export type RecipeOrigin = "local" | "imported";
 
 /**
  * 适用性建议（方案 §15.2.1）：**只读扩展名与用户标签**，只用于"可能适用"的排序与提示。
@@ -401,6 +452,8 @@ export interface RecipeDocument {
   steps: TemplateStep[];
   match?: RecipeMatch;
   sourceFormat?: RecipeFormat;
+  /** 来源（schema v7）：本机新建 `local`／导入 `imported`；缺省＝来源未知。 */
+  origin?: RecipeOrigin;
   createdAt: string;
   updatedAt?: string;
   lastUsedAt?: string;
@@ -438,11 +491,36 @@ export interface RecipeSlotSpec {
 }
 
 /**
- * `describeRecipe` 出参：一份模板的「一键套用」静态评估。
+ * 多步模板**一步**的静态评估（Phase B，方案 §15.2.3）。
+ *
+ * 每步单独判定：可套用给出自己的槽位，不可套用给出自己的原因。
+ * `source` 决定该步输入从哪来——`previous` 的输入是第 1 步执行前不存在的
+ * 上一步产物，所以多步模板**不预生成所有步骤计划**。
+ */
+export interface StepApplySpec {
+  stepId: string;
+  index: number;
+  feature?: string;
+  kind?: PlanAction;
+  source: StepSource;
+  applicable: boolean;
+  reason?: string;
+  required: RecipeSlotSpec[];
+  outputs: RecipeSlotSpec[];
+  /** 高风险步骤（删除等 §7.11 口径）：含高风险步骤的模板禁用一键。 */
+  highRisk: boolean;
+}
+
+/**
+ * `describeRecipe` 出参：一份模板的静态评估。
  *
  * `applicable=false` 时 `reason` 说明原因（未绑定/多步/变换正文不在计划参数里/
  * 旧版压缩模板），界面**不渲染套用按钮**、只展示原因——不给按了必报错的按钮
  * （同 ADR-0072/0077 的口径）。判定与 `loadRecipe` 同源（壳层 `assess`）。
+ *
+ * Phase B：`steps` 逐段给出评估；`oneClickAllowed` 决定能否一键执行
+ * （全部步骤可套用且无高风险步骤）。`applicable`/`feature`/`required`/`outputs`
+ * 保持单步语义——多步模板为 `false`／`undefined`／空，由 `steps` 承担。
  */
 export interface RecipeApplySpec {
   recipeId: string;
@@ -452,6 +530,8 @@ export interface RecipeApplySpec {
   kind?: PlanAction;
   required: RecipeSlotSpec[];
   outputs: RecipeSlotSpec[];
+  steps: StepApplySpec[];
+  oneClickAllowed: boolean;
 }
 
 /** `exportRecipe` 出参：序列化后的当前版本（v5）JSON（落盘位置由壳层另存对话框决定）。 */
@@ -484,6 +564,8 @@ export interface AiAskInput {
   sessionId?: string;
   text: string;
   context: AiContext;
+  /** 本会话先前的用户文字（不含助手回复/文件名/路径/内容）。 */
+  history?: string[];
   consentToken?: string;
 }
 
@@ -526,6 +608,7 @@ export interface PlanBundleStep {
 export interface BundleConflict {
   kind: string;
   stepIds: string[];
+  paths?: string[];
   riskLevel: RiskLevel;
 }
 

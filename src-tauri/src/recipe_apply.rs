@@ -13,7 +13,8 @@
 //!   因为它们在各自路由里就是必填字段，语义上属于"从哪儿读"）；
 //! - `outputs`：**至少给其中一个**（输出侧的互斥组，如 `output`／`outputDir`；空组＝该功能没有输出路径）。
 
-use kernel::recipe::{RecipeDocument, RecipeSampling};
+use kernel::plan::PlanAction;
+use kernel::recipe::{RecipeDocument, RecipeSampling, StepSource};
 use serde_json::{Map, Value};
 
 /// 一个路径槽位：线协议键 ＋ 是否多值。
@@ -547,7 +548,7 @@ fn is_compress(snapshot: &Map<String, Value>) -> bool {
 
 /// 一次套用的**静态评估**：槽位选择、守卫与拒绝原因。
 ///
-/// `describeRecipe`（界面据此决定给不给「套用」按钮）与 `build_invocation`
+/// `describeRecipe`（界面据此决定给不给「套用」按钮）与 `build_invocation_step`
 /// （真正组装请求）共用同一份判定——写两遍必然漂移。
 pub struct ApplyAssessment {
     pub feature: String,
@@ -557,10 +558,17 @@ pub struct ApplyAssessment {
     pub param_map: &'static FeatureParamMap,
 }
 
-/// Err＝该模板不可一键套用的原因（展示给界面，不再给一个按了必报错的按钮）。
-pub fn assess(document: &RecipeDocument) -> Result<ApplyAssessment, String> {
+/// 第 `step_index` 步的静态评估（Phase B 多步执行：每步单独判定）。
+///
+/// 一套守卫（正文必填/正文任一项/f06 baseDir/c10 旧压缩/c11 按键列）同时服务
+/// describe 与 build——不限制步数，多步模板的每一步都必须能单独评估，
+/// 任一步不可套用就如实报出。
+pub fn assess_step(
+    document: &RecipeDocument,
+    step_index: usize,
+) -> Result<ApplyAssessment, String> {
     let (feature, step) = document
-        .single_step_binding()
+        .step_binding(step_index)
         .map_err(|error| error.message)?;
     let entry = slots_for(&feature)
         .ok_or_else(|| format!("feature {feature} has no registered path slots in this shell"))?;
@@ -700,22 +708,43 @@ fn apply_param_map(
     Ok(())
 }
 
-/// 把调用方给的路径参数按槽位校验后注入参数快照，再按映射表补齐请求形状。
+/// 单步模板的套用入口（Phase A 兼容，**仅测试用**：生产路径走
+/// `build_invocation_step`，`loadRecipe` 按 stepIndex 逐步生成）。
 ///
+/// 多步模板**不走这里**：每一步要单独评估/生成计划（见 `build_invocation_step`），
+/// 第 2 步起的输入在第 1 步执行前不存在（§15.2.3）。这里如实拒绝，不让调用方
+/// 把多步模板当成"第 0 步"悄悄套出去。
+#[cfg(test)]
+pub fn build_invocation(
+    document: &RecipeDocument,
+    path_params: &Map<String, Value>,
+) -> Result<RecipeInvocation, String> {
+    if document.steps.len() > 1 {
+        return Err(format!(
+            "multi-step recipe has {} steps; plan each step separately",
+            document.steps.len()
+        ));
+    }
+    build_invocation_step(document, 0, path_params)
+}
+
+/// 第 `step_index` 步的套用（Phase B：每步单独生成计划，输入由调用方给）。
+///
+/// 把调用方给的路径参数按槽位校验后注入参数快照，再按映射表补齐请求形状。
 /// 四条硬规则，都是为了"宁可报错也不猜"：
 /// 1. 快照里**已经带**某个路径键 → 报错（不变量 13 说模板不该存路径；真存了说明这份
 ///    模板绕过了保存通道，静默覆盖等于把这条边界抹掉）；
 /// 2. 必填槽缺失 → 报错并列出缺哪些；
 /// 3. 给了该功能**没有的槽位键** → 报错，不静默忽略（忽略了就会让界面上填了却没生效变成静默失败）；
-/// 4. 评估（拒绝原因）与槽位选择全部来自 `assess`，与本命令的 describe 输出同源。
-pub fn build_invocation(
+/// 4. 评估（拒绝原因）与槽位选择全部来自 `assess_step`，与本命令的 describe 输出同源。
+pub fn build_invocation_step(
     document: &RecipeDocument,
+    step_index: usize,
     path_params: &Map<String, Value>,
 ) -> Result<RecipeInvocation, String> {
-    let assessment = assess(document)?;
+    let assessment = assess_step(document, step_index)?;
     let feature = assessment.feature.as_str();
-    // assess 已保证单步（single_step_binding 在内），这里取 steps[0] 是安全的。
-    let step = &document.steps[0];
+    let step = &document.steps[step_index];
 
     let (required, outputs) = (assessment.required, assessment.outputs);
     let mut declared: Vec<&str> = required.iter().map(|slot| slot.key).collect();
@@ -837,6 +866,10 @@ pub fn build_invocation(
 
 /// `describeRecipe` 的返回体：界面据此决定给不给「套用」按钮、渲染哪些输入框。
 /// 不可套用时 `reason` 说明原因（拒绝是静态评估的一部分，同 build 一套判定）。
+///
+/// Phase B：`steps` 逐段给出评估（多步模板每一步的槽位/拒绝原因/高风险），
+/// `oneClickAllowed` 决定能否一键执行；`applicable`/`feature`/`required`/`outputs`
+/// 保持单步语义（多步模板为 false／None／空，由 `steps` 承担）。
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecipeApplySpec {
@@ -847,9 +880,29 @@ pub struct RecipeApplySpec {
     pub kind: Option<String>,
     pub required: Vec<SlotSpec>,
     pub outputs: Vec<SlotSpec>,
+    pub steps: Vec<StepApplySpec>,
+    pub one_click_allowed: bool,
 }
 
+/// 多步模板的一步评估（Phase B，§15.2.3）。
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepApplySpec {
+    pub step_id: String,
+    pub index: usize,
+    pub feature: Option<String>,
+    pub kind: Option<String>,
+    /// `"original"`（原始选择）或 `"previous"`（上一步实际产物）。
+    pub source: String,
+    pub applicable: bool,
+    pub reason: Option<String>,
+    pub required: Vec<SlotSpec>,
+    pub outputs: Vec<SlotSpec>,
+    /// 高风险步骤（删除／覆盖／不可逆，§7.11）：含高风险步骤的模板禁用一键。
+    pub high_risk: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlotSpec {
     pub key: String,
@@ -865,26 +918,81 @@ fn slot_spec(slot: &PathSlot) -> SlotSpec {
 
 /// 静态评估一份模板的套用面：能套＝给出槽位；不能套＝给出原因。
 pub fn describe(document: &RecipeDocument) -> RecipeApplySpec {
-    let first = document.steps.first();
-    match assess(document) {
-        Ok(assessment) => RecipeApplySpec {
-            recipe_id: document.recipe_id.clone(),
-            applicable: true,
-            reason: None,
-            feature: Some(assessment.feature),
-            kind: first.map(|step| step.kind.as_str().to_string()),
-            required: assessment.required.iter().map(slot_spec).collect(),
-            outputs: assessment.outputs.iter().map(slot_spec).collect(),
+    let mut steps = Vec::with_capacity(document.steps.len());
+    for (index, step) in document.steps.iter().enumerate() {
+        let source = match step.source {
+            StepSource::Original => "original",
+            StepSource::Previous => "previous",
+        };
+        let high_risk = step.kind == PlanAction::Delete;
+        match assess_step(document, index) {
+            Ok(assessment) => steps.push(StepApplySpec {
+                step_id: step.step_id.clone(),
+                index,
+                feature: Some(assessment.feature.clone()),
+                kind: Some(step.kind.as_str().to_string()),
+                source: source.to_string(),
+                applicable: true,
+                reason: None,
+                required: assessment.required.iter().map(slot_spec).collect(),
+                outputs: assessment.outputs.iter().map(slot_spec).collect(),
+                high_risk,
+            }),
+            Err(reason) => steps.push(StepApplySpec {
+                step_id: step.step_id.clone(),
+                index,
+                feature: step.feature.clone(),
+                kind: Some(step.kind.as_str().to_string()),
+                source: source.to_string(),
+                applicable: false,
+                reason: Some(reason),
+                required: Vec::new(),
+                outputs: Vec::new(),
+                high_risk,
+            }),
+        }
+    }
+    let one_click_allowed =
+        steps.iter().all(|step| step.applicable) && !steps.iter().any(|step| step.high_risk);
+    let first = steps.first();
+    let single = steps.len() == 1;
+    let applicable = single && first.is_some_and(|step| step.applicable);
+    let reason = if applicable {
+        None
+    } else if single {
+        first.and_then(|step| step.reason.clone())
+    } else {
+        Some(format!(
+            "multi-step recipe has {} steps; apply step by step",
+            steps.len()
+        ))
+    };
+    RecipeApplySpec {
+        recipe_id: document.recipe_id.clone(),
+        applicable,
+        reason,
+        feature: if applicable {
+            first.and_then(|step| step.feature.clone())
+        } else {
+            None
         },
-        Err(reason) => RecipeApplySpec {
-            recipe_id: document.recipe_id.clone(),
-            applicable: false,
-            reason: Some(reason),
-            feature: first.and_then(|step| step.feature.clone()),
-            kind: first.map(|step| step.kind.as_str().to_string()),
-            required: Vec::new(),
-            outputs: Vec::new(),
+        kind: if applicable {
+            first.and_then(|step| step.kind.clone())
+        } else {
+            None
         },
+        required: if applicable {
+            first.map(|step| step.required.clone()).unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        outputs: if applicable {
+            first.map(|step| step.outputs.clone()).unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        steps,
+        one_click_allowed,
     }
 }
 
@@ -1123,6 +1231,83 @@ mod tests {
         multi.steps.push(multi.steps[0].clone());
         let error = build_invocation(&multi, &Map::new()).unwrap_err();
         assert!(error.contains("multi-step"), "{error}");
+    }
+
+    #[test]
+    fn describe_assesses_each_step_and_the_one_click_gate() {
+        // Phase B（§15.2.3）：多步模板逐段评估；单步语义的 applicable 保持 false。
+        let mut document = recipe(
+            "f01",
+            PlanAction::Split,
+            object(&[("targetBytes", json!(1024))]),
+        );
+        document.steps.push(kernel::recipe::TemplateStep {
+            step_id: "step-2".to_string(),
+            kind: PlanAction::Rename,
+            params_snapshot: object(&[("prefix", json!("2026_"))]),
+            source: StepSource::Previous,
+            feature: Some("f12".to_string()),
+            sampling: None,
+            content: None,
+        });
+        let spec = describe(&document);
+        assert!(!spec.applicable, "多步模板不走单步一键");
+        assert_eq!(spec.steps.len(), 2);
+        assert_eq!(spec.steps[0].source, "original");
+        assert_eq!(spec.steps[1].source, "previous");
+        assert!(spec.steps.iter().all(|step| step.applicable));
+        assert!(spec.one_click_allowed);
+
+        // 含高风险步骤（删除）→ 一键禁用，且该步如实标 high_risk。
+        document.steps.push(kernel::recipe::TemplateStep {
+            step_id: "step-3".to_string(),
+            kind: PlanAction::Delete,
+            params_snapshot: Map::new(),
+            source: StepSource::Original,
+            feature: Some("c09".to_string()),
+            sampling: None,
+            content: None,
+        });
+        let spec = describe(&document);
+        assert!(!spec.one_click_allowed);
+        assert!(spec.steps[2].high_risk);
+        assert!(spec.steps[2].applicable, "c09 本身仍可套用，只是高风险");
+    }
+
+    #[test]
+    fn build_invocation_step_selects_that_steps_slots() {
+        // 每步单独生成计划：第 2 步的输入由调用方给（不预生成所有步骤）。
+        let mut document = recipe(
+            "f01",
+            PlanAction::Split,
+            object(&[("targetBytes", json!(1024))]),
+        );
+        document.steps.push(kernel::recipe::TemplateStep {
+            step_id: "step-2".to_string(),
+            kind: PlanAction::Rename,
+            params_snapshot: object(&[("prefix", json!("2026_"))]),
+            source: StepSource::Previous,
+            feature: Some("f12".to_string()),
+            sampling: None,
+            content: None,
+        });
+        let first = build_invocation_step(
+            &document,
+            0,
+            &object(&[("file", json!("/in/a.txt")), ("outputDir", json!("/out"))]),
+        )
+        .unwrap();
+        assert_eq!(first.kind, "f01");
+        assert_eq!(first.params["targetBytes"], json!(1024));
+
+        let second =
+            build_invocation_step(&document, 1, &object(&[("dir", json!("/out"))])).unwrap();
+        assert_eq!(second.kind, "f12");
+        assert_eq!(second.params["dir"], json!("/out"));
+        assert_eq!(second.params["prefix"], json!("2026_"));
+
+        let error = build_invocation_step(&document, 2, &Map::new()).unwrap_err();
+        assert!(error.contains("no step 2"), "{error}");
     }
 
     #[test]

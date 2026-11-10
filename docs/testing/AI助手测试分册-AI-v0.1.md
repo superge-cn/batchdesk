@@ -1,6 +1,6 @@
 # AI 助手测试分册（AI v0.1）
 
-> 状态：v0.1 草案 ｜ 日期：2026-10-28 ｜ 上游：T v1.13（§2.1/§2.2/§4/§5）、产品方案 v1.21 第 14 章、[设计 14](../design/14-AI助手与工具调用契约.md) ｜ 性质：F15 Phase 1/2/3 的专项测试执行载体
+> 状态：v0.1 草案 ｜ 日期：2026-10-28 ｜ 上游：T v1.13（§2.1/§2.2/§4/§5）、产品方案 v1.22 第 14 章、[设计 14](../design/14-AI助手与工具调用契约.md) ｜ 性质：F15 Phase 1/2/3 的专项测试执行载体
 >
 > **范围**：F15 Phase 1/2/3（P1/阶段 1）。Phase 1 只测 4 类任务（F12/F05/F07/C07）、单计划；Phase 2 测全部 plan-capable 功能、单计划；Phase 3 测多计划/依赖/跨计划冲突。远程模型 opt-in、不发送内容/默认不发文件名、永不直接 apply、工具 allowlist、E6xxx。Web AI Phase 3 单独列。
 >
@@ -30,7 +30,7 @@
 | AI-04 | 正常清单移动 | 输入“按年份把合同移到对应文件夹” | 生成 c07 意图；目标目录计划正确；风险评估可见 |
 | AI-05 | 歧义/缺参 | 输入“帮我整理一下” | 追问缺失功能/参数；不生成计划；不调用写工具 |
 | AI-06 | 不支持的功能 | 输入“把这批文件转成 PDF” | 明确不支持/阶段 1 未覆盖；不调用 planOperation；不幻觉 |
-| AI-07 | 多任务请求 | 输入“移动并重命名并压缩” | 说明 F15-lite 一次只做一个计划；建议拆步/配方；不自动串联 |
+| AI-07 | 多任务请求 | 输入“移动并重命名并压缩” | Phase 3 生成步骤链并逐项预览；不自动串联执行、不自动 apply |
 | AI-08 | 计划预览与撤销 | AI 生成计划→用户确认执行→撤销 | 预览与执行一致；撤销走 Journal；AI 总结来自 ApplyReport |
 
 ### 2.2 安全用例（AI 安全套件）
@@ -59,14 +59,18 @@
 | AI-23 | 阶段不支持多计划 | Phase 1/2 收到多步请求 | E6011；提示单计划/升级；不执行 |
 | AI-24 | 多计划注入 | 第 2 步意图含恶意参数 | 仅第 2 步被 schema/allowlist 拒绝；第 1 步不受影响；不自动执行 |
 | AI-25 | 目录覆盖矩阵 | 对 FunctionCatalog 中 `aiPhase<=当前阶段` 的每个 plan-capable 功能各跑一条 | 每个功能至少一条 AI-Plan 用例通过；不可计划功能不可见 |
-| AI-26 | 全部可计划功能参数 schema | 逐个功能校验必填/类型/非法值 | 非法参数 E1002/E6003；合法参数生成计划；无直接 apply |
+| AI-26 | 全部可计划功能参数 schema | 逐个功能校验必填/类型/非法值 | 非法参数 E6003（壳层 E1002 由 AI 层归一）；合法参数生成计划；无直接 apply |
+
+**Phase 2 目录矩阵（2026-11-09，切片）**：`AI_PHASE=2`，FunctionCatalog 登记 24 个壳层可计划功能（f12/f05/f07/c07＋c09/f01–f04/f06/f08–f11/c01–c04/c08/c10–c14）。`src-tauri/src/ai.rs` 的 `catalog_covers_every_shell_routable_plan_kind` 防目录与壳层路由漂移，`every_catalog_kind_reaches_the_plan_factory_with_one_bundle_step` 逐 kind 断言单步 bundle，`fixtures/ai/AI-14` 覆盖此前锁定的 c11；不可计划/未路由 kind（c05/c06/f13/c15/s01）由 `non_plan_capable_or_unrouted_kinds_are_rejected_with_e6003` 拒绝。AI-26 的参数错误面已收口：壳层 `planOperation` 路由是唯一 schema 源，模型参数非法（E1002）由 AI 层归一为 E6003，不建第二份逐功能 schema 表；AI-25 的完整验收保留到目录/多计划全部收口。多轮历史已接：`AI-UI-17` 断言第二次请求只带先前用户文字、不含当前句；Provider 侧 `history_is_forwarded_to_the_model_request`／`provider_request_body_includes_history_before_the_current_turn`／`history_defaults_to_empty_when_omitted`（ADR-0087）。
+
+**Phase 3 多计划矩阵（2026-11-09，切片）**：`AI_PHASE=3`；`multi_step_intent_produces_a_topologically_ordered_bundle`（逆序输入仍按依赖输出）、`dependency_cycle_is_rejected_with_e6010`、`unknown_dependency_is_rejected_with_e6010`、`bundle_over_ten_steps_is_rejected_with_e6010`、`duplicate_step_id_is_rejected_with_e6003`、`target_overlap_blocks_the_conflicting_steps`（冲突步骤 `skipped`＋`target-overlap`）已落地；前端 `AiPanel.test.tsx` 覆盖步骤链逐项预览、依赖未完成等待（AI-UI-10）、依赖失败后停止（AI-UI-10c）与冲突阻断；`e2e/ai-panel.spec.ts` 覆盖真浏览器多计划依赖等待。E6011 自此只属于 Phase 1/2，Phase 3 不再产生。**仍缺**：真实模型 staging 验收（Provider 已接，见 ADR-0086）。配方套用走本地模板库、不作为模型工具：`AI-UI-18` 与 `AI-INT-05` 断言入口只做本地跳转且 `askCount` 为 0（ADR-0088）。
 
 ## 3. 执行方式
 
 - **自动化候选**：AI-01/05/06/12/13/14/15/17/18/19/20/21/23/24/25/26 用 mock model + fixtures/ai 做确定性测试；不接真实 provider。
 - **人工**：AI-09/10/11/16/22 的提示注入/隐私/配额/失败停止；在 staging/隔离环境执行，抓包检查请求体。
-- **真实 provider**：仅手工/staging；API key 不进 CI；记录 provider/model 版本与数据政策。
-- **前端面板（Phase 1 附加层，2026-11-09）**：`web/src/AiPanel.test.tsx`（组件 18 条）与 `web/src/App.aiPanel.test.tsx`（集成 4 条）走 Vitest＋浏览器 mock；`web/e2e/ai-panel.spec.ts`（6 条）走 Playwright＋Chromium；场景开关（`?aiScenario=`／`mockSetAiScenario`）与断言依据见《AI助手前端面板-mock验证方案-v0.1.md》。这一层只验证 UI 契约（同意/流式/工具卡/计划束交接/取消/E6xxx 文案/双语/a11y）与「永不直接 apply」，不替代真实 Provider/WebView 验收。
+- **真实 provider**：Provider 已接（ADR-0086：固定官方端点＋Windows 凭据库＋`BATCHDESK_AI_MODEL`/`BATCHDESK_AI_TIMEOUT_SECS`）；staging 验收仍为手工、API key 不进 CI；记录 provider/model 版本与数据政策。
+- **前端面板（Phase 1 附加层，2026-11-09）**：`web/src/AiPanel.test.tsx`（组件 19 条）与 `web/src/App.aiPanel.test.tsx`（集成 4 条）走 Vitest＋浏览器 mock；`web/e2e/ai-panel.spec.ts`（6 条）走 Playwright＋Chromium；场景开关（`?aiScenario=`／`mockSetAiScenario`）与断言依据见《AI助手前端面板-mock验证方案-v0.1.md》。这一层只验证 UI 契约（同意/流式/工具卡/计划束交接/取消/E6xxx 文案/双语/a11y）与「永不直接 apply」，不替代真实 Provider/WebView 验收。
 - **Web（Phase 3）**：另列 TW-G 用例；Phase 1/2 不执行（Phase 1 的浏览器面板 mock 验证见上一条，不属 TW-G）。
 
 ## 4. fixtures/ai 格式

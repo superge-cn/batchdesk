@@ -2,7 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FeaturePages } from "./FeaturePages";
-import { planOperation, setUiState } from "./lib/ipc";
+import { planOperation, renamePreview, setUiState } from "./lib/ipc";
+import type { RenamePreview } from "./lib/ipc/types";
 
 // 23 个功能视图共用这一张预览表，所以把手只建一处、表 id 按功能码分键
 // （设计 03 §11.2 的 `tables`：`feature.<功能码>`）。这里钉三件事：
@@ -136,5 +137,76 @@ describe("功能页预览表的把手（设计 03 §11.2 的 tables）", () => {
     await tablesPatch();
     expect(planOperation).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/参数已改动/)).toBeNull();
+  });
+});
+
+// C05 预览表（F12 页内嵌的冲突检测表）与功能计划预览是**两张表**：表 id 分开存，
+// 否则拖 C05 的列会擦掉 F12 计划表的列宽（设计 03 §11.2 的 `tables` 分键）。
+describe("C05 预览表的把手（F12 页内嵌）", () => {
+  const c05Preview: RenamePreview = {
+    planId: "01TABLE",
+    kind: "f12",
+    counts: { toProcess: 2, skipped: 0, conflicts: 1, blocked: 0 },
+    rows: [
+      { entryId: "c1", oldPath: "/dir/z.txt", newPath: "/dir/b.txt", status: "normal", twoPhase: false },
+      { entryId: "c2", oldPath: "/dir/a.txt", newPath: "/dir/c.txt", status: "conflict", twoPhase: true }
+    ],
+    highlights: []
+  };
+
+  async function withC05Preview() {
+    vi.mocked(renamePreview).mockResolvedValueOnce(c05Preview);
+    const user = userEvent.setup();
+    render(<FeaturePages view="f12" onBack={() => undefined} />);
+    await user.click(screen.getByRole("button", { name: /生成计划预览/ }));
+    await screen.findByRole("button", { name: /按状态排序/ });
+    return user;
+  }
+
+  /** 只看 C05 那张表的行（F12 页上还有计划预览表，不能全局取）。 */
+  function c05Paths(): string[] {
+    const card = document.querySelector('[aria-labelledby="c05-preview"]');
+    if (!card) return [];
+    return Array.from(card.querySelectorAll(".row:not(.row-head) .path")).map(
+      (cell) => cell.textContent ?? ""
+    );
+  }
+
+  it("C05 表有自己的排序按钮与列宽把手", async () => {
+    await withC05Preview();
+    expect(screen.getByRole("button", { name: /按状态排序/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /按旧名 → 新名排序/ })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: /调整状态列宽/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("separator", { name: /调整旧名 → 新名列宽/ })
+    ).toBeInTheDocument();
+  });
+
+  it("拖 C05 列宽写到 table.feature.c05，不碰 F12 计划表", async () => {
+    const user = await withC05Preview();
+    const handle = screen.getByRole("separator", { name: /调整状态列宽/ });
+    handle.focus();
+    await user.keyboard("{ArrowRight}");
+    await waitFor(() =>
+      expect(
+        vi.mocked(setUiState).mock.calls.some(
+          ([patch]) =>
+            (patch as { tables?: Record<string, { columnWidths?: Record<string, number> }> })
+              .tables?.["table.feature.c05"]?.columnWidths?.status !== undefined
+        )
+      ).toBe(true)
+    );
+  });
+
+  it("C05 排序写 table.feature.c05.sort，行序按 oldPath 变", async () => {
+    const user = await withC05Preview();
+    expect(c05Paths()[0]).toContain("/dir/z.txt");
+
+    await user.click(screen.getByRole("button", { name: /按旧名 → 新名排序/ }));
+
+    await waitFor(() => expect(c05Paths()[0]).toContain("/dir/a.txt"));
+    expect(await tablesPatch()).toEqual({
+      "table.feature.c05": { sort: { column: "rename", direction: "asc" } }
+    });
   });
 });

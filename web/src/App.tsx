@@ -18,6 +18,7 @@ import {
   Info,
   Loader2,
   Moon,
+  PanelLeft,
   Pause,
   Play,
   RefreshCw,
@@ -322,6 +323,29 @@ function AppShell() {
   /** F15：右侧 AI 面板开关与最近一次计划的交接目标（执行仍走既有预览）。 */
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPlan, setAiPlan] = useState<PlanDocument | null>(null);
+  /** 设计 03 §11.2 的 layout.sidebarCollapsed：桌面窄屏/专注模式收起侧栏。 */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /** layout 分节的写回：只合并 patch，不覆盖 sidebarWidth 等其它键。 */
+  const persistLayout = useCallback((patch: Partial<UiLayoutState>) => {
+    const layout = { ...layoutRef.current, ...patch };
+    layoutRef.current = layout;
+    // UiState 可丢：写失败静默（同 navigation 分节口径）。
+    setUiState({ layout }).catch(() => undefined);
+  }, []);
+  const toggleSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    persistLayout({ sidebarCollapsed: next });
+  };
+  const toggleAi = () => {
+    const next = !aiOpen;
+    setAiOpen(next);
+    persistLayout({ aiPanelOpen: next });
+  };
+  const closeAi = () => {
+    setAiOpen(false);
+    persistLayout({ aiPanelOpen: false });
+  };
   // 设计 03 §11.2：最近目录只用于"预填 + 候选"，不参与任何业务判定。
   const [recentDirs, setRecentDirs] = useState<string[]>([]);
   const navigationRef = useRef<UiNavigationState>({});
@@ -424,6 +448,8 @@ function AppShell() {
           const { min, max } = sidebarBounds();
           setSidebarWidth(clampPixels(layout.sidebarWidth, min, max));
         }
+        if (layout.sidebarCollapsed) setSidebarCollapsed(true);
+        if (layout.aiPanelOpen) setAiOpen(true);
         const last = preferredDirectory(navigation);
         // 只填空输入框：用户已经在敲的话不覆盖。
         if (last) setRoot((current) => (current.trim() ? current : last));
@@ -622,6 +648,8 @@ function AppShell() {
     setRecentDirs([]);
     layoutRef.current = {};
     setSidebarWidth(null);
+    setSidebarCollapsed(false);
+    setAiOpen(false);
     uiTables.forget();
   }, [uiTables]);
 
@@ -925,7 +953,7 @@ function AppShell() {
   return (
     <div className="app-shell">
       <div
-        className="glass-shell"
+        className={`glass-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
         style={
           sidebarWidth === null
             ? undefined
@@ -1010,6 +1038,21 @@ function AppShell() {
               <button
                 className="theme-toggle"
                 type="button"
+                data-testid="sidebar-toggle"
+                aria-pressed={sidebarCollapsed}
+                aria-label={
+                  sidebarCollapsed ? t("layout.sidebar.expand") : t("layout.sidebar.collapse")
+                }
+                onClick={toggleSidebar}
+              >
+                <PanelLeft size={14} />
+                {sidebarCollapsed
+                  ? t("layout.sidebar.expand")
+                  : t("layout.sidebar.collapse")}
+              </button>
+              <button
+                className="theme-toggle"
+                type="button"
                 onClick={() => setTheme(resolvedTheme === "light" ? "dark" : "light")}
                 aria-label={t("app.theme.toggle")}
               >
@@ -1021,7 +1064,7 @@ function AppShell() {
                 type="button"
                 data-testid="ai-toggle"
                 aria-pressed={aiOpen}
-                onClick={() => setAiOpen((value) => !value)}
+                onClick={toggleAi}
               >
                 <Sparkles size={14} /> {t("ai.title")}
               </button>
@@ -1553,12 +1596,16 @@ function AppShell() {
 
         <AiPanel
           open={aiOpen}
-          onClose={() => setAiOpen(false)}
+          onClose={closeAi}
           onOpenPlan={(plan) => {
             setAiPlan(plan);
             if ((FEATURE_VIEWS as readonly string[]).includes(plan.kind)) {
               selectView(plan.kind as View);
             }
+          }}
+          onOpenTemplates={() => {
+            closeAi();
+            selectView("templates");
           }}
           context={{ fileCount: 0, kinds: [], locale: lang, includeFileNames: false }}
         />

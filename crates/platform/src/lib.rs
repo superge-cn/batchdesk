@@ -8,6 +8,7 @@ pub mod config_store;
 pub mod csv;
 pub mod csv_merge;
 pub mod csv_range;
+pub mod diaglog;
 pub mod fs;
 pub mod ids;
 pub mod journal;

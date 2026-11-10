@@ -10,6 +10,7 @@ import {
 } from "./lib/ipc";
 import { VirtualList } from "./VirtualList";
 import { TableHead, columnVarsStyle, useUiTableState } from "./TableHead";
+import { sortRows } from "./lib/uiState";
 import type { MessageKey } from "./i18n";
 import { ErrorBanner } from "./ErrorBanner";
 import { isActiveState, phaseLabel, stateBadge, taskKindLabel, type Translate } from "./labels";
@@ -54,8 +55,9 @@ function timeText(task: TaskSummary) {
  *
  * 任务列表本身也可能上百条，照样走窗口化（方案 6.2）。
  */
-// 任务表本轮只接**列宽**把手：排序要先拿到 `TaskSummary` 各列的准确字段名才能写比较器，
-// 没核实之前不猜（AGENTS 引用回核），缺口写在 ADR-0075 §6 与本文件注释里。
+// 列宽＋列头排序（设计 03 §11.2）：排序键按 `TaskSummary` 的字段名取
+// （AGENTS 引用回核：`taskId`／`done`／`total`／`state` 均取自类型定义，不猜）。
+// `actions` 列不参与排序——它是操作列，没有可比较的值。
 const TASKS_TABLE = "table.tasks";
 const TASKS_COLUMNS = ["task", "progress", "state", "actions"];
 const TASKS_LABELS: Record<string, MessageKey> = {
@@ -64,6 +66,18 @@ const TASKS_LABELS: Record<string, MessageKey> = {
   state: "tasks.table.state",
   actions: "tasks.table.actions"
 };
+
+/**
+ * 排序比较键（设计 03 §11.2 的视图态排序）：取 `TaskSummary` 的字段值，不取界面文案
+ * （文案随语言变，键不随语言变）。进度按 `done/total` 的比值排——条目数受计划规模影响，
+ * 比值才反映"跑到哪了"。
+ */
+function taskSortValue(task: TaskSummary, column: string): string | number | undefined {
+  if (column === "task") return task.taskId;
+  if (column === "progress") return task.total === 0 ? 0 : task.done / task.total;
+  if (column === "state") return task.state;
+  return undefined;
+}
 
 export function TaskHistory({
   live,
@@ -100,15 +114,22 @@ export function TaskHistory({
     void refresh();
   }, [refresh]);
 
-  /** 实时态覆盖静态快照：列表打开期间任务还在跑时，进度与状态必须是活的。 */
-  const rows = items
-    .map((task) => (live[task.taskId] ? { ...task, ...live[task.taskId] } : task))
-    .sort((left, right) => {
-      const leftStamp = left.finishedAt ?? left.startedAt ?? "";
-      const rightStamp = right.finishedAt ?? right.startedAt ?? "";
-      if (leftStamp === rightStamp) return right.taskId.localeCompare(left.taskId);
-      return rightStamp.localeCompare(leftStamp);
-    });
+  /**
+   * 实时态覆盖静态快照：列表打开期间任务还在跑时，进度与状态必须是活的。
+   * 用户排过序就按排序显示；没排过保持"最近结束在前"的缺省（视图态，不改派发序）。
+   */
+  const merged = items.map((task) =>
+    live[task.taskId] ? { ...task, ...live[task.taskId] } : task
+  );
+  const userSort = uiTables.sortOf(TASKS_TABLE);
+  const rows = userSort
+    ? sortRows(merged, userSort, taskSortValue)
+    : merged.sort((left, right) => {
+        const leftStamp = left.finishedAt ?? left.startedAt ?? "";
+        const rightStamp = right.finishedAt ?? right.startedAt ?? "";
+        if (leftStamp === rightStamp) return right.taskId.localeCompare(left.taskId);
+        return rightStamp.localeCompare(leftStamp);
+      });
 
   const run = async (task: TaskSummary, action: () => Promise<unknown>, done: string) => {
     setBusyTask(task.taskId);
@@ -273,7 +294,8 @@ export function TaskHistory({
               columns={TASKS_COLUMNS.map((id) => ({
                 id,
                 label: t(TASKS_LABELS[id]),
-                sortable: false
+                // actions 是操作列，没有可比较的值；其余三列按 TaskSummary 字段排。
+                sortable: id !== "actions"
               }))}
             />
             <VirtualList

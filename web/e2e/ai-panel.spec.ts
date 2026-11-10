@@ -57,16 +57,21 @@ test("AI-E2E-03 禁止工具：工具卡标红，E6004 错误条，无计划束"
   await expect(page.getByTestId("ai-bundle")).toHaveCount(0);
 });
 
-test("AI-E2E-04 多步：E6011，无计划束与去预览", async ({ page }) => {
-  await page.goto("/?aiScenario=multi-step");
+test("AI-E2E-04 多计划：依赖步骤先等待，首步去预览", async ({ page }) => {
+  await page.goto("/?aiScenario=multi-plan");
   await openPanel(page);
-  await ask(page, "分三步处理");
+  await ask(page, "先删重复行，再按日期改名");
 
-  const alert = page.getByTestId("ai-error").getByRole("alert");
-  await expect(alert).toContainText("E6011");
-  await expect(alert).toContainText("当前版本不支持多计划组合");
-  await expect(page.getByTestId("ai-bundle")).toHaveCount(0);
-  await expect(page.getByTestId("ai-open-preview")).toHaveCount(0);
+  const bundle = page.getByTestId("ai-bundle");
+  await expect(bundle).toContainText("2 步 · 2 条");
+  await expect(bundle).toContainText("第 1 步 · c11");
+  await expect(bundle).toContainText("第 2 步 · f12");
+  await expect(page.getByTestId("ai-error")).toHaveCount(0);
+  await expect(page.getByTestId("ai-open-preview-s2")).toBeDisabled();
+  await expect(page.getByTestId("ai-open-preview-s2")).toHaveText("等待前一步完成");
+
+  await page.getByTestId("ai-open-preview").click();
+  await expect(page.getByRole("heading", { name: "CSV 去重（C11）" })).toBeVisible();
 });
 
 test("AI-E2E-05 取消：E6007 收尾，无计划束，输入恢复可用", async ({ page }) => {

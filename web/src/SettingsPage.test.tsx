@@ -9,6 +9,9 @@ vi.mock("./lib/ipc", () => ({
   getConfig: vi.fn(),
   setConfig: vi.fn(),
   resetScope: vi.fn(),
+  // 支持包卡片（设置页内）只在这两条被点击时才调，这里给上空实现即可。
+  buildSupportPackage: vi.fn(),
+  writeSupportPackage: vi.fn(),
   toIpcError: (value: unknown) => value
 }));
 

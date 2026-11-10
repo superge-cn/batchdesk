@@ -23,6 +23,7 @@ use kernel::preflight::{run_preflight, DiskSpaceCheck, PreflightInput, Preflight
 use kernel::recipe::{RecipeDocument, RecipeMatch, TemplateStep};
 use kernel::ui_state::UiState;
 use platform::config_store::ConfigStore;
+use platform::diaglog::{DiagnosticEvent, DiagnosticLog, Level};
 use platform::fs::CliFsAdapter;
 use platform::ids::{new_plan_id, new_ulid};
 use platform::journal::FileJournal;
@@ -46,6 +47,7 @@ mod plan_kinds;
 mod plan_manifest;
 mod plan_ops;
 mod recipe_apply;
+mod support;
 mod tasks;
 mod window_state;
 
@@ -111,6 +113,10 @@ struct DataPaths {
     queue_path: PathBuf,
     /// C17a 操作日志（审计轨，ADR-0013）。
     oplog_path: PathBuf,
+    /// 诊断日志（运行轨，ADR-0091）：`<app_data>/logs/diagnostic.log`（JSONL）。
+    diag_log_path: PathBuf,
+    /// 支持包导出目录（设计 10 §5）：`<app_data>/exports/`。
+    exports_dir: PathBuf,
     config_dir: PathBuf,
 }
 
@@ -128,6 +134,8 @@ impl DataPaths {
             journal_path: base.join("journal.jsonl"),
             queue_path: base.join("tasks.json"),
             oplog_path: base.join("oplog.sqlite3"),
+            diag_log_path: base.join("logs/diagnostic.log"),
+            exports_dir: base.join("exports"),
             config_dir,
         })
     }
@@ -145,16 +153,19 @@ struct AppState {
     ai_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     paths: DataPaths,
     tasks: TaskQueue,
+    /// 诊断日志句柄（运行轨，ADR-0091）：命令层写诊断用，与任务队列同一条轨。
+    diag: DiagnosticLog,
 }
 
 impl AppState {
-    fn new(paths: DataPaths, tasks: TaskQueue) -> Self {
+    fn new(paths: DataPaths, tasks: TaskQueue, diag: DiagnosticLog) -> Self {
         Self {
             plans: Mutex::new(HashMap::new()),
             plan_secrets: Mutex::new(HashMap::new()),
             ai_cancels: Mutex::new(HashMap::new()),
             paths,
             tasks,
+            diag,
         }
     }
 }
@@ -205,6 +216,13 @@ fn getStorageInfo(state: State<'_, AppState>) -> StorageInfo {
 #[allow(non_snake_case)]
 fn getAiStatus() -> ai::AiStatus {
     ai::AiService::new(ai::production_provider(), Arc::new(|_, _| {})).status()
+}
+
+/// F15：把 API key 写入系统凭据库；不落 Config/UiState/日志（OQ-44）。
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn setAiApiKey(api_key: String) -> Result<(), IpcError> {
+    ai::store_api_key(&api_key).map_err(IpcError::from)
 }
 
 /// F15：发起单轮请求。Provider 未配置时 `aiAsk` 以 E6001 降级（设计 14 §8）。
@@ -562,19 +580,37 @@ fn cleanupRetention(
     )
     .map_err(IpcError::from)?;
     // C17a 操作日志随保留期清理（设计 10 §4：天数即 logging.retentionDays，
-    // 不把日志保留期当撤销窗口）；清理失败降级诊断输出，不影响演练结果。
+    // 不把日志保留期当撤销窗口）；清理失败只落诊断轨，不影响演练结果。
     if apply.unwrap_or(false) {
         match SqliteOperationLog::open(state.paths.oplog_path.clone()) {
             Ok((mut oplog, warning)) => {
                 if let Some(warning) = warning {
-                    eprintln!("{}: {}", warning.code, warning.message);
+                    diag_log(
+                        &state,
+                        Level::Warn,
+                        "oplog",
+                        Some(&warning.code),
+                        &warning.message,
+                    );
                 }
                 match oplog.purge_before(&outcome.cutoff) {
                     Ok(removed) => outcome.removed_log_records = removed,
-                    Err(error) => eprintln!("{}: {}", error.code, error.message),
+                    Err(error) => diag_log(
+                        &state,
+                        Level::Warn,
+                        "oplog",
+                        Some(&error.code),
+                        &error.message,
+                    ),
                 }
             }
-            Err(error) => eprintln!("{}: {}", error.code, error.message),
+            Err(error) => diag_log(
+                &state,
+                Level::Warn,
+                "oplog",
+                Some(&error.code),
+                &error.message,
+            ),
         }
     }
     Ok(outcome)
@@ -586,13 +622,54 @@ fn config_store(state: &State<'_, AppState>) -> ConfigStore {
     ConfigStore::new(state.paths.config_dir.clone())
 }
 
+/// 命令层写一条诊断（运行轨，ADR-0091）。`message` 必须是技术消息，调用方不得
+/// 带入用户内容或路径原文（设计 10 §3）。
+fn diag_log(
+    state: &State<'_, AppState>,
+    level: Level,
+    target: &str,
+    code: Option<&str>,
+    message: &str,
+) {
+    state.diag.log_event(
+        level,
+        target,
+        DiagnosticEvent {
+            code,
+            task_id: None,
+            trace_id: None,
+            message,
+            fields: None,
+        },
+    );
+}
+
+/// 诊断轨的脱敏开关跟随 `logging.logFullPaths`（设计 10 §3）：启动注入一次，
+/// 之后每次写配置刷新，避免用户改了设置而诊断轨仍按旧口径写。
+fn refresh_diag_full_paths(state: &State<'_, AppState>) {
+    state.diag.set_full_paths(
+        config_store(state)
+            .load_config()
+            .ok()
+            .and_then(|load| load.document.scopes.logging)
+            .and_then(|logging| logging.log_full_paths)
+            .unwrap_or(false),
+    );
+}
+
 /// 读取安全 scope 的生效值；缺失时回落到基线默认（方案 §9.1、§3.3）。
 fn security_settings(state: &State<'_, AppState>) -> (Vec<String>, u64, f64) {
     let store = config_store(state);
     match store.load_config() {
         Ok(load) => {
             if let Some(warning) = &load.warning {
-                eprintln!("{}: {}", warning.code, warning.message);
+                diag_log(
+                    state,
+                    Level::Warn,
+                    "config",
+                    Some(&warning.code),
+                    &warning.message,
+                );
             }
             let security = load.document.scopes.security.unwrap_or_default();
             (
@@ -606,7 +683,13 @@ fn security_settings(state: &State<'_, AppState>) -> (Vec<String>, u64, f64) {
             )
         }
         Err(error) => {
-            eprintln!("{}: {}", error.code, error.message);
+            diag_log(
+                state,
+                Level::Warn,
+                "config",
+                Some(&error.code),
+                &error.message,
+            );
             (
                 Vec::new(),
                 DEFAULT_DISK_MARGIN_FLOOR_BYTES,
@@ -806,8 +889,14 @@ fn getConfig(state: State<'_, AppState>, scope: Option<String>) -> Result<Value,
     let store = config_store(&state);
     let load = store.load_config().map_err(IpcError::from)?;
     if let Some(warning) = &load.warning {
-        // E5009/E1007 的用户提示待日志与 Toast 接入；此处先落诊断输出。
-        eprintln!("{}: {}", warning.code, warning.message);
+        // E5009（损坏重建）/E1007（高版本只读）落诊断轨；用户提示仍待 Toast 接入。
+        diag_log(
+            &state,
+            Level::Warn,
+            "config",
+            Some(&warning.code),
+            &warning.message,
+        );
     }
     match scope {
         Some(scope) => to_value(&load.document.scope_view(&scope).map_err(IpcError::from)?),
@@ -832,6 +921,7 @@ fn setConfig(state: State<'_, AppState>, scope: String, patch: Value) -> Result<
     store
         .save_config(&mut load.document)
         .map_err(IpcError::from)?;
+    refresh_diag_full_paths(&state);
     to_value(&load.document.scope_view(&scope).map_err(IpcError::from)?)
 }
 
@@ -850,6 +940,7 @@ fn resetScope(state: State<'_, AppState>, scope: String) -> Result<Value, IpcErr
     store
         .save_config(&mut load.document)
         .map_err(IpcError::from)?;
+    refresh_diag_full_paths(&state);
     to_value(&load.document.scope_view(&scope).map_err(IpcError::from)?)
 }
 
@@ -892,6 +983,7 @@ fn loadRecipe(
     state: State<'_, AppState>,
     recipe_id: String,
     path_params: Value,
+    step_index: Option<usize>,
 ) -> Result<PlanDocument, IpcError> {
     let document = config_store(&state)
         .get_recipe(&recipe_id)
@@ -906,8 +998,12 @@ fn loadRecipe(
             ))
         }
     };
-    let invocation = recipe_apply::build_invocation(&document, &object)
-        .map_err(|message| IpcError::new("E1002", format!("loadRecipe: {message}")))?;
+    // Phase B：多步模板按 stepIndex 逐步生成计划（缺省第 1 步）。
+    // 第 2 步起的输入由调用方给（`source: previous`＝上一步实际产物），
+    // 壳层不预生成所有步骤——第 2 步的输入在第 1 步执行前不存在（§15.2.3）。
+    let invocation =
+        recipe_apply::build_invocation_step(&document, step_index.unwrap_or(0), &object)
+            .map_err(|message| IpcError::new("E1002", format!("loadRecipe: {message}")))?;
     // c09 的根走 sourcePaths 通道、其余走 params——差别已经在槽位表里表达完，
     // 这里只有一条出口：同一次 planOperation 调用。
     planOperation(
@@ -964,6 +1060,7 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
                 .collect(),
             match_: input.match_,
             source_format: None,
+            origin: None,
             created_at,
             updated_at: None,
             last_used_at: None,
@@ -986,13 +1083,25 @@ fn saveRecipe(state: State<'_, AppState>, recipe: Value) -> Result<RecipeDocumen
             document
         }
     };
+    // 本机新建模板标记为 local（方案 §15.2.3：本机新建默认一键、导入默认逐步骤）。
+    // 导入走 `importRecipe`，那条路在存储层强制改写为 imported——载荷里的 origin 不可信。
+    document.mark_local();
     let store = config_store(&state);
     // 模板不保存路径（方案 §15.2.1、不变量 13）：界面已经把源/输出移出快照，这里再兜一层——
     // 保存入口只有一个，但调用方不止一个（将来的 Web 形态、脚本化保存），
     // 只靠"调用方自觉"迟早会有一条路径漏进模板。
-    // 返回的被删键清单在这条路上刻意丢掉：这里没有可写的日志轨（诊断日志轨仍待 ADR），
-    // 而它真正的用处是让调用方/测试能断言"删了哪些"，不是给用户看的。
-    let _removed = document.strip_paths();
+    // 被删的键是模板字段名（不是路径值），可安全落诊断轨（ADR-0091、设计 10 §3）：
+    // 这条记录是"模板永不保存路径"这道兜底真的生效的唯一运行期证据。
+    let removed = document.strip_paths();
+    if !removed.is_empty() {
+        diag_log(
+            &state,
+            Level::Info,
+            "recipe",
+            None,
+            &format!("template saved without path params (removed keys: {removed:?})"),
+        );
+    }
     store.save_recipe(&mut document).map_err(IpcError::from)?;
     Ok(document)
 }
@@ -1010,8 +1119,8 @@ fn getRecipe(state: State<'_, AppState>, recipe_id: String) -> Result<RecipeDocu
 /// 界面据此决定给不给「套用」按钮：能套＝拿到槽位表去渲染输入框；
 /// 不能套（未绑定/多步/正文不在计划参数里/旧压缩模板）＝拿到原因如实展示，
 /// **不渲染按钮**——同 ADR-0072 的「不给假按钮」。判定与 `loadRecipe` 的
-/// `build_invocation` 同源（`recipe_apply::assess`），不会出现 describe 说能套、
-/// loadRecipe 却报错的两套口径。
+/// `build_invocation_step` 同源（`recipe_apply::assess_step`），不会出现 describe
+/// 说能套、loadRecipe 却报错的两套口径。
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 fn describeRecipe(
@@ -1078,6 +1187,43 @@ fn importRecipe(state: State<'_, AppState>, payload: String) -> Result<RecipeDoc
     config_store(&state)
         .import_recipe(&payload)
         .map_err(IpcError::from)
+}
+
+// ── 支持包（设计 10 §5；方案 §9.7／§12.5）────────────────────────────
+//
+// 两步是刻意的：`buildSupportPackage` 只读、给界面做**预览**（方案 §9.7「用户可在界面
+// 预览将上传的内容」）；`writeSupportPackage` 写回的就是刚预览过的那份，不重新组装——
+// 避免"预览的内容"与"落盘的内容"不一致。内容不含配置全文（设计 10 §7 第 3 项待裁决）。
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn buildSupportPackage(
+    state: State<'_, AppState>,
+    input: support::SupportPackageInput,
+) -> Result<support::SupportPackage, IpcError> {
+    Ok(support::build(&state.diag, &input))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(non_snake_case)]
+fn writeSupportPackage(
+    state: State<'_, AppState>,
+    package: support::SupportPackage,
+) -> Result<String, IpcError> {
+    let path = support::write(&package, &state.paths.exports_dir)?;
+    // 只记文件名（不含目录），路径原文按设计 10 §3 不进诊断轨。
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("support package");
+    diag_log(
+        &state,
+        Level::Info,
+        "support",
+        None,
+        &format!("support package exported ({name})"),
+    );
+    Ok(path.to_string_lossy().into_owned())
 }
 
 // ── f05/f11/f12 主流程计划（UI 接入切片，设计 12 §3.1）──────────────
@@ -1454,6 +1600,7 @@ pub fn run() {
                     journal_path: paths.journal_path.clone(),
                     queue_path: paths.queue_path.clone(),
                     oplog_path: paths.oplog_path.clone(),
+                    diag_log_path: paths.diag_log_path.clone(),
                 },
                 Arc::new(move |event, payload| {
                     if let Err(error) = handle.emit(event, payload) {
@@ -1480,7 +1627,19 @@ pub fn run() {
                         .and_then(|performance| performance.concurrency)
                 }),
             );
-            app.manage(AppState::new(paths, tasks));
+            // 诊断日志（运行轨，ADR-0091）：由任务队列按 `diag_log_path` 打开（写失败
+            // 静默丢弃，设计 10 §1），此处取回句柄供命令层写；脱敏开关跟随
+            // `logging.logFullPaths`（03 §4.1，默认 false；设计 10 §3）。
+            let diag = tasks.diag_handle();
+            diag.set_full_paths(
+                ConfigStore::new(paths.config_dir.clone())
+                    .load_config()
+                    .ok()
+                    .and_then(|load| load.document.scopes.logging)
+                    .and_then(|logging| logging.log_full_paths)
+                    .unwrap_or(false),
+            );
+            app.manage(AppState::new(paths, tasks, diag));
             // 设计 03 §11.2／§11.3：把上次关闭窗口时的矩形摆回来；离屏或显示器已被拔掉
             // 就居中主屏并把尺寸压进该屏可用区域。规则本体是 window_state::decide_placement
             // 这个纯函数，真实窗口摆放属桌面实机项。
@@ -1563,6 +1722,7 @@ pub fn run() {
             getIpcMeta,
             getStorageInfo,
             getAiStatus,
+            setAiApiKey,
             aiAsk,
             aiCancel,
             planOperation,
@@ -1592,7 +1752,9 @@ pub fn run() {
             listRecipes,
             deleteRecipe,
             exportRecipe,
-            importRecipe
+            importRecipe,
+            buildSupportPackage,
+            writeSupportPackage
         ])
         .run(tauri::generate_context!())
         .expect("failed to run BatchDesk desktop");

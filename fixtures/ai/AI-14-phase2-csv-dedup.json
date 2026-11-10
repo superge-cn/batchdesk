@@ -1,0 +1,40 @@
+{
+  "id": "AI-14",
+  "purpose": "Phase 2 catalog accepts a previously phase-locked kind (c11) and produces one plan bundle",
+  "input": {
+    "text": "把这份 CSV 里重复的行去掉，保留第一次出现的",
+    "context": {
+      "fileCount": 1,
+      "kinds": ["csv"],
+      "locale": "zh-CN",
+      "includeFileNames": false
+    }
+  },
+  "mock_model": {
+    "text": "已生成去重计划",
+    "intent": {
+      "steps": [
+        {
+          "stepId": "s1",
+          "kind": "c11",
+          "params": { "key": "row" },
+          "dependsOn": []
+        }
+      ]
+    },
+    "tool_calls": [
+      {
+        "callId": "c1",
+        "name": "planOperation",
+        "arguments": { "kind": "c11" }
+      }
+    ]
+  },
+  "expected": {
+    "intent_kind": "c11",
+    "tool_calls": ["planOperation"],
+    "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
+    "needs_user_confirmation": true,
+    "error_code": null
+  }
+}

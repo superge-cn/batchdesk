@@ -5,17 +5,27 @@ import {
   deleteRecipe,
   describeRecipe,
   exportRecipe,
+  getUiState,
   importRecipe,
   listRecipes,
   loadRecipe,
+  setUiState,
   toIpcError
 } from "./lib/ipc";
 import { ErrorBanner } from "./ErrorBanner";
 import { useI18n } from "./i18n";
 import { actionLabel } from "./labels";
 import { NAV_LABEL_BY_ID } from "./navCatalog";
+import { TemplateRunner } from "./TemplateRunner";
 import { VirtualList } from "./VirtualList";
-import type { IpcError, PlanDocument, RecipeApplySpec, RecipeDocument, RecipeSlotSpec } from "./lib/ipc/types";
+import type {
+  IpcError,
+  PlanDocument,
+  RecipeApplySpec,
+  RecipeDocument,
+  RecipeOrigin,
+  RecipeSlotSpec
+} from "./lib/ipc/types";
 
 /**
  * 处理模板（C37，方案 §15、设计 12 §5）。
@@ -24,8 +34,12 @@ import type { IpcError, PlanDocument, RecipeApplySpec, RecipeDocument, RecipeSlo
  * 删除、导入、导出之外，可套用的模板现在能填路径槽位后生成**预览计划**——
  * 只出计划不执行（方案 §15.2.2），核对后由「执行此计划」显式走 applyPlan。
  *
+ * *Phase B 多步模板*（方案 §15.2.3）走 [TemplateRunner](./TemplateRunner)：按步
+ * plan/apply，首步先预览确认，后续步骤按运行模式（一键/逐步骤，存 UiState）
+ * 自动或逐步确认；风险闸门命中即停下降级。
+ *
  * 套用面的判定来自壳层 `describeRecipe`（与 `loadRecipe` 同源，两套口径不可能分叉）：
- * - 未绑定/多步 → 不给按钮，绑定行说明原因；
+ * - 未绑定/全部步骤都不可套用 → 不给按钮，绑定行说明原因；
  * - 变换正文不在计划参数里的功能（归档规则/清单/过滤/排序/列操作/来源列/列选择）
  *   → 不给按钮并展示原因（OQ-43 登记后续裁决）；
  * - 采样口径随模板存档（v5），没存的由壳层映射表按缺省补。
@@ -43,6 +57,17 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
   const [notice, setNotice] = useState<string | null>(null);
   /** 每个模板的套用面（describeRecipe）；取不到的（刚被删等）不渲染套用按钮。 */
   const [specs, setSpecs] = useState<Record<string, RecipeApplySpec | null>>({});
+  /**
+   * 模板运行偏好（设计 03 §11.2）：本机 UI 偏好，存 UiState，不写进 RecipeDocument、
+   * 不进导出（§15.3）。缺省逐步骤——安全默认（§7.4），一键需显式开启。
+   */
+  const [templatePrefs, setTemplatePrefs] = useState<
+    Record<string, { runMode?: "stepwise" | "one-click" }>
+  >({});
+  /** 多步执行器：目标模板＋它的逐段评估。 */
+  const [runTarget, setRunTarget] = useState<{ item: RecipeDocument; spec: RecipeApplySpec } | null>(
+    null
+  );
   /** 删除是两段式：先选中要删的，再确认——避免误触把模板删掉。 */
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [importText, setImportText] = useState("");
@@ -86,6 +111,33 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 运行偏好只读一次（本机、可重置，设计 03 §11）；写失败不阻塞套用。
+  useEffect(() => {
+    getUiState()
+      .then((state) => setTemplatePrefs(state.templatePrefs ?? {}))
+      .catch(() => undefined);
+  }, []);
+
+  /**
+   * 运行模式缺省（方案 §15.2.3，OQ-45 裁决）：本机新建（`origin: "local"`）默认一键，
+   * 导入／来源未知默认逐步骤；本机偏好（UiState `templatePrefs`）显式覆盖来源缺省。
+   * 含高风险步骤的模板仍由 `describeRecipe.oneClickAllowed` 禁掉一键。
+   */
+  const runModeFor = (
+    recipeId: string,
+    origin?: RecipeOrigin
+  ): "one-click" | "stepwise" => {
+    const pref = templatePrefs[recipeId]?.runMode;
+    if (pref === "one-click" || pref === "stepwise") return pref;
+    return origin === "local" ? "one-click" : "stepwise";
+  };
+
+  const persistRunMode = (recipeId: string, mode: "one-click" | "stepwise") => {
+    const next = { ...templatePrefs, [recipeId]: { runMode: mode } };
+    setTemplatePrefs(next);
+    setUiState({ templatePrefs: next }).catch(() => undefined);
+  };
 
   const stepSummary = useMemo(
     () => (item: RecipeDocument) =>
@@ -171,9 +223,22 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
     }
   };
 
+  /**
+   * 能否套用：单步看 `applicable`；多步看**有没有任何一步**可套用——
+   * 不可套用的那几步由执行器如实停住（§15.2.3「某步失败停止后续」），
+   * 不因为其中一步不可用就否掉整份模板。
+   */
+  const canApply = (spec: RecipeApplySpec | null | undefined): boolean =>
+    !!spec && (spec.applicable || spec.steps.some((step) => step.applicable));
+
   const openApply = (item: RecipeDocument, spec: RecipeApplySpec) => {
     setError(null);
     setNotice(null);
+    // 多步模板走执行器：按步 plan/apply，不预生成所有步骤（§15.2.3）。
+    if (item.steps.length > 1) {
+      setRunTarget({ item, spec });
+      return;
+    }
     setSlotValues({});
     setApplyTarget({ item, spec });
   };
@@ -298,7 +363,7 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                     {/* 已绑定但预声明不可套用（正文缺失/旧压缩模板）：如实给原因，不给假按钮。 */}
                     {binding(item).bound &&
                     specs[item.recipeId] &&
-                    !specs[item.recipeId]!.applicable ? (
+                    !canApply(specs[item.recipeId]) ? (
                       <p className="hint" data-testid="template-refused">
                         {t("templates.refusedReason", {
                           reason: specs[item.recipeId]!.reason ?? ""
@@ -312,7 +377,7 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
                     ) : null}
                   </div>
                   <div className="button-row">
-                    {specs[item.recipeId]?.applicable ? (
+                    {canApply(specs[item.recipeId]) ? (
                       <button
                         className="button button-primary"
                         type="button"
@@ -530,6 +595,16 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
             )}
           />
         </section>
+      )}
+
+      {runTarget && (
+        <TemplateRunner
+          item={runTarget.item}
+          spec={runTarget.spec}
+          initialMode={runModeFor(runTarget.item.recipeId, runTarget.item.origin)}
+          onModeChange={(mode) => persistRunMode(runTarget.item.recipeId, mode)}
+          onClose={() => setRunTarget(null)}
+        />
       )}
 
       {exported && (

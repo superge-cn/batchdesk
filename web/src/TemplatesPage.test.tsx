@@ -2,7 +2,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TemplatesPage } from "./TemplatesPage";
-import type { PlanDocument, RecipeApplySpec, RecipeDocument } from "./lib/ipc/types";
+import type {
+  PlanDocument,
+  RecipeApplySpec,
+  RecipeDocument,
+  RecipeOrigin
+} from "./lib/ipc/types";
 
 // 处理模板（C37）：存取半边（列表/删除/导出/导入）＋套用半边（OQ-40①/OQ-41②）。
 // 套用判定走 describeRecipe（与 loadRecipe 同源，ADR-0080）；本文件把它 mock 成
@@ -30,7 +35,21 @@ const applicableSpec: RecipeApplySpec = {
   feature: "f05",
   kind: "split",
   required: [{ key: "file", many: false }],
-  outputs: [{ key: "outputDir", many: false }]
+  outputs: [{ key: "outputDir", many: false }],
+  steps: [
+    {
+      stepId: "step-1",
+      index: 0,
+      feature: "f05",
+      kind: "split",
+      source: "original",
+      applicable: true,
+      required: [{ key: "file", many: false }],
+      outputs: [{ key: "outputDir", many: false }],
+      highRisk: false
+    }
+  ],
+  oneClickAllowed: true
 };
 
 vi.mock("./lib/ipc", () => ({
@@ -41,8 +60,10 @@ vi.mock("./lib/ipc", () => ({
   }),
   applyPlan: vi.fn(async () => ({ taskId: "task-1" })),
   deleteRecipe: vi.fn(async () => undefined),
-  exportRecipe: vi.fn(async () => ({ payload: '{\n  "schemaVersion": 5\n}' })),
+  exportRecipe: vi.fn(async () => ({ payload: '{\n  "schemaVersion": 7\n}' })),
   importRecipe: vi.fn(async () => listed[0]),
+  getUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
+  setUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   toIpcError: (value: unknown) => value
 }));
 
@@ -51,9 +72,11 @@ import {
   deleteRecipe,
   describeRecipe,
   exportRecipe,
+  getUiState,
   importRecipe,
   listRecipes,
-  loadRecipe
+  loadRecipe,
+  setUiState
 } from "./lib/ipc";
 
 /** v5 的一步模板：功能码已绑定（OQ-36 裁决①落地后的形状）。 */
@@ -126,7 +149,7 @@ describe("处理模板视图", () => {
   it("导入高版本模板：错误码与本地化摘要都要出现，不显示后端原文", async () => {
     vi.mocked(importRecipe).mockRejectedValueOnce({
       code: "E1007",
-      message: "recipe schemaVersion 4 is newer than the supported 3",
+      message: "recipe schemaVersion 8 is newer than the supported 7",
       retryable: false
     });
     renderPage();
@@ -135,14 +158,14 @@ describe("处理模板视图", () => {
 
     // 粘贴而不是逐字 type：user-event 把 `{` 当按键描述符解析，粘贴才是真实路径
     await user.click(screen.getByPlaceholderText("粘贴导出的模板 JSON"));
-    await user.paste('{"schemaVersion":4}');
+    await user.paste('{"schemaVersion":8}');
     await user.click(screen.getByRole("button", { name: /^导入$/ }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("E1007");
     expect(alert.textContent).toContain("这项数据由更新版本的程序写入");
     // 技术原文不出界面（设计 06 §3）
-    expect(alert.textContent).not.toContain("schemaVersion 4");
+    expect(alert.textContent).not.toContain("schemaVersion 8");
   });
 
   it("导出把模板 JSON 摊在可复制的文本框里", async () => {
@@ -153,7 +176,7 @@ describe("处理模板视图", () => {
     await user.click(screen.getByRole("button", { name: /^导出$/ }));
     expect(exportRecipe).toHaveBeenCalledWith("r1");
     const box = await screen.findByRole("textbox", { name: /导出「CSV 分片/ });
-    expect((box as HTMLTextAreaElement).value).toContain('"schemaVersion": 5');
+    expect((box as HTMLTextAreaElement).value).toContain('"schemaVersion": 7');
   });
 })
 
@@ -174,7 +197,21 @@ describe("模板的功能码绑定（OQ-36 裁决①，schema v4）", () => {
       applicable: false,
       reason: "recipe step has no feature binding; re-save it from that feature page",
       required: [],
-      outputs: []
+      outputs: [],
+      steps: [
+        {
+          stepId: "step-1",
+          index: 0,
+          kind: "split",
+          source: "original",
+          applicable: false,
+          reason: "recipe step has no feature binding; re-save it from that feature page",
+          required: [],
+          outputs: [],
+          highRisk: false
+        }
+      ],
+      oneClickAllowed: false
     });
     renderPage();
 
@@ -240,7 +277,23 @@ describe("模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080）", () => {
       feature: "c08",
       reason: "archive rules are not carried in plan params; reconfigure on the feature page",
       required: [],
-      outputs: []
+      outputs: [],
+      steps: [
+        {
+          stepId: "step-1",
+          index: 0,
+          feature: "c08",
+          kind: "move",
+          source: "original",
+          applicable: false,
+          reason:
+            "archive rules are not carried in plan params; reconfigure on the feature page",
+          required: [],
+          outputs: [],
+          highRisk: false
+        }
+      ],
+      oneClickAllowed: false
     });
     renderPage();
 
@@ -249,5 +302,113 @@ describe("模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080）", () => {
     const refused = await screen.findByTestId("template-refused");
     expect(refused).toHaveTextContent("不可套用");
     expect(refused).toHaveTextContent("archive rules are not carried in plan params");
+  });
+});
+
+describe("多步模板的运行模式偏好（设计 03 §5.2／§11.2）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** 构造一份可一键的两步模板（origin 决定运行模式缺省）。 */
+  function multiStepRecipe(origin?: RecipeOrigin): RecipeDocument {
+    return {
+      recipeId: "r-multi",
+      schemaVersion: 7,
+      name: "两步模板",
+      steps: [
+        { stepId: "step-1", kind: "listing", feature: "f10", paramsSnapshot: {}, source: "original" },
+        {
+          stepId: "step-2",
+          kind: "edit-content",
+          feature: "c01",
+          paramsSnapshot: {},
+          source: "previous"
+        }
+      ],
+      ...(origin ? { origin } : {}),
+      createdAt: "2026-11-02T09:00:00Z"
+    };
+  }
+
+  function multiStepSpec(): RecipeApplySpec {
+    return {
+      recipeId: "r-multi",
+      applicable: false,
+      reason: "multi-step recipe has 2 steps; apply step by step",
+      required: [],
+      outputs: [],
+      oneClickAllowed: true,
+      steps: [
+        {
+          stepId: "step-1",
+          index: 0,
+          feature: "f10",
+          kind: "listing",
+          source: "original",
+          applicable: true,
+          required: [{ key: "roots", many: true }],
+          outputs: [{ key: "output", many: false }],
+          highRisk: false
+        },
+        {
+          stepId: "step-2",
+          index: 1,
+          feature: "c01",
+          kind: "edit-content",
+          source: "previous",
+          applicable: true,
+          required: [{ key: "files", many: true }],
+          outputs: [],
+          highRisk: false
+        }
+      ]
+    };
+  }
+
+  it("本机新建（origin=local）默认一键，可改逐步骤并写回 UiState", async () => {
+    vi.mocked(listRecipes).mockResolvedValueOnce({ items: [multiStepRecipe("local")], total: 1 });
+    vi.mocked(describeRecipe).mockResolvedValueOnce(multiStepSpec());
+    renderPage();
+    const user = userEvent.setup();
+    // 多步模板走执行器（不是单步的填槽位对话框）
+    await user.click(await screen.findByTestId("template-apply"));
+    expect(await screen.findByTestId("run-panel")).toBeVisible();
+    // 方案 §15.2.3：本机新建默认一键
+    expect(screen.getByTestId("run-mode-one-click")).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByTestId("run-mode-stepwise"));
+    await waitFor(() =>
+      expect(setUiState).toHaveBeenCalledWith({
+        templatePrefs: { "r-multi": { runMode: "stepwise" } }
+      })
+    );
+  });
+
+  it("导入模板（origin=imported）默认逐步骤，一键需显式开启", async () => {
+    vi.mocked(listRecipes).mockResolvedValueOnce({
+      items: [multiStepRecipe("imported")],
+      total: 1
+    });
+    vi.mocked(describeRecipe).mockResolvedValueOnce(multiStepSpec());
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId("template-apply"));
+    expect(await screen.findByTestId("run-panel")).toBeVisible();
+    expect(screen.getByTestId("run-mode-stepwise")).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByTestId("run-mode-one-click"));
+    await waitFor(() =>
+      expect(setUiState).toHaveBeenCalledWith({
+        templatePrefs: { "r-multi": { runMode: "one-click" } }
+      })
+    );
+  });
+
+  it("来源未知（v6 及更早模板迁移后）按导入默认：逐步骤", async () => {
+    vi.mocked(listRecipes).mockResolvedValueOnce({ items: [multiStepRecipe()], total: 1 });
+    vi.mocked(describeRecipe).mockResolvedValueOnce(multiStepSpec());
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId("template-apply"));
+    expect(await screen.findByTestId("run-mode-stepwise")).toHaveAttribute("aria-pressed", "true");
   });
 });

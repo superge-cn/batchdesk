@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import App from "./App";
-import { mockAiStats, mockSetAiScenario, resetAiMock } from "./lib/ipc/mock";
+import { mockAiStats, mockResetUiState, mockSetAiScenario, resetAiMock } from "./lib/ipc/mock";
 
 // F15 Phase 1 集成级契约（docs/testing/AI助手前端面板-mock验证方案-v0.1.md §5.2）。
 // 走浏览器 mock：验证「面板 ↔ 既有预览」的交接，不代表真机文件结果。
@@ -19,9 +19,26 @@ async function openPanelAndAsk(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   resetAiMock();
+  mockResetUiState();
 });
 
 describe("F15 AI 面板（集成级）", () => {
+  it("AI-INT-05 模板入口：切到处理模板视图并关闭面板，不产生 AI 请求", async () => {
+    mockSetAiScenario("ready");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByTestId("ai-toggle"));
+    await screen.findByTestId("ai-panel");
+    await user.click(screen.getByTestId("ai-open-templates"));
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "处理模板" })
+    ).toBeVisible();
+    expect(screen.queryByTestId("ai-panel")).toBeNull();
+    expect(mockAiStats().askCount).toBe(0);
+  });
+
   it("AI-INT-01 面板开关：关闭再打开保留本次会话消息", async () => {
     mockSetAiScenario("ready");
     const user = userEvent.setup();

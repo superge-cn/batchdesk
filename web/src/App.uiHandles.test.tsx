@@ -188,6 +188,38 @@ describe("侧栏拖宽（设计 03 §11.2 的 layout.sidebarWidth）", () => {
   });
 });
 
+describe("侧栏收起与 AI 面板开关（设计 03 §11.2 的 layout）", () => {
+  it("收起侧栏写 layout.sidebarCollapsed 并套上折叠类", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByTestId("sidebar-toggle"));
+    await waitFor(() => expect(setUiState).toHaveBeenCalled());
+    const patches = vi.mocked(setUiState).mock.calls.map(([patch]) => patch as Record<string, any>);
+    expect(patches.some((patch) => patch.layout?.sidebarCollapsed === true)).toBe(true);
+    expect(document.querySelector(".glass-shell")?.className).toContain("sidebar-collapsed");
+  });
+
+  it("AI 面板开关写 layout.aiPanelOpen，启动可恢复", async () => {
+    vi.mocked(getUiState).mockResolvedValue({
+      uiStateVersion: 1,
+      updatedAt: "2026-11-06T00:00:00Z",
+      layout: { aiPanelOpen: true }
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByTestId("ai-panel")).toBeVisible();
+    await user.click(screen.getByTestId("ai-close"));
+    await waitFor(() => {
+      const patches = vi.mocked(setUiState).mock.calls.map(
+        ([patch]) => patch as Record<string, any>
+      );
+      expect(patches.some((patch) => patch.layout?.aiPanelOpen === false)).toBe(true);
+    });
+  });
+});
+
 describe("列头排序与列宽（设计 03 §11.2 的 tables）", () => {
   async function withPreview() {
     const user = userEvent.setup();

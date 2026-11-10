@@ -217,9 +217,38 @@ describe("任务表的列宽把手（设计 03 §11.2 的 tables）", () => {
     );
   });
 
-  it("本轮不给排序按钮：排序要等 TaskSummary 字段名核实后才写比较器", async () => {
+  it("列头排序按 TaskSummary 字段写 table.tasks.sort（actions 列不参与）", async () => {
     renderView();
     await screen.findAllByRole("separator");
-    expect(screen.queryAllByRole("button", { name: /排序/ })).toHaveLength(0);
+    // task／progress／state 三列可排序；actions 是操作列，没有可比较的值（渲染成 span）。
+    const sortButtons = screen.getAllByRole("button", { name: /排序/ });
+    expect(sortButtons).toHaveLength(3);
+
+    await userEvent.click(sortButtons[0]);
+    await waitFor(() =>
+      expect(
+        vi.mocked(setUiState).mock.calls.some(
+          ([patch]) =>
+            (patch as { tables?: Record<string, { sort?: { column: string; direction: string } }> })
+              .tables?.["table.tasks"]?.sort?.column === "task"
+        )
+      ).toBe(true)
+    );
+  });
+
+  it("再点同一列翻成降序：排序是视图态，不改派发序", async () => {
+    renderView();
+    const [first] = await screen.findAllByRole("button", { name: /排序/ });
+    await userEvent.click(first);
+    await userEvent.click(first);
+    await waitFor(() =>
+      expect(
+        vi.mocked(setUiState).mock.calls.some(
+          ([patch]) =>
+            (patch as { tables?: Record<string, { sort?: { column: string; direction: string } }> })
+              .tables?.["table.tasks"]?.sort?.direction === "desc"
+        )
+      ).toBe(true)
+    );
   });
 });

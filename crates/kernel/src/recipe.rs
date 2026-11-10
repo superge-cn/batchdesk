@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::error::KernelError;
 use crate::plan::PlanAction;
 
-pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 6;
+pub const CURRENT_RECIPE_SCHEMA_VERSION: u32 = 7;
 
 /// 多步骤上限沿用 F15 单束上限（方案 §15.1，不新增数值）。
 pub const MAX_RECIPE_STEPS: usize = 10;
@@ -75,6 +75,25 @@ pub enum StepSource {
 pub enum RecipeFormat {
     Desktop,
     Web,
+}
+
+/// 模板来源（v7，OQ-45 裁决）：决定「一键/逐步骤」的缺省——**本机新建默认一键、
+/// 导入默认逐步骤**（方案 §15.2.3）。`RecipeDocument.origin` 为 `None` 表示来源未知
+/// （v6 及更早模板迁移后的状态），按导入口径（逐步骤）处理，迁移不猜。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecipeOrigin {
+    Local,
+    Imported,
+}
+
+impl RecipeOrigin {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Imported => "imported",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +227,14 @@ pub struct RecipeDocument {
     pub match_: Option<RecipeMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_format: Option<RecipeFormat>,
+    /// 来源（v7，OQ-45 裁决）：本机新建 `local`／导入 `imported`。
+    ///
+    /// 为什么必须有它：方案 §15.2.3 的「本机新建默认一键、导入默认逐步骤」需要一条
+    /// 可靠判据，而 `sourceFormat` 的语义是「跨形态（desktop/web）导入标记」，两条
+    /// 保存路径过去都没设置它——单靠它判来源是语义误用。`None`＝来源未知（v6 及
+    /// 更早模板迁移后的状态，迁移不猜），按导入口径（逐步骤）处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RecipeOrigin>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
@@ -245,12 +272,26 @@ impl RecipeDocument {
             }],
             match_: None,
             source_format: None,
+            origin: None,
             created_at: created_at.into(),
             updated_at: None,
             last_used_at: None,
             usage_count: None,
             pinned: None,
         }
+    }
+
+    /// 标记为本机新建（`saveRecipe` 入口，方案 §15.2.3：本机新建默认一键）。
+    pub fn mark_local(&mut self) {
+        self.origin = Some(RecipeOrigin::Local);
+    }
+
+    /// 标记为导入副本（`importRecipe` 入口：导入默认逐步骤）。
+    ///
+    /// 导出件里的 `origin` 只是这份模板的「历史」，不是当前副本的来源——
+    /// 导入一律改写，不信任载荷。
+    pub fn mark_imported(&mut self) {
+        self.origin = Some(RecipeOrigin::Imported);
     }
 
     /// 校验结构约束（步数上限、stepId 唯一、参数不含脚本/路径）。
@@ -366,16 +407,26 @@ impl RecipeDocument {
     /// 「一键套用」的入口判据：**单步**且该步有功能码（方案 §15.2.5、设计 03 §命令表）。
     /// 不满足就返回 E1002 并说明原因，界面据此不给按钮，而不是给一个按不动的按钮。
     pub fn single_step_binding(&self) -> Result<(String, &TemplateStep), KernelError> {
-        let step = self
-            .steps
-            .first()
-            .ok_or_else(|| KernelError::invalid_params("recipe has no step to apply"))?;
         if self.steps.len() > 1 {
             return Err(KernelError::invalid_params(format!(
                 "multi-step recipe is not applied in one click ({} steps); plan each step separately",
                 self.steps.len()
             )));
         }
+        self.step_binding(0)
+    }
+
+    /// 第 `index` 步的功能码绑定（Phase B 多步执行：每步单独评估/生成计划）。
+    ///
+    /// 与 `single_step_binding` 同一判据，只是不限制步数——多步模板的每一步都
+    /// 必须有绑定，否则该步不可执行（如实拒绝，不猜）。
+    pub fn step_binding(&self, index: usize) -> Result<(String, &TemplateStep), KernelError> {
+        let step = self.steps.get(index).ok_or_else(|| {
+            KernelError::invalid_params(format!(
+                "recipe has no step {index} ({} steps)",
+                self.steps.len()
+            ))
+        })?;
         let feature = step.feature.clone().ok_or_else(|| {
             KernelError::invalid_params(format!(
                 "recipe step {} has no feature binding; action {} maps to several features, re-save it from that feature page",
@@ -455,6 +506,9 @@ pub fn strip_path_params(params: &mut Map<String, Value>) -> Vec<String> {
 /// v5→v6 同理：`content`（变换正文）从 v6 起才在保存时采集，旧模板留 `None`——
 /// 需要正文的六个功能在套用时如实拒绝并提示重存（迁移不猜正文，ADR-0081）。
 ///
+/// v6→v7 同理：`origin`（来源）从 v7 起才在保存/导入时写入，旧模板留 `None`＝来源
+/// 未知，按导入口径（逐步骤）处理（迁移不猜来源，OQ-45/ADR-0090）。
+///
 /// 低版本（1/2）迁移；高于 `CURRENT_RECIPE_SCHEMA_VERSION` → E1007（不猜测语义）。
 pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelError> {
     let version = payload
@@ -490,19 +544,14 @@ pub fn migrate_recipe_value(payload: Value) -> Result<RecipeDocument, KernelErro
             v3.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
             Ok(v3)
         }
-        4 => {
-            let mut v4: RecipeDocument =
+        // v4→v5、v5→v6、v6→v7 都只用旧 payload 反序列化出 `Option` 缺省（`None`）
+        // 后升版本号：采样/正文/来源都是「本版起才采集」，迁移一律不猜。
+        4..=6 => {
+            let mut older: RecipeDocument =
                 serde_json::from_value(payload).map_err(recipe_parse_error)?;
-            v4.strip_paths();
-            v4.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
-            Ok(v4)
-        }
-        5 => {
-            let mut v5: RecipeDocument =
-                serde_json::from_value(payload).map_err(recipe_parse_error)?;
-            v5.strip_paths();
-            v5.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
-            Ok(v5)
+            older.strip_paths();
+            older.schema_version = CURRENT_RECIPE_SCHEMA_VERSION;
+            Ok(older)
         }
         CURRENT_RECIPE_SCHEMA_VERSION => {
             let mut current: RecipeDocument =
@@ -556,6 +605,7 @@ impl RecipeV1 {
             }],
             match_: Some(RecipeMatch::default()),
             source_format: None,
+            origin: None,
             created_at: self.created_at,
             updated_at: None,
             last_used_at: None,
@@ -585,6 +635,7 @@ impl RecipeDocumentV2 {
             }],
             match_: self.match_,
             source_format: self.source_format,
+            origin: None,
             created_at: self.created_at,
             updated_at: self.updated_at,
             last_used_at: self.last_used_at,
@@ -971,6 +1022,48 @@ mod tests {
     }
 
     #[test]
+    fn step_binding_addresses_each_step_without_the_single_step_gate() {
+        // Phase B：多步模板的每一步单独绑定（不限制步数），越界如实报「没有这一步」。
+        let mut params = Map::new();
+        params.insert("find".to_string(), json!("a"));
+        let mut multi = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QI",
+            "两步",
+            PlanAction::Rename,
+            params.clone(),
+            "2026-11-08T00:00:00Z",
+            Some("f12".to_string()),
+        );
+        multi.steps.push(TemplateStep {
+            step_id: "step-2".to_string(),
+            kind: PlanAction::CsvDedup,
+            params_snapshot: params,
+            source: StepSource::Previous,
+            feature: Some("c11".to_string()),
+            sampling: None,
+            content: None,
+        });
+
+        let (first_feature, first_step) = multi.step_binding(0).unwrap();
+        assert_eq!(first_feature, "f12");
+        assert_eq!(first_step.step_id, "step-1");
+        assert_eq!(first_step.source, StepSource::Original);
+
+        let (second_feature, second_step) = multi.step_binding(1).unwrap();
+        assert_eq!(second_feature, "c11");
+        assert_eq!(second_step.source, StepSource::Previous);
+
+        let error = multi.step_binding(2).unwrap_err();
+        assert_eq!(error.code, "E1002");
+        assert!(error.message.contains("no step 2"), "{}", error.message);
+
+        // 某一步没绑定 → 该步如实拒绝（不猜功能码）。
+        multi.steps[1].feature = None;
+        let error = multi.step_binding(1).unwrap_err();
+        assert!(error.message.contains("re-save"), "{}", error.message);
+    }
+
+    #[test]
     fn validate_rejects_malformed_feature_codes() {
         let mut recipe = RecipeDocument::from_single_step(
             "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QG",
@@ -1147,6 +1240,55 @@ mod tests {
         assert_eq!(migrated.schema_version, CURRENT_RECIPE_SCHEMA_VERSION);
         assert_eq!(migrated.steps[0].content, None);
         assert!(migrated.validate().is_ok());
+    }
+
+    #[test]
+    fn v6_payload_migrates_to_v7_with_origin_absent() {
+        // v7 的来源字段从本版起才写入：v6 及更早模板迁移后来源未知（None），
+        // 前端据此按导入默认（逐步骤）处理——迁移不猜（OQ-45/ADR-0090）。
+        let payload = json!({
+            "recipeId": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8S",
+            "schemaVersion": 6,
+            "name": "v6 的去重模板",
+            "steps": [{
+                "stepId": "step-1",
+                "kind": "csv-dedup",
+                "paramsSnapshot": {"key": "row"},
+                "source": "original",
+                "feature": "c11"
+            }],
+            "createdAt": "2026-11-08T00:00:00Z"
+        });
+        let migrated = migrate_recipe_value(payload).unwrap();
+        assert_eq!(migrated.schema_version, CURRENT_RECIPE_SCHEMA_VERSION);
+        assert_eq!(migrated.origin, None);
+        assert!(migrated.validate().is_ok());
+    }
+
+    #[test]
+    fn v7_round_trips_origin_and_omits_it_when_absent() {
+        let mut local = RecipeDocument::from_single_step(
+            "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8T",
+            "本机新建",
+            PlanAction::CsvDedup,
+            Map::new(),
+            "2026-11-09T00:00:00Z",
+            Some("c11".to_string()),
+        );
+        let json = serde_json::to_value(&local).unwrap();
+        assert!(json.get("origin").is_none(), "来源未知不写盘");
+
+        local.origin = Some(RecipeOrigin::Local);
+        let json = serde_json::to_value(&local).unwrap();
+        assert_eq!(json["origin"], json!("local"));
+        let back: RecipeDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(back.origin, Some(RecipeOrigin::Local));
+
+        local.origin = Some(RecipeOrigin::Imported);
+        assert_eq!(
+            serde_json::to_value(&local).unwrap()["origin"],
+            json!("imported")
+        );
     }
 
     #[test]

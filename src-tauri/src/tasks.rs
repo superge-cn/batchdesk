@@ -25,13 +25,14 @@ use kernel::license::LicenseService;
 use kernel::path::ProtectedDir;
 use kernel::plan::PlanDocument;
 use kernel::progress::{CancelToken, ProgressEvent, ProgressPhase, ProgressSink};
+use platform::diaglog::{opts_from_env, DiagnosticEvent, DiagnosticLog, Level};
 use platform::fs::{now_rfc3339, rfc3339_days_ago, CliFsAdapter};
 use platform::ids::new_ulid;
 use platform::journal::FileJournal;
 use platform::oplog::{OperationLogRecord, SqliteOperationLog};
 use platform::retention::DEFAULT_RETENTION_DAYS;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 pub type EventEmitter = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -114,6 +115,8 @@ pub struct TaskPaths {
     pub queue_path: PathBuf,
     /// C17a 操作日志（审计轨）SQLite 路径（设计 10 §1、ADR-0013）。
     pub oplog_path: PathBuf,
+    /// 诊断日志（运行轨）JSONL 路径（设计 10 §1、ADR-0091）。
+    pub diag_log_path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +294,8 @@ struct Inner {
     /// C17a 操作日志连接；`None` 表示打开失败/高版本（E1007），审计轨降级，
     /// 批处理不受阻（ADR-0013）。
     oplog: Mutex<Option<SqliteOperationLog>>,
+    /// 诊断日志（运行轨，ADR-0091）：尽力而为，写失败不阻断批处理。
+    diag: DiagnosticLog,
     /// `logging.logFullPaths`（03 §4.1）读取口；默认 false，写入前实时取值。
     log_full_paths: Arc<dyn Fn() -> bool + Send + Sync>,
     /// `performance.concurrency`（设计 03 §6.7）读取口：**任务派发时**取值，
@@ -340,6 +345,9 @@ impl TaskQueue {
     /// - `log_full_paths`：`logging.logFullPaths` 读取口（03 §4.1，默认 false）；
     /// - `performance_concurrency`：`performance.concurrency` 读取口（设计 03 §6.7），
     ///   派发时取值（方案 §7.10 的「新设置将在下一批生效」）。
+    ///
+    /// 诊断日志（运行轨，ADR-0091）由本构造器按 `paths.diag_log_path` 打开，
+    /// 句柄经 [`Self::diag_handle`] 交回装配层，命令层与任务队列同一条轨。
     pub fn with_license(
         paths: TaskPaths,
         emit: EventEmitter,
@@ -357,17 +365,30 @@ impl TaskQueue {
         if let Some(parent) = paths.queue_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        let diag = DiagnosticLog::open(paths.diag_log_path.clone(), opts_from_env());
         let oplog = match SqliteOperationLog::open(paths.oplog_path.clone()) {
             Ok((log, warning)) => {
                 if let Some(warning) = warning {
-                    eprintln!("{}: {}", warning.code, warning.message);
+                    diag_event(
+                        &diag,
+                        Level::Warn,
+                        "oplog",
+                        Some(&warning.code),
+                        None,
+                        &warning.message,
+                    );
                 }
                 Some(log)
             }
             Err(error) => {
-                eprintln!(
-                    "{}: {} (operation log disabled; batch processing is unaffected)",
-                    error.code, error.message
+                // 只记 code/message：`detail` 含库文件完整路径，按设计 10 §3 不进诊断轨。
+                diag_event(
+                    &diag,
+                    Level::Warn,
+                    "oplog",
+                    Some(&error.code),
+                    None,
+                    &error.message,
                 );
                 None
             }
@@ -414,6 +435,7 @@ impl TaskQueue {
             emit,
             license,
             oplog: Mutex::new(oplog),
+            diag,
             log_full_paths,
             performance_concurrency,
         });
@@ -424,6 +446,11 @@ impl TaskQueue {
             .spawn(move || worker_loop(worker, receiver))
             .expect("failed to start task queue worker");
         Self { inner, sender }
+    }
+
+    /// 诊断日志句柄（运行轨，ADR-0091）：装配层拿它给命令层写诊断，与任务队列同一条轨。
+    pub fn diag_handle(&self) -> DiagnosticLog {
+        self.inner.diag.clone()
     }
 
     pub fn enqueue_apply(
@@ -965,6 +992,14 @@ impl Inner {
         }
         self.emit_state(task_id, TaskState::Paused);
         self.persist();
+        diag_event(
+            &self.diag,
+            Level::Warn,
+            "task-queue",
+            None,
+            Some(task_id),
+            message,
+        );
     }
 
     fn mark_resumed(&self, task_id: &str, total: u64) -> bool {
@@ -1078,6 +1113,7 @@ impl Inner {
     }
 
     fn finish(&self, task_id: &str, next: TaskState, report: ApplyReport, message: Option<String>) {
+        let detail = message.clone();
         let (changed, pending, kind) = {
             let mut state = self.state.lock().unwrap();
             let Some(record) = state.tasks.get_mut(task_id) else {
@@ -1112,6 +1148,45 @@ impl Inner {
                 EVENT_DONE,
                 json!({ "taskId": task_id, "kind": kind, "summary": report }),
             );
+            let (level, fallback) = match next {
+                TaskState::Completed => (Level::Info, "task completed"),
+                TaskState::PartialFailed => (Level::Warn, "task finished with partial failures"),
+                TaskState::Failed => (Level::Warn, "task failed"),
+                TaskState::Cancelled => (Level::Info, "task cancelled"),
+                _ => (Level::Info, "task finished"),
+            };
+            // 失败终态带上错误码与计数：支持包（设计 10 §5）的「错误码统计」要有真实的
+            // 码可统计，得由这里写进诊断轨，否则轨里只剩任务生命周期噪音。
+            let mut fields = Map::new();
+            let failed_code = report.entries.iter().find_map(|entry| {
+                if entry.status != ApplyStatus::Failed {
+                    return None;
+                }
+                entry.error.as_ref().map(|error| error.code.clone())
+            });
+            if let Some(code) = &failed_code {
+                fields.insert("failedCode".to_string(), json!(code));
+            }
+            fields.insert(
+                "failed".to_string(),
+                json!(report
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.status == ApplyStatus::Failed)
+                    .count()),
+            );
+            fields.insert("total".to_string(), json!(report.entries.len()));
+            self.diag.log_event(
+                level,
+                "task-queue",
+                DiagnosticEvent {
+                    code: failed_code.as_deref(),
+                    task_id: Some(task_id),
+                    trace_id: None,
+                    message: detail.as_deref().unwrap_or(fallback),
+                    fields: Some(&fields),
+                },
+            );
         }
     }
 
@@ -1134,7 +1209,42 @@ impl Inner {
                 TaskState::Running
             },
         );
+        diag_event(
+            &self.diag,
+            Level::Info,
+            "task-queue",
+            None,
+            Some(task_id),
+            if paused {
+                "task started in paused state"
+            } else {
+                "task started"
+            },
+        );
     }
+}
+
+/// 写一条诊断（ADR-0091）。`message` 必须是技术消息，调用方不得带入用户内容或
+/// 路径原文（设计 10 §3 的脱敏口径）。
+fn diag_event(
+    diag: &DiagnosticLog,
+    level: Level,
+    target: &str,
+    code: Option<&str>,
+    task_id: Option<&str>,
+    message: &str,
+) {
+    diag.log_event(
+        level,
+        target,
+        DiagnosticEvent {
+            code,
+            task_id,
+            trace_id: None,
+            message,
+            fields: None,
+        },
+    );
 }
 
 fn worker_loop(inner: Arc<Inner>, receiver: mpsc::Receiver<Job>) {
@@ -1995,6 +2105,7 @@ mod tests {
             journal_path: temp.0.join("journal.jsonl"),
             queue_path: temp.0.join("tasks.json"),
             oplog_path: temp.0.join("oplog.sqlite3"),
+            diag_log_path: temp.0.join("logs/diagnostic.log"),
         }
     }
 
@@ -2403,6 +2514,7 @@ mod tests {
                 journal_path: temp.0.join("journal.jsonl"),
                 queue_path: temp.0.join("tasks.json"),
                 oplog_path: temp.0.join("oplog.sqlite3"),
+                diag_log_path: temp.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_, _| {}),
         );
@@ -2456,6 +2568,7 @@ mod tests {
                 journal_path: dir.0.join("journal.jsonl"),
                 queue_path: queue_path.clone(),
                 oplog_path: dir.0.join("oplog.sqlite3"),
+                diag_log_path: dir.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_, _| {}),
         );
@@ -2547,6 +2660,7 @@ mod tests {
                 journal_path: journal.clone(),
                 queue_path: queue_path.clone(),
                 oplog_path: temp.0.join("oplog.sqlite3"),
+                diag_log_path: temp.0.join("logs/diagnostic.log"),
             },
             Arc::new(move |event, payload| {
                 sink.lock().unwrap().push((event.to_string(), payload));
@@ -2633,6 +2747,7 @@ mod tests {
                 journal_path: temp.0.join("journal.jsonl"),
                 queue_path: temp.0.join("tasks.json"),
                 oplog_path: temp.0.join("oplog.sqlite3"),
+                diag_log_path: temp.0.join("logs/diagnostic.log"),
             },
             Arc::new(move |event, payload| {
                 sink.lock().unwrap().push((event.to_string(), payload));
@@ -2741,6 +2856,112 @@ mod tests {
                 "恢复状态事件必须清空旧原因：{captured:?}"
             );
         }
+    }
+
+    #[test]
+    fn diag_log_records_lifecycle_events_with_task_id() {
+        let temp = TempDir::new();
+        let queue = test_queue(paths_for(&temp), Arc::new(|_event, _payload| {}));
+        let task_id = new_ulid("diag-lifecycle");
+        insert_control_task(&queue, &task_id);
+        queue.inner.mark_started(&task_id, false);
+        queue
+            .inner
+            .auto_pause(&task_id, "网络路径在 3 次退避重试后仍不可达；已暂停");
+        queue.inner.finish(
+            &task_id,
+            TaskState::Cancelled,
+            ApplyReport {
+                plan_id: new_ulid("diag-plan"),
+                task_id: task_id.clone(),
+                entries: Vec::new(),
+                undone_by: None,
+            },
+            Some("cancelled while paused".to_string()),
+        );
+        let records = queue.inner.diag.read_recent(20);
+        let messages: Vec<&str> = records.iter().map(|r| r.message.as_str()).collect();
+        assert!(
+            messages.contains(&"task started"),
+            "启动必须落诊断：{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("网络路径在 3 次退避重试后仍不可达")),
+            "自动暂停原因必须落诊断：{messages:?}"
+        );
+        assert!(
+            messages.contains(&"cancelled while paused"),
+            "终态必须落诊断：{messages:?}"
+        );
+        for record in &records {
+            assert_eq!(record.target, "task-queue");
+            assert_eq!(record.task_id.as_deref(), Some(task_id.as_str()));
+            assert!(
+                !record.ts.is_empty() && record.ts.contains('T'),
+                "时间戳必须是 RFC 3339：{}",
+                record.ts
+            );
+        }
+        let level_of = |expected: &str| {
+            records
+                .iter()
+                .find(|r| r.message == expected)
+                .map(|r| r.level.as_str())
+                .unwrap_or_default()
+        };
+        assert_eq!(level_of("task started"), "info");
+        assert_eq!(level_of("cancelled while paused"), "info");
+        assert_eq!(
+            level_of("网络路径在 3 次退避重试后仍不可达；已暂停"),
+            "warn",
+            "自动暂停是异常路径，级别必须是 warn"
+        );
+    }
+
+    #[test]
+    fn diag_log_records_failed_entry_codes_on_failure() {
+        let temp = TempDir::new();
+        let queue = test_queue(paths_for(&temp), Arc::new(|_event, _payload| {}));
+        let task_id = new_ulid("diag-failed");
+        insert_control_task(&queue, &task_id);
+        queue.inner.mark_started(&task_id, false);
+        let entries: Vec<ApplyEntryReport> = ["E2002", "E2002", "E2008"]
+            .iter()
+            .enumerate()
+            .map(|(index, code)| ApplyEntryReport {
+                entry_id: format!("e{index}"),
+                status: ApplyStatus::Failed,
+                error: Some(KernelError::new(*code, "boom", None, false)),
+                detail: None,
+            })
+            .collect();
+        queue.inner.finish(
+            &task_id,
+            TaskState::Failed,
+            ApplyReport {
+                plan_id: new_ulid("diag-plan"),
+                task_id: task_id.clone(),
+                entries,
+                undone_by: None,
+            },
+            Some("3 entries failed".to_string()),
+        );
+        let records = queue.inner.diag.read_recent(20);
+        let failure = records
+            .iter()
+            .find(|record| record.message == "3 entries failed")
+            .expect("失败终态必须落诊断");
+        assert_eq!(
+            failure.code.as_deref(),
+            Some("E2002"),
+            "首个失败条目的码要进诊断轨，支持包的错误码统计靠它"
+        );
+        let fields = failure.fields.as_ref().expect("失败终态必须带计数字段");
+        assert_eq!(fields["failed"], json!(3));
+        assert_eq!(fields["total"], json!(3));
+        assert_eq!(fields["failedCode"], json!("E2002"));
     }
 
     #[test]
@@ -2993,6 +3214,7 @@ mod tests {
             journal_path: journal_dir,
             queue_path: temp.0.join("tasks.json"),
             oplog_path: temp.0.join("oplog.sqlite3"),
+            diag_log_path: temp.0.join("logs/diagnostic.log"),
         };
         fs::create_dir_all(&paths.quarantine_dir).unwrap();
         let queue = test_queue(paths, Arc::new(|_, _| {}));
@@ -3081,6 +3303,7 @@ mod tests {
                 journal_path: temp.0.join("journal.jsonl"),
                 queue_path: temp.0.join("tasks.json"),
                 oplog_path: temp.0.join("oplog.sqlite3"),
+                diag_log_path: temp.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_event, _payload| {}),
         );
@@ -3282,6 +3505,7 @@ mod tests {
                 journal_path,
                 queue_path,
                 oplog_path: dir.0.join("oplog.sqlite3"),
+                diag_log_path: dir.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_, _| {}),
         );
@@ -3445,6 +3669,7 @@ mod tests {
                 journal_path: dir.0.join("journal.jsonl"),
                 queue_path: dir.0.join("tasks.json"),
                 oplog_path: dir.0.join("oplog.sqlite3"),
+                diag_log_path: dir.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_, _| {}),
         );
@@ -3542,6 +3767,7 @@ mod tests {
                 journal_path: dir.0.join("journal.jsonl"),
                 queue_path: dir.0.join("tasks.json"),
                 oplog_path: dir.0.join("oplog.sqlite3"),
+                diag_log_path: dir.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_, _| {}),
         );
@@ -3604,6 +3830,7 @@ mod tests {
                 journal_path: dir.0.join("journal.jsonl"),
                 queue_path: dir.0.join("tasks.json"),
                 oplog_path: dir.0.join("oplog.sqlite3"),
+                diag_log_path: dir.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_, _| {}),
         );
@@ -3870,6 +4097,7 @@ mod tests {
                 journal_path: temp.0.join("journal.jsonl"),
                 queue_path: queue_path.clone(),
                 oplog_path: temp.0.join("oplog.sqlite3"),
+                diag_log_path: temp.0.join("logs/diagnostic.log"),
             },
             Arc::new(|_event, _payload| {}),
         );

@@ -1,9 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AiPanel, type AiPanelProps } from "./AiPanel";
 import { I18nProvider } from "./i18n";
-import { mockAiStats, mockSetAiScenario, resetAiMock, type AiScenario } from "./lib/ipc/mock";
+import { mockAiStats, mockApply, mockSetAiScenario, resetAiMock, type AiScenario } from "./lib/ipc/mock";
 import type { AiContext } from "./lib/ipc/types";
 
 // F15 Phase 1 组件级契约（docs/testing/AI助手前端面板-mock验证方案-v0.1.md §5.1）。
@@ -21,14 +21,21 @@ function renderPanel(
   lang: "zh-CN" | "en-US" = "zh-CN"
 ) {
   const onOpenPlan = vi.fn();
+  const onOpenTemplates = vi.fn();
   const onClose = vi.fn();
   const context = overrides.context ?? baseContext;
   const view = render(
     <I18nProvider initialLang={lang} initialTheme="light" persist={() => Promise.resolve({})}>
-      <AiPanel open onClose={onClose} onOpenPlan={onOpenPlan} context={context} />
+      <AiPanel
+        open
+        onClose={onClose}
+        onOpenPlan={onOpenPlan}
+        onOpenTemplates={onOpenTemplates}
+        context={context}
+      />
     </I18nProvider>
   );
-  return { ...view, onOpenPlan, onClose };
+  return { ...view, onOpenPlan, onOpenTemplates, onClose };
 }
 
 async function typeAndSend(user: ReturnType<typeof userEvent.setup>, text: string) {
@@ -69,6 +76,7 @@ describe("F15 AI 面板（组件级）", () => {
     const dialog = await screen.findByTestId("ai-consent");
     expect(dialog).toHaveAttribute("role", "alertdialog");
     expect(dialog).toHaveTextContent(/将发送/);
+    expect(dialog).toHaveTextContent(/本会话先前的指令/);
     expect(dialog).toHaveTextContent(/文件数量 3/);
     expect(dialog).toHaveTextContent(/类型 f12/);
     expect(dialog).toHaveTextContent(/不发送/);
@@ -204,18 +212,59 @@ describe("F15 AI 面板（组件级）", () => {
     expect(onOpenPlan.mock.calls[0][0].entries[0].source).toContain("合同.pdf");
   });
 
-  it("AI-UI-10 多步拒绝：E6011 本地化文案，无计划束与「去预览」", async () => {
-    mockSetAiScenario("multi-step");
+  it("AI-UI-10 多计划：按依赖顺序渲染步骤链，依赖未完成时等待", async () => {
+    mockSetAiScenario("multi-plan");
+    const user = userEvent.setup();
+    const { onOpenPlan } = renderPanel();
+    await screen.findByText(/AI 已就绪/);
+    await sendAndConfirm(user, "先删重复行，再按日期改名");
+
+    const bundle = await screen.findByTestId("ai-bundle");
+    expect(bundle).toHaveTextContent("2 步 · 2 条");
+    expect(bundle).toHaveTextContent("第 1 步 · c11");
+    expect(bundle).toHaveTextContent("第 2 步 · f12");
+    expect(bundle).toHaveTextContent("依赖：s1");
+    expect(screen.getByTestId("ai-bundle-progress")).toHaveTextContent("已完成 0/2 步");
+    expect(screen.getByTestId("ai-open-preview")).toBeEnabled();
+    expect(screen.getByTestId("ai-open-preview-s2")).toBeDisabled();
+    expect(screen.getByTestId("ai-open-preview-s2")).toHaveTextContent("等待前一步完成");
+
+    await user.click(screen.getByTestId("ai-open-preview"));
+    expect(onOpenPlan.mock.calls[0][0].kind).toBe("c11");
+    expect(onOpenPlan).toHaveBeenCalledTimes(1);
+    expect(mockAiStats().applyCount).toBe(0);
+  });
+
+  it("AI-UI-10c 依赖步骤失败：后续步骤停止，进度不前进", async () => {
+    mockSetAiScenario("multi-plan");
     const user = userEvent.setup();
     renderPanel();
     await screen.findByText(/AI 已就绪/);
-    await sendAndConfirm(user, "分三步处理");
+    await sendAndConfirm(user, "先删重复行，再按日期改名");
+    await screen.findByTestId("ai-bundle");
 
-    const error = await screen.findByTestId("ai-error");
-    expect(error).toHaveTextContent("E6011");
-    expect(error).toHaveTextContent(/当前版本不支持多计划组合/);
-    expect(screen.queryByTestId("ai-bundle")).toBeNull();
-    expect(screen.queryByTestId("ai-open-preview")).toBeNull();
+    await mockApply("01JAI0PLAN0000000000000001");
+    expect(await screen.findByTestId("ai-bundle-stopped")).toHaveTextContent("后续步骤已停止");
+    expect(screen.getByTestId("ai-open-preview-s2")).toBeDisabled();
+    expect(screen.getByTestId("ai-open-preview-s2")).toHaveTextContent("已停止");
+    expect(screen.getByTestId("ai-bundle-progress")).toHaveTextContent("已完成 0/2 步");
+  });
+
+  it("AI-UI-10b 目标重叠：冲突条可见，冲突步骤的去预览被阻断", async () => {
+    mockSetAiScenario("multi-conflict");
+    const user = userEvent.setup();
+    const { onOpenPlan } = renderPanel();
+    await screen.findByText(/AI 已就绪/);
+    await sendAndConfirm(user, "两步都写到同一个文件");
+
+    const conflict = await screen.findByTestId("ai-bundle-conflict");
+    expect(conflict).toHaveTextContent("目标重叠");
+    expect(conflict).toHaveTextContent("/mock/ai/shared.csv");
+    expect(screen.getByTestId("ai-open-preview")).toBeDisabled();
+    expect(screen.getByTestId("ai-open-preview-s2")).toBeDisabled();
+    expect(screen.getByTestId("ai-open-preview")).toHaveTextContent("已被冲突阻断");
+    expect(onOpenPlan).not.toHaveBeenCalled();
+    expect(mockAiStats().applyCount).toBe(0);
   });
 
   it("AI-UI-11 非法 schema：E6003 本地化文案，无计划束", async () => {
@@ -282,7 +331,34 @@ describe("F15 AI 面板（组件级）", () => {
     errorSpy.mockRestore();
   });
 
-  it("AI-UI-15 双语：en-US 的状态、禁止工具与多步文案均走资源包", async () => {
+  it("AI-UI-17 多轮：后续请求带本会话先前的用户文字，不含当前句", async () => {
+    mockSetAiScenario("ready");
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByText(/AI 已就绪/);
+
+    await sendAndConfirm(user, "第一句");
+    await screen.findByTestId("ai-bundle");
+
+    await user.type(screen.getByTestId("ai-input"), "第二句");
+    await waitFor(() => expect(screen.getByTestId("ai-send")).toBeEnabled());
+    await user.click(screen.getByTestId("ai-send"));
+    await waitFor(() => expect(mockAiStats().askCount).toBe(2));
+    expect(mockAiStats().lastAskInput?.text).toBe("第二句");
+    expect(mockAiStats().lastAskInput?.history).toEqual(["第一句"]);
+  });
+
+  it("AI-UI-18 模板入口：本地跳转，不发 AI 请求", async () => {
+    const user = userEvent.setup();
+    const { onOpenTemplates } = renderPanel();
+    await screen.findByText(/AI 已就绪/);
+
+    await user.click(screen.getByTestId("ai-open-templates"));
+    expect(onOpenTemplates).toHaveBeenCalledTimes(1);
+    expect(mockAiStats().askCount).toBe(0);
+  });
+
+  it("AI-UI-15 双语：en-US 的状态、禁止工具与依赖环文案均走资源包", async () => {
     mockSetAiScenario("unconfigured");
     const first = renderPanel({}, "en-US");
     expect(await screen.findByText(/AI is not configured/)).toBeVisible();
@@ -302,12 +378,13 @@ describe("F15 AI 面板（组件级）", () => {
     second.unmount();
 
     resetAiMock();
-    mockSetAiScenario("multi-step");
+    mockSetAiScenario("cycle");
     renderPanel({}, "en-US");
     await screen.findByText(/AI ready/);
-    await sendAndConfirm(user, "three steps");
-    const multi = await screen.findByTestId("ai-error");
-    expect(multi).toHaveTextContent(/Multi-plan bundles are not supported/);
+    await sendAndConfirm(user, "circular steps");
+    const cycle = await screen.findByTestId("ai-error");
+    expect(cycle).toHaveTextContent("E6010");
+    expect(cycle).toHaveTextContent(/dependencies are invalid/);
   });
 
   it("AI-UI-16 可访问性：面板/日志语义正确，同意弹窗初始焦点在「取消」", async () => {

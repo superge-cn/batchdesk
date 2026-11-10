@@ -82,6 +82,15 @@ button {
   overflow: hidden;
 }
 
+.glass-shell.sidebar-collapsed {
+  grid-template-columns: 0 0 minmax(0, 1fr);
+}
+
+.glass-shell.sidebar-collapsed .sidebar,
+.glass-shell.sidebar-collapsed .shell-resize {
+  display: none;
+}
+
 .glass-shell::before {
   content: "";
   position: absolute;
@@ -778,6 +787,29 @@ button {
   color: var(--foreground);
 }
 
+/* 支持包预览（设计 10 §5）的日志行：等宽单行，固定行高供 VirtualList 窗口化。
+   前几段（时间/级别/组件/码）定长，消息占剩余宽度并省略号截断。 */
+.log-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.log-row > span {
+  flex: 0 0 auto;
+}
+
+.log-row > span:last-child {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .task-id {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -1016,6 +1048,38 @@ button {
   font-size: var(--text-xs);
 }
 
+.ai-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-config-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.ai-config .muted {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.ai-shortcuts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-shortcuts .muted {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
 .ai-log {
   display: flex;
   flex: 1;
@@ -1098,6 +1162,43 @@ button {
 .ai-bundle-meta {
   color: var(--muted-foreground);
   font-size: var(--text-xs);
+}
+
+.ai-bundle-conflict {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--status-danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--status-danger-surface);
+  color: var(--status-danger-fg);
+  font-size: var(--text-xs);
+}
+
+.ai-bundle-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.ai-bundle-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ai-bundle-step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.ai-bundle-progress,
+.ai-bundle-step-state {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 .ai-thinking {

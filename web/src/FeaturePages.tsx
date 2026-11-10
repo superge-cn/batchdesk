@@ -32,6 +32,7 @@ import type {
   ProgressPhase,
   RecipeSampling,
   RenamePreview,
+  RenamePreviewRow,
   SaveRecipeInput,
   TaskState,
   UndoDryRun
@@ -357,6 +358,20 @@ const PREVIEW_STATUS_TONES: Record<PreviewStatus, string> = {
 /** 排序取比较键而不是界面文案：文案随语言变，键不随语言变（设计 09）。 */
 function featureSortKey(entry: PlanEntry, column: string): string | undefined {
   return column === "source" ? entry.source : entry.target ?? entry.reason;
+}
+
+/**
+ * C05 预览表（F12 页内嵌的冲突检测表）：与功能计划预览**分表**存列宽/排序
+ * （表 id `table.feature.c05`），否则拖 C05 的列会把 F12 计划表的列宽擦掉。
+ */
+const C05_PREVIEW_TABLE = "table.feature.c05";
+const C05_PREVIEW_COLUMNS = ["status", "rename"];
+
+/** 排序键按 `RenamePreviewRow` 的字段名取（AGENTS 引用回核：字段取自类型定义，不猜）。 */
+function c05SortValue(row: RenamePreviewRow, column: string): string | number | undefined {
+  if (column === "status") return row.status;
+  if (column === "rename") return row.oldPath;
+  return undefined;
 }
 
 function statusBadge(t: Translate, status: PreviewStatus) {
@@ -1473,14 +1488,30 @@ export function FeaturePages({
                   </p>
                 </div>
               </div>
-              <div className="table">
-                <div className="table-scroll">
-                  <div className="row row-head">
-                    <span>{t("feature.c05.table.status")}</span>
-                    <span>{t("feature.c05.table.rename")}</span>
-                  </div>
-                  {preview.rows.map((row) => (
-                    <div className="row" key={row.entryId}>
+              <div
+                className="table"
+                style={columnVarsStyle(C05_PREVIEW_COLUMNS, uiTables.widths(C05_PREVIEW_TABLE))}
+              >
+                <TableHead
+                  tableId={C05_PREVIEW_TABLE}
+                  tables={uiTables}
+                  columns={[
+                    { id: "status", label: t("feature.c05.table.status") },
+                    { id: "rename", label: t("feature.c05.table.rename") }
+                  ]}
+                />
+                {/* 方案 6.2：改名预览按目录规模动辄上千行，只挂窗口内的行；
+                    排序只重排显示，不改名也不改派发序（方案 §7.1）。 */}
+                <VirtualList
+                  label={t("feature.c05.title")}
+                  items={sortRows(
+                    preview.rows,
+                    uiTables.sortOf(C05_PREVIEW_TABLE),
+                    c05SortValue
+                  )}
+                  getKey={(row) => row.entryId}
+                  renderRow={(row) => (
+                    <div className="row">
                       <span>
                         {statusBadge(t, row.status)}
                         {row.twoPhase ? t("feature.c05.twoPhase") : ""}
@@ -1490,8 +1521,8 @@ export function FeaturePages({
                         {row.detail ? ` · ${row.detail}` : ""}
                       </span>
                     </div>
-                  ))}
-                </div>
+                  )}
+                />
               </div>
               {preview.highlights.length > 0 && (
                 <div className="warnings">

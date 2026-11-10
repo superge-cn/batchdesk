@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Info, RotateCcw } from "lucide-react";
+import { SupportPackageCard } from "./SupportPackageCard";
 import { getConfig, resetScope, setConfig, toIpcError } from "./lib/ipc";
 import { DEFAULT_LANG, useI18n, type MessageKey } from "./i18n";
 import { ErrorBanner } from "./ErrorBanner";
@@ -498,6 +499,8 @@ export function SettingsPage({
               </button>
             </div>
           </section>
+
+          <SupportPackageCard />
 
           <div className="hint">
             <Info size={14} /> {t("settings.webNote")}

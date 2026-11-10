@@ -16,9 +16,9 @@ test("模板库可达：列表出得来，导入高版本被拒并给出错误�
   await expect(page.getByRole("heading", { name: "CSV 分片（每片 5 万行）" })).toBeVisible();
   // 动作要显示成人话，不是内核枚举
   await expect(page.getByText("分割", { exact: true })).toBeVisible();
-  // 套用通道已接：可套用的模板给真按钮
+  // 套用通道已接：可套用的模板给真按钮（夹具含单步与多步两条）
   await expect(page.getByText(/OQ-41/)).toBeVisible();
-  await expect(page.getByTestId("template-apply")).toBeVisible();
+  await expect(page.getByTestId("template-apply").first()).toBeVisible();
 
   // 导入一份高版本模板：报 E1007，且不显示后端原文（设计 06 §3）
   await page.getByPlaceholder("粘贴导出的模板 JSON").fill('{"schemaVersion":99,"name":"x"}');
@@ -33,7 +33,7 @@ test("套用模板：填路径槽位生成预览计划，执行是显式按钮",
   const nav = page.getByRole("navigation", { name: "功能导航" });
   await nav.getByRole("button", { name: /处理模板/ }).click();
 
-  await page.getByTestId("template-apply").click();
+  await page.getByTestId("template-apply").first().click();
   // 夹具 f05 的槽位：file（必填）＋outputDir（输出）
   await page.getByTestId("apply-slot-file").fill("/in/list.csv");
   await page.getByTestId("apply-slot-outputDir").fill("/out");
@@ -44,4 +44,32 @@ test("套用模板：填路径槽位生成预览计划，执行是显式按钮",
   // 只出计划不执行（方案 §15.2.2）：执行必须显式点
   await page.getByTestId("apply-execute").click();
   await expect(page.getByText(/已启动/)).toBeVisible();
+});
+
+// Phase B（方案 §15.2.3）：多步模板按步 plan/apply，不预生成所有步骤；
+// 本机新建（origin=local）默认一键；第二步输入取自第一步产物（`source: previous`），
+// 首步始终先预览确认，后续步骤计划通过风险闸门后自动 apply。
+test("多步模板：本机新建默认一键，后续步骤自动推进", async ({ page }) => {
+  // 应用夹具默认模拟"最后一条目失败"（C16 重试链路）；多步要走出成功链路，
+  // 所以显式切到全成功场景（真实语义：某步失败停止后续）。
+  await page.goto("/?applyScenario=ok");
+  const nav = page.getByRole("navigation", { name: "功能导航" });
+  await nav.getByRole("button", { name: /处理模板/ }).click();
+
+  await page.getByTestId("template-apply").nth(1).click();
+  await expect(page.getByTestId("run-panel")).toBeVisible();
+  // 夹具是多步的本机新建模板（origin=local）→ 一键为缺省（方案 §15.2.3）
+  await expect(page.getByTestId("run-mode-one-click")).toHaveAttribute("aria-pressed", "true");
+
+  // 首步始终先预览确认：填槽位 → 预览 → 执行
+  await page.getByTestId("run-slot-roots").fill("/data");
+  await page.getByTestId("run-slot-output").fill("/out");
+  await page.getByTestId("run-plan").click();
+  await expect(page.getByTestId("run-preview-stats")).toBeVisible();
+  await page.getByTestId("run-execute").click();
+
+  // 后续步骤自动 plan + apply（必填 files 取自第 1 步计划的 target）
+  await expect(page.getByTestId("run-notice")).toContainText("多步执行完成");
+  await expect(page.getByTestId("run-step-status-0")).toHaveText("已完成");
+  await expect(page.getByTestId("run-step-status-1")).toHaveText("已完成");
 });

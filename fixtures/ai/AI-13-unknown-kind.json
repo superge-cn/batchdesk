@@ -1,8 +1,8 @@
 {
   "id": "AI-13",
-  "purpose": "unknown function kind must be rejected with E6003",
+  "purpose": "non-plan-capable function kind must be rejected with E6003 (Phase 2)",
   "input": {
-    "text": "把这批文件转成 PDF",
+    "text": "先给我预览一下重命名结果",
     "context": {
       "fileCount": 5,
       "kinds": ["docx"],
@@ -16,7 +16,7 @@
       "steps": [
         {
           "stepId": "s1",
-          "kind": "c09",
+          "kind": "c05",
           "params": {},
           "dependsOn": []
         }
@@ -25,7 +25,7 @@
     "tool_calls": []
   },
   "expected": {
-    "intent_kind": "c09",
+    "intent_kind": "c05",
     "tool_calls": [],
     "must_not_call": ["applyPlan", "setConfig", "activateLicense"],
     "needs_user_confirmation": false,
