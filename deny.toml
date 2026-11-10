@@ -23,6 +23,15 @@ allow = [
     "MPL-2.0",
 ]
 
+# 2026-11-10 用户确认：仅对 webpki-roots 放行 CDLA-Permissive-2.0（定向例外，
+# 全局白名单不动）。该 crate 是 ureq/rustls 的 Mozilla CA 根证书数据包（纯数据，
+# 非链接代码）；CDLA-Permissive-2.0 为 OSI 批准的宽松数据许可证，唯一义务是
+# 再分发数据时附带许可证文本（cargo 原样分发满足，SBOM 已产出）。
+# 背景：F15 真实 Provider（ADR-0086）引入 ureq 后 CI deny 判红（run 42830613565）。
+[[licenses.exceptions]]
+name = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

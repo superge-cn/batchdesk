@@ -52,7 +52,10 @@ F15 Phase 2/3 的目录与多计划已落地，真实模型调用成为唯一阻
 - **未完成**：真实 Provider 的 staging 验收、多轮会话、AI 侧参数 schema、`loadRecipe` 工具；
   束级自动回滚按 OQ-23 不做。
 - **依赖审计**：新增 `ureq`（MIT/Apache-2.0）与 Windows-only `keyring`（MIT/Apache-2.0）；
-  本地未安装 cargo-deny，许可证/来源由 CI deny job 复核。
+  本地未安装 cargo-deny，许可证/来源由 CI deny job 复核。**CI 首查（run 42830613565，
+  2026-11-10）判红于传递依赖 `webpki-roots`（Mozilla CA 根证书数据包）的
+  CDLA-Permissive-2.0 不在白名单**；用户同日裁决取定向例外——`deny.toml` 的
+  `[[licenses.exceptions]]` 仅对 webpki-roots 放行该许可证，全局白名单不动。
 
 ## 5. 关联
 

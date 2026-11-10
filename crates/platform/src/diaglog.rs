@@ -559,9 +559,17 @@ mod tests {
     fn redact_path_follows_full_paths_flag() {
         let dir = temp_dir("redact");
         let log = DiagnosticLog::open(dir.join(CURRENT_FILE), DiagnosticOpts::default());
-        assert_eq!(log.redact_path("C:\\data\\a.txt"), "a.txt");
+        // 盘符路径只在 Windows 上是真路径：Linux 的 Path 不吃反斜杠分隔符，
+        // 拿它断言会把整串当文件名（CI ubuntu 判红实证）。脱敏按宿主平台语义即可——
+        // 调用点传入的都是本机文件系统操作产生的路径。
+        #[cfg(windows)]
+        {
+            assert_eq!(log.redact_path("C:\\data\\a.txt"), "a.txt");
+            assert_eq!(log.redact_path("C:\\"), "<path>");
+        }
         assert_eq!(log.redact_path("/home/u/secret.bin"), "secret.bin");
-        assert_eq!(log.redact_path("C:\\"), "<path>");
+        #[cfg(unix)]
+        assert_eq!(log.redact_path("/"), "<path>");
         log.set_full_paths(true);
         assert_eq!(log.redact_path("C:\\data\\a.txt"), "C:\\data\\a.txt");
         let _ = fs::remove_dir_all(&dir);
