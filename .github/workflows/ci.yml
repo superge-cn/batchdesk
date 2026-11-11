@@ -138,7 +138,7 @@ jobs:
           python-version: "3.x"
       - name: 文档一致性（链接/版本/语料摘要/错误码）
         run: python scripts/check_docs.py
-      - name: 国际化门禁（十一项：key 集合／占位符／硬编码中文／错误码对齐／预警类别对齐／枚举不裸露）
+      - name: 国际化门禁（十二项：key 集合／占位符／硬编码中文／错误码对齐／预警类别对齐／枚举不裸露／预检类别对齐）
         run: python scripts/check_locales.py
       - name: 配置迁移样本 schema
         run: python fixtures/migrations/check_schema.py
@@ -205,7 +205,7 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
         working-directory: web
-      - name: 国际化门禁（十一项：key 集合／占位符／硬编码中文／错误码对齐／预警类别对齐／枚举不裸露）
+      - name: 国际化门禁（十二项：key 集合／占位符／硬编码中文／错误码对齐／预警类别对齐／枚举不裸露／预检类别对齐）
         run: python ../scripts/check_locales.py
         working-directory: web
       - name: 类型检查与构建
