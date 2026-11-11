@@ -969,7 +969,7 @@ function AppShell() {
             </div>
           </div>
 
-          <div>
+          <div className="sidebar-scroll">
             <div className="nav-label">{t("app.nav.workspace")}</div>
             <nav className="nav" aria-label={t("app.nav.aria")}>
               {NAV_ITEMS.map(({ id, label, tag, Icon }) => (
