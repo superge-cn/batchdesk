@@ -19,3 +19,12 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 # ConfigDocument 的 patch 与 SettingValue 需要动态 JSON 值（设计 03 §2/§4；ADR-0010 同一选型）。
 serde_json = "1"
+
+[dev-dependencies]
+# 纯函数微基准（CI bench job）；默认特性关掉绘图（plotters）以缩小依赖树，
+# 保留 cargo_bench_support（cargo bench 集成）与 csv_reports（供跨提交对比脚本用）。
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "csv"] }
+
+[[bench]]
+name = "core_hot_paths"
+harness = false
