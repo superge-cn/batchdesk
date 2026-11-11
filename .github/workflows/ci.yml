@@ -222,7 +222,15 @@ jobs:
       # 真实浏览器（Chromium）UI 语义层：数据走浏览器 mock 夹具，
       # 不代表真机文件系统结果；真 WebView 链路仍是 scripts/e2e-tauri.mjs（需 tauri-driver）。
       - name: 安装 Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        # runner 网络抖动时 Chromium 下载会失败（2026-11-11/12 两次判红均为该步，
+        # 非代码问题）；transient 重试 3 次，全败才判红。
+        run: |
+          for attempt in 1 2 3; do
+            npx playwright install --with-deps chromium && exit 0
+            echo "Playwright Chromium 安装第 ${attempt} 次失败，20 秒后重试"
+            sleep 20
+          done
+          exit 1
         working-directory: web
       - name: UI 语义测试（Playwright：C05 预览面板 ＋ S01 预检报告 ＋ 23 视图可达）
         run: pnpm test:e2e
@@ -247,9 +255,17 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
       - name: 安装 Tauri Linux 依赖
+        # apt 在 runner 网络抖动时会卡死/失败（2026-11-11 实跑 43 分钟未结束）；
+        # 每条 apt 命令套 timeout（挂死转失败）＋ Acquire::Retries（瞬态重试），
+        # 再以 3 次外层重试兜底。
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          for attempt in 1 2 3; do
+            sudo timeout 900 apt-get -o Acquire::Retries=3 update && \
+            sudo timeout 900 apt-get -o Acquire::Retries=3 install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf && exit 0
+            echo "Tauri 依赖安装第 ${attempt} 次失败，20 秒后重试"
+            sleep 20
+          done
+          exit 1
       - name: 构建前端产物（Tauri context 需要 frontendDist）
         run: |
           pnpm install --frozen-lockfile
