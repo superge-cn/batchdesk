@@ -69,6 +69,7 @@ import { DangerConfirm } from "./DangerConfirm";
 import { ErrorBanner } from "./ErrorBanner";
 import { describeError } from "./errors";
 import { warningKindTitle } from "./warnings";
+import { preflightKindTitle } from "./preflightKinds";
 import { VirtualList } from "./VirtualList";
 import { applyStatusBadge, phaseLabel, stateBadge, type Translate } from "./labels";
 import { TaskHistory } from "./TaskHistory";
@@ -1138,8 +1139,9 @@ function AppShell() {
                         {item.level === "block"
                           ? t("c09.preflight.levelBlock")
                           : t("c09.preflight.levelWarn")}{" "}
-                        · {item.kind}
-                        {item.code ? ` (${item.code})` : ""} · {item.message}
+                        · {preflightKindTitle(t, item.kind)}
+                        {item.code ? ` (${item.code})` : ""}
+                        {item.path ? ` · ${item.path}` : ""}
                       </div>
                     ))}
                 </div>

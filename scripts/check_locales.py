@@ -20,6 +20,9 @@
 11. 预警类别三方逐类对齐（设计 06 §2A ↔ `web/src/warnings.ts` ↔ 两语言包）：表里有类别而
    映射没接、映射里有而表没有、语言包缺文案或多出映射表外的 `warning.*` key，都直接红；
    表解析为空即报「门禁自校失败」。
+12. 预检类别三方逐类对齐（设计 01 的 `PreflightItem.kind` 枚举 ↔ `web/src/preflightKinds.ts`
+   ↔ 两语言包）：同第 ⑪ 项手法；内核新增类别而界面没接文案即红（OQ-38 口径：预检项的
+   技术明细不进界面，只显示级别＋本地化类别＋错误码）。
 
 只使用标准库；CI 的 web job 与本地门禁必跑。
 
@@ -53,6 +56,13 @@ ERROR_BUNDLE_KEY_RE = re.compile(r"^error\.(E\d{4})\.(summary|action|detail)$")
 # errors.ts／语言包没接文案，这里直接红（此前是"人记得去补"）。
 DESIGN06_FILE = ROOT / "docs" / "design" / "06-错误码与用户文案契约.md"
 DESIGN06_CODE_RE = re.compile(r"^\|\s*(E\d{4})\s*\|", re.M)
+# 设计 01 的 PreflightItem.kind 枚举（追加式枚举，冻结后只增不改）：预检类别的对照源。
+DESIGN01_FILE = ROOT / "docs" / "design" / "01-内核接口与IPC契约.md"
+PREFLIGHT_INTERFACE_RE = re.compile(r"interface PreflightItem\s*\{(?P<body>[^{}]*)\}", re.S)
+PREFLIGHT_ENUM_RE = re.compile(r'kind:\s*((?:"[a-z0-9\-]+"\s*\|\s*)*"[a-z0-9\-]+")')
+PREFLIGHT_MAP_FILE = SRC_DIR / "preflightKinds.ts"
+PREFLIGHT_MAP_ENTRY_RE = re.compile(r'"([a-z0-9\-]+)":\s*"c09\.preflight\.kind\.([A-Za-z0-9]+)"')
+PREFLIGHT_BUNDLE_KEY_RE = re.compile(r"^c09\.preflight\.kind\.([A-Za-z0-9]+)$")
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 CJK_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 
@@ -367,6 +377,49 @@ def main() -> int:
                     f"{lang}.{key} 的类别没有进 warnings.ts 映射表（要么补映射，要么删文案）"
                 )
 
+    # 12. 预检类别三方逐类对齐（设计 01 的 PreflightItem.kind 枚举 ↔ preflightKinds.ts ↔ 两语言包）。
+    design01_text = DESIGN01_FILE.read_text(encoding="utf-8") if DESIGN01_FILE.exists() else ""
+    interface_match = PREFLIGHT_INTERFACE_RE.search(design01_text)
+    enum_match = (
+        PREFLIGHT_ENUM_RE.search(interface_match.group("body")) if interface_match else None
+    )
+    design_kinds = set(re.findall(r'"([a-z0-9\-]+)"', enum_match.group(1))) if enum_match else set()
+    if not design_kinds:
+        failures.append("设计 01 的 PreflightItem.kind 枚举解析为空：门禁自校失败（探测器失效＝没有正例）")
+    mapped_preflight: dict[str, str] = {}
+    if not PREFLIGHT_MAP_FILE.exists():
+        failures.append("找不到 web/src/preflightKinds.ts：预检类别没有界面映射表")
+    else:
+        mapped_preflight = dict(
+            PREFLIGHT_MAP_ENTRY_RE.findall(strip_comments(PREFLIGHT_MAP_FILE.read_text(encoding="utf-8")))
+        )
+        if not mapped_preflight:
+            failures.append("web/src/preflightKinds.ts 里没有任何 c09.preflight.kind.* 映射")
+    if design_kinds and mapped_preflight:
+        unbound = sorted(design_kinds - set(mapped_preflight))
+        strays = sorted(set(mapped_preflight) - design_kinds)
+        if unbound:
+            failures.append(
+                f"设计 01 的 kind 枚举有 {len(unbound)} 个类别没进 preflightKinds.ts 映射：{', '.join(unbound)}"
+            )
+        if strays:
+            failures.append(
+                f"preflightKinds.ts 有 {len(strays)} 个类别不在设计 01 枚举里：{', '.join(strays)}"
+            )
+    mapped_preflight_keys = {f"c09.preflight.kind.{suffix}" for suffix in mapped_preflight.values()}
+    for kind, suffix in mapped_preflight.items():
+        bundle_key = f"c09.preflight.kind.{suffix}"
+        for lang in REQUIRED_LANGS:
+            if bundle_key not in bundles[lang]:
+                failures.append(f"{lang} 缺预检类别文案：{bundle_key}")
+    for lang, bundle in bundles.items():
+        for key in bundle:
+            match = PREFLIGHT_BUNDLE_KEY_RE.match(key)
+            if match and key not in mapped_preflight_keys:
+                failures.append(
+                    f"{lang}.{key} 的类别没有进 preflightKinds.ts 映射表（要么补映射，要么删文案）"
+                )
+
     if failures:
         print("国际化门禁未通过：", file=sys.stderr)
         for failure in failures:
@@ -379,7 +432,8 @@ def main() -> int:
         f"源码引用 {len(referenced)} 个 key 全部存在，注释外无硬编码中文；"
         f"错误码文案 {len(mapped)} 个码位两段齐全，且与设计 06 §2 码表逐码对齐；"
         f"界面 {len(scanned_ui)} 个源码文件零后端错误原文、零线协议枚举裸露；"
-        f"预警类别 {len(mapped_warnings)} 类与设计 06 §2A 逐类对齐。"
+        f"预警类别 {len(mapped_warnings)} 类与设计 06 §2A 逐类对齐；"
+        f"预检类别 {len(mapped_preflight)} 类与设计 01 的 PreflightItem.kind 枚举逐类对齐。"
     )
     return 0
 

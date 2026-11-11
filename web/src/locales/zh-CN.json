@@ -760,5 +760,13 @@
   "templates.run.undoStarted": "撤销任务 {taskId} 已启动，可在「任务与撤销」视图跟进。",
   "templates.run.previewTitle": "第 {index} 步预览",
   "templates.run.autoRunning": "一键执行中…",
-  "templates.run.currentStep": "第 {index} 步"
+  "templates.run.currentStep": "第 {index} 步",
+  "c09.preflight.kind.diskSpace": "磁盘空间",
+  "c09.preflight.kind.path": "路径",
+  "c09.preflight.kind.protected": "保护目录",
+  "c09.preflight.kind.readonly": "只读",
+  "c09.preflight.kind.locked": "被占用",
+  "c09.preflight.kind.placeholder": "占位文件",
+  "c09.preflight.kind.longPath": "长路径",
+  "c09.preflight.kind.unc": "网络路径"
 }

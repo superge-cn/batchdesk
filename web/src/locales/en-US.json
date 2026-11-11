@@ -760,5 +760,13 @@
   "templates.run.undoStarted": "Undo task {taskId} started; follow it in the Tasks & Undo view.",
   "templates.run.previewTitle": "Step {index} preview",
   "templates.run.autoRunning": "One-click running…",
-  "templates.run.currentStep": "Step {index}"
+  "templates.run.currentStep": "Step {index}",
+  "c09.preflight.kind.diskSpace": "Disk space",
+  "c09.preflight.kind.path": "Path",
+  "c09.preflight.kind.protected": "Protected directory",
+  "c09.preflight.kind.readonly": "Read-only",
+  "c09.preflight.kind.locked": "In use",
+  "c09.preflight.kind.placeholder": "Placeholder file",
+  "c09.preflight.kind.longPath": "Long path",
+  "c09.preflight.kind.unc": "Network path"
 }

@@ -164,4 +164,45 @@ describe("S01 预检的时序语义（TC v0.4 的 E○2 改写）", () => {
     await screen.findByText(/执行已阻断，任务零副作用/);
     expect(applyPlan).not.toHaveBeenCalled();
   });
+
+  it("预检项只显示本地化类别＋错误码，内核英文明细（含路径）不进界面（OQ-38 同族收口）", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(screen.getByPlaceholderText(/资料归档|Documents/), "/mock/tree");
+    await generatePlan(user);
+    await startApply(user);
+
+    release({
+      items: [
+        {
+          kind: "protected",
+          level: "block",
+          code: "E2009",
+          message: "path is under protected directory /home/u/private/notes.txt",
+          path: "/home/u/private/notes.txt"
+        },
+        {
+          kind: "disk-space",
+          level: "block",
+          code: "E2004",
+          message: "insufficient space: available 1048576 bytes < required 209715200 + margin 0 + temp peak 0",
+          path: "/vol/data"
+        }
+      ],
+      level: "block",
+      pass: 7,
+      warn: 0,
+      block: 2,
+      taskBlocked: true
+    });
+
+    const banner = await screen.findByRole("status");
+    // 本地化类别与错误码可见
+    await waitFor(() => expect(banner.textContent).toMatch(/保护目录 \(E2009\)/));
+    await waitFor(() => expect(banner.textContent).toMatch(/磁盘空间 \(E2004\)/));
+    // 内核英文明细原文不得出现（OQ-38：技术细节不进界面）
+    expect(banner.textContent).not.toContain("path is under protected directory");
+    expect(banner.textContent).not.toContain("insufficient space");
+    expect(banner.textContent).not.toContain("available 1048576");
+  });
 });
