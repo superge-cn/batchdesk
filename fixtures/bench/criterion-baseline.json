@@ -1,0 +1,11 @@
+{
+  "_provenance": "本地 cargo bench 实测种子（2026-11-12，开发机，cargo bench -p batchdesk-kernel --bench core_hot_paths）。这是快照、会随机器与代码过期；正式口径以 CI 的 artifact 链为准——bench job 的「取上一次主分支 bench 产物作基线」步下载上一次成功运行的 bench-results，届时本文件只作本地与首跑兜底。",
+  "_unit": "ns",
+  "medians": {
+    "conflict_scan_conflicts 10k": 2555372.2,
+    "csv_record_scanner 1mib": 823875.5,
+    "encoding_detect gb18030 1mib": 122550300.0,
+    "encoding_transcode gb18030-_utf8 1mib": 2182325.0,
+    "rename_plan_f12 10k": 52195550.0
+  }
+}

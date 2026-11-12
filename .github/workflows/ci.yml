@@ -295,15 +295,47 @@ jobs:
           # bench job 只在主分支跑；C-1 首建涉及 10 万次小文件写入，建议后续改用预置缓存按需提供。
           python "fixtures/bench/C-3-大CSV/gen_c3.py"
           echo "C-1 体积与耗时较大，CI 内暂不生成，由本地脚本产出（fixtures/bench/C-1-目录树10万/gen_c1.py）。"
-      - name: 跑基准（criterion 基准待实现）
+      - name: 跑基准（内核热路径 microbench）
         run: cargo bench --workspace
-      - name: 与基线对比（漂移超阈值即失败）
+      - name: 取上一次主分支 bench 产物作基线
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_RUN_ID: ${{ github.run_id }}
+        shell: bash
         run: |
-          # TODO(对比): 基线对比脚本待补。约定如下——
-          #   1) 基线来自上一次主分支成功运行的 criterion 产物（artifact 或缓存）；
-          #   2) 漂移阈值为仓库变量（如 BENCH_DRIFT_*），**不在此处写死数值**；
-          #   3) 阈值口径以基线方案 §9.1 为准。
-          echo "基线对比脚本待补：本步暂以占位跳过。"
+          set -euo pipefail
+          rid=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=5" \
+            | python3 -c "import sys,json,os; runs=json.load(sys.stdin)['workflow_runs']; cur=int(os.environ['GH_RUN_ID']); pick=[r['id'] for r in runs if r['id']!=cur]; print(pick[0] if pick else '')")
+          if [ -z "$rid" ]; then
+            echo "无更早的成功主分支运行，回退仓库种子基线（fixtures/bench/criterion-baseline.json）"
+          else
+            echo "baseline-run-id=$rid" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 下载基线产物
+        if: steps.baseline.outputs.baseline-run-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-results
+          run-id: ${{ steps.baseline.outputs.baseline-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: baseline-criterion
+        continue-on-error: true
+      - name: 与基线对比（漂移超阈值即失败）
+        env:
+          BENCH_DRIFT_PCT: ${{ vars.BENCH_DRIFT_PCT }}
+        run: |
+          # 口径（承接「数值单源」段）：
+          #   1) 基线优先取上一次主分支成功运行的 criterion 产物（上两步下载到 baseline-criterion/
+          #      ——与当前产物同布局时逐 bench 比 median 点估计）；下载失败或首跑无历史时回退
+          #      仓库种子 fixtures/bench/criterion-baseline.json；
+          #   2) 漂移阈值只从仓库变量 BENCH_DRIFT_PCT 注入，**不在此处写死数值**；
+          #   3) §9.1 未定义微基准漂移阈值，阈值待产品所有者裁决——未设时脚本仅报告不判失败。
+          base_flag=""
+          if [ -d baseline-criterion ]; then base_flag="--baseline baseline-criterion"; fi
+          python3 scripts/compare_criterion.py --current target/criterion $base_flag
       - name: 上传基准结果
         uses: actions/upload-artifact@v4
         with:
