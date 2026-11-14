@@ -519,4 +519,92 @@ mod tests {
     fn long_paths_are_always_supported_outside_windows() {
         assert!(long_path_supported());
     }
+
+    /// 文件树快照：路径 →（长度, 内容摘要, 修改时间）。用于"零写入"断言——
+    /// 采集前后各拍一次，任何新增/修改/删除都会让两次快照不等。
+    fn tree_snapshot(root: &Path) -> Vec<(String, u64, u64, Option<SystemTime>)> {
+        let mut entries = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let read = match fs::read_dir(&dir) {
+                Ok(read) => read,
+                Err(_) => continue,
+            };
+            for item in read.flatten() {
+                let path = item.path();
+                let metadata = match fs::metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                if metadata.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let len = metadata.len();
+                let modified = metadata.modified().ok();
+                let hash = fs::read(&path)
+                    .map(|bytes| {
+                        let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
+                        for byte in bytes {
+                            digest ^= u64::from(byte);
+                            digest = digest.wrapping_mul(0x0000_0100_0000_0001);
+                        }
+                        digest
+                    })
+                    .unwrap_or(0);
+                entries.push((path.to_string_lossy().into_owned(), len, hash, modified));
+            }
+        }
+        entries.sort();
+        entries
+    }
+
+    /// S01-EXE-02：壳层事实采集（`probe_root`／`stat`／`path_check(_light)`／
+    /// `is_read_only`／`is_network_path`／`unc_share_root`／`same_volume`／
+    /// `long_path_supported`／`available_space`）**不得改动文件树**。
+    /// 预检的意义就是把"执行到一半失败"前移为"执行前阻断"，采集阶段一旦写盘
+    /// 就自相矛盾；本用例把这条接线钉住，而不只是"跑一遍不报错"。
+    #[test]
+    fn fact_gathering_writes_nothing_to_the_tree() {
+        let temp = TempDir::new();
+        let nested = temp.0.join("a/b/c");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("x.txt");
+        fs::write(&file, b"payload").unwrap();
+        let missing = temp.0.join("a/b/ghost.txt");
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&file, permissions).unwrap();
+
+        let before = tree_snapshot(&temp.0);
+
+        // 全部走只读口：包含"路径不存在"与"只读文件"两种输入。
+        let _ = probe_root(&missing);
+        let _ = probe_root(&file);
+        let _ = available_space(&missing).expect("临时目录应能取到可用空间");
+        let _ = path_check(&file, true);
+        let _ = path_check_light(&file, true);
+        let _ = path_check(&missing, false);
+        let _ = is_read_only(&file);
+        let _ = is_placeholder_file(&file);
+        let _ = is_network_path(&file);
+        let _ = unc_share_root(&file);
+        let _ = same_volume(&file, &temp.0);
+        let _ = long_path_supported();
+
+        let after = tree_snapshot(&temp.0);
+        assert_eq!(before, after, "事实采集不得改动文件树（预检阶段零写入）");
+
+        // 反向对照：真写一次必须让快照变化，否则上面的断言是空转。
+        // （`file` 已被置只读，故另取一个可写文件做对照。）
+        let control = nested.join("control.txt");
+        fs::write(&control, b"before").unwrap();
+        let with_control = tree_snapshot(&temp.0);
+        fs::write(&control, b"after").unwrap();
+        assert_ne!(
+            tree_snapshot(&temp.0),
+            with_control,
+            "快照必须能感知写入，否则零写入断言无意义"
+        );
+    }
 }

@@ -35,6 +35,42 @@
 | CPU／RAM | AMD Ryzen 7 5800U（8 核 16 线程）／15.3 GB | 内存采样口径见 ADR-0082（WorkingSetSize，Windows 侧） |
 | 内存采样口径 | `GetProcessMemoryInfo` 的 WorkingSetSize（ADR-0082） | 与记录 1 的 VmRSS 同为驻留物理内存口径但不等价，两平台读数不做直接比较 |
 
+## 记录 3
+
+| 项 | 值 | 备注 |
+|---|---|---|
+| 记录日期 | 2026-11-12 | EX-01 三臂**预演**用此记录（非补测，补测节点 2026-11-30） |
+| 主机标识 | `WIN75K7S16U0E2E` | 与记录 2 同一台，未换机 |
+| 操作系统与版本 | Windows 11 专业版 10.0.26200（Build 26200） | 同记录 2（MVP 平台范围内） |
+| 介质类型 | NVMe SSD（`Get-PhysicalDisk` BusType=NVMe，MediaType=SSD） | §9.1 的 ≥200 MB/s（NVMe）档在本机**适用** |
+| 介质型号 | Samsung SSD 990 EVO Plus 1TB（Disk 0，分区 E: 432 GB） | 同记录 2 |
+| 文件系统 | NTFS（E:，`Get-Volume` Healthy） | 同记录 2 |
+| 测试前磁盘剩余空间 | 42 GB（清理后 `df -h /e`；测量进行中一度逼近 0，逐臂清理后回到 36 GB） | **教训**：整档三臂串行时每臂峰值 4–6 GiB，工作目录缺省落 `E:\tmp\batchdesk-bench`（Python 的 `/tmp` 在 Windows 原生下＝当前盘根，非 Git Bash 的 `/tmp`）；必须逐臂清理并预留 ≥15 GiB，否则 `ENOSPC` 会让该臂整轮作废 |
+| 磁盘压缩 | 未启用 | 同记录 2 |
+| 索引服务 | WSearch Running ＋ SysMain Running | 同记录 2（Windows 默认开启） |
+| 实时杀软 | 360 安全套装＋360 杀毒在运行 | 同记录 2 |
+| CPU／RAM | AMD Ryzen 7 5800U（8 核 16 线程）／15.3 GB | 同记录 2 |
+| 内存采样口径 | `GetProcessMemoryInfo` 的 WorkingSetSize（ADR-0082） | 与记录 1 的 VmRSS 同为驻留物理内存口径但不等价 |
+| 页缓存条件 | **冷**：每轮工作副本是新写入的 2.2 GiB，源数据集的页在上一轮即被挤出 | 与记录 2 的「页缓存热窗口、绝对值偏乐观」不同，本轮读数偏保守（C01 ASCII 对照 231.2 vs R-38 的 486.9 MiB/s 即为口径差，非实现回退） |
+
+## 记录 4
+
+| 项 | 值 | 备注 |
+|---|---|---|
+| 记录日期 | 2026-11-13 | F04 合并臂（`c2merge`）实测用此记录 |
+| 主机标识 | `WIN75K7S16U0E2E` | 与记录 2／3 同一台，未换机 |
+| 操作系统与版本 | Windows 11 专业版 10.0.26200（Build 26200） | 同记录 2／3 |
+| 介质类型 | NVMe SSD（`Get-PhysicalDisk` BusType=NVMe，MediaType=SSD） | §9.1 的 ≥200 MB/s（NVMe）档在本机**适用** |
+| 介质型号 | Samsung SSD 990 EVO Plus 1TB（Disk 0，分区 E: 432 GB） | 同记录 2／3 |
+| 文件系统 | NTFS（E:，`Get-Volume` Healthy） | 同记录 2／3 |
+| 测试前磁盘剩余空间 | **3.2 GB**（`df -h /e`；当日构建与往轮残留把盘占到 100%） | **教训（再现记录 3 的 ENOSPC）**：本轮先按整档 1 GiB 跑，warm＋run1 各占约 1 GiB 时把盘写满，run2 报 `E3005 os error 112`（磁盘空间不足）整轮作废；清理 `E:	mpatchdesk-bench` 与临时目录后回到 3.2 GB，改用 **256 MiB 子档**（`--size-mib 256`）才跑通。整档测量前必须预留 ≥15 GiB（同记录 3） |
+| 磁盘压缩 | 未启用 | 同记录 2／3 |
+| 索引服务 | WSearch Running ＋ SysMain Running | 同记录 2／3 |
+| 实时杀软 | 360 安全套装＋360 杀毒在运行 | 同记录 2／3 |
+| CPU／RAM | AMD Ryzen 7 5800U（8 核 16 线程）／15.3 GB | 同记录 2／3 |
+| 内存采样口径 | `GetProcessMemoryInfo` 的 WorkingSetSize（ADR-0082） | 同记录 2／3 |
+| 页缓存条件 | **冷**：每轮工作副本是新写入的 256 MiB 子档 | 与记录 3 同口径（偏保守） |
+
 ## 使用要求
 
 1. 每次跑 C-1／C-2／C-3 前先确认本记录与当前机器一致；不一致则**新增记录**，不要覆盖旧记录。

@@ -1,0 +1,1077 @@
+apply_flow::apply_and_undo_restore_files	ok
+apply_flow::apply_skips_entries_changed_between_plan_and_apply	ok
+apply_flow::c01_partial_failure_transcodes_one_file_and_leaves_the_failed_one	ok
+apply_flow::c01_plan_apply_and_undo_round_trip	ok
+apply_flow::c01_reports_invalid_sequence_replacement_counts_per_entry	ok
+apply_flow::c02_blocks_binary_files_and_skips_already_target_files	ok
+apply_flow::c02_csv_keeps_quoted_newlines_when_converting_records	ok
+apply_flow::c02_partial_failure_converts_one_file_and_leaves_the_failed_one	ok
+apply_flow::c02_text_line_endings_plan_apply_and_undo	ok
+apply_flow::c03_blocks_binary_and_unclosed_csv	ok
+apply_flow::c03_csv_cell_mode_preserves_crlf_record_terminators	ok
+apply_flow::c03_csv_cell_mode_preserves_quoted_newlines	ok
+apply_flow::c03_partial_failure_replaces_in_one_file_and_leaves_the_failed_one	ok
+apply_flow::c03_plain_replace_plan_apply_and_undo	ok
+apply_flow::c03_regex_capture_replace_plan_apply_and_undo	ok
+apply_flow::c04_invalid_regex_and_missing_capture_are_rejected	ok
+apply_flow::c04_plain_replace_plan_apply_and_undo	ok
+apply_flow::c04_regex_capture_replace_and_no_match	ok
+apply_flow::c05_preview_reports_counts_labels_and_zero_side_effects	ok
+apply_flow::c06_cross_batch_undos_are_independent	ok
+apply_flow::c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped	ok
+apply_flow::c06_undo_is_terminal_and_the_plan_can_be_reapplied	ok
+apply_flow::c06_unknown_plan_id_reports_missing_mapping	ok
+apply_flow::c07_missing_sources_skip_or_error_and_copy_keeps_source	ok
+apply_flow::c07_move_plan_apply_and_undo_via_manifest	ok
+apply_flow::c08_rejects_unsafe_rules_and_reports_hit_statistics	ok
+apply_flow::c08_rule_archive_plan_apply_and_undo	ok
+apply_flow::c10_compress_extract_roundtrip_and_self_inclusion	ok
+apply_flow::c10_encrypted_archive_extracts_with_the_password_from_stdin	ok
+apply_flow::c10_encrypted_archive_is_blocked_until_the_plan_expects_a_password	ok
+apply_flow::c10_encrypted_archive_with_a_wrong_password_reports_e3009	ok
+apply_flow::c10_z01_gbk_name_extracts_and_undo_removes_the_product	ok
+apply_flow::c10_z02_rejects_traversal_entries_but_extracts_the_safe_one	ok
+apply_flow::c11_existing_target_is_skipped_and_missing_key_column_blocks	ok
+apply_flow::c11_full_row_dedup_plan_apply_and_undo	ok
+apply_flow::c11_key_column_dedup_keeps_first_occurrence	ok
+apply_flow::c12_blocks_missing_column_and_skips_occupied_target	ok
+apply_flow::c12_contains_drop_mode_and_non_numeric_warning	ok
+apply_flow::c12_numeric_filter_keep_plan_apply_and_undo	ok
+apply_flow::c13_external_merge_sort_with_small_chunks	ok
+apply_flow::c13_numeric_sort_plan_apply_and_undo	ok
+apply_flow::c14_rejects_invalid_regex_and_conflicting_modes	ok
+apply_flow::c14_split_plan_apply_and_undo_inserts_columns_after_source	ok
+apply_flow::c14_split_regex_and_merge_plan_apply_and_undo	ok
+apply_flow::c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features	ok
+apply_flow::c18_preview_predicts_execution_for_every_feature	ok
+apply_flow::case_only_targets_collide_on_windows_ntfs	ok
+apply_flow::cleanup_and_undo_respect_retention_window	ok
+apply_flow::empty_protected_list_blocks_nothing_while_a_hit_blocks_and_writes_nothing	ok
+apply_flow::f01_partial_failure_keeps_the_applied_part_and_undoes_only_it	ok
+apply_flow::f01_plan_apply_and_undo_write_line_aligned_parts	ok
+apply_flow::f02_partial_failure_keeps_the_applied_parts_and_undoes_only_them	ok
+apply_flow::f02_plan_apply_and_undo_split_every_n_lines	ok
+apply_flow::f03_partial_failure_keeps_the_applied_parts_and_undoes_only_them	ok
+apply_flow::f03_plan_apply_and_undo_split_by_part_count	ok
+apply_flow::f04_detects_encodings_and_writes_one_bom	ok
+apply_flow::f04_merge_partial_failure_writes_no_half_output	ok
+apply_flow::f04_plan_apply_and_undo_merge_with_encoding_unification	ok
+apply_flow::f05_partial_failure_keeps_the_applied_parts_and_undoes_only_them	ok
+apply_flow::f05_plan_apply_and_undo_repeats_the_csv_header	ok
+apply_flow::f06_csv_merge_partial_failure_writes_no_half_output	ok
+apply_flow::f06_plan_apply_and_undo_aligns_columns_and_adds_source_column	ok
+apply_flow::f06_plan_surfaces_headerless_and_header_normalization_warnings	ok
+apply_flow::f06_strict_mode_blocks_a_schema_mismatch	ok
+apply_flow::f07_missing_column_blocks_with_e3004	ok
+apply_flow::f07_partial_failure_keeps_the_applied_extract_and_undoes_only_it	ok
+apply_flow::f07_plan_apply_and_undo_extracts_columns_in_order	ok
+apply_flow::f08_last_window_keeps_the_tail	ok
+apply_flow::f08_partial_failure_keeps_the_applied_window_and_undoes_only_it	ok
+apply_flow::f08_plan_apply_and_undo_takes_the_first_rows	ok
+apply_flow::f08_zero_rows_writes_only_the_header	ok
+apply_flow::f09_partial_failure_keeps_the_applied_range_and_undoes_only_it	ok
+apply_flow::f09_plan_apply_and_undo_extracts_row_range_preserving_crlf	ok
+apply_flow::f09_range_beyond_rows_warns_and_clamps_the_output	ok
+apply_flow::f09_rejects_an_invalid_range	ok
+apply_flow::f10_empty_directory_and_target_inside_root_are_reported	ok
+apply_flow::f10_partial_failure_keeps_the_applied_listing_and_undoes_only_it	ok
+apply_flow::f10_plan_apply_and_undo_writes_directory_listing	ok
+apply_flow::f11_accepts_the_f10_listing_format_and_reports_invalid_rows	ok
+apply_flow::f11_existing_target_is_skipped	ok
+apply_flow::f11_plan_apply_and_undo_creates_multi_level_directories	ok
+apply_flow::f11_skips_branches_whose_parent_position_is_an_existing_file	ok
+apply_flow::f11_undo_keeps_a_directory_that_became_non_empty_and_reports_the_failure	ok
+apply_flow::f12_and_c03_name_read_only_files_in_plan_warnings	ok
+apply_flow::f12_prefix_plan_apply_and_undo_renames_files_and_directories	ok
+apply_flow::f12_reports_existing_conflicts_and_invalid_targets	ok
+apply_flow::f13_no_match_creates_no_entries_and_writes_nothing	ok
+apply_flow::f13_partial_failure_keeps_the_applied_rename_and_undoes_only_it	ok
+apply_flow::f13_regex_capture_plan_apply_and_undo	ok
+apply_flow::f13_rejects_invalid_regex_and_missing_capture_references	ok
+apply_flow::k08_utf16_csv_parts_each_start_with_a_bom	ok
+apply_flow::k08_utf16_csv_parts_without_header_still_start_with_a_bom	ok
+apply_flow::read_only_attribute_does_not_block_rename_on_windows	ok
+apply_flow::temp_dirs_are_unique_for_parallel_tests	ok
+apply_flow::undo_reports_e2008_on_an_exclusively_held_target_and_keeps_the_mapping	ok
+archive_cancel::cancel_before_the_first_entry_touches_nothing	ok
+archive_cancel::cancel_between_items_keeps_extracted_files_and_stays_undoable	ok
+archive_manifest::compress_report_carries_a_per_file_manifest	ok
+archive_manifest::extract_report_carries_a_per_file_manifest	ok
+archive_network::c10_extract_retries_network_inspect_three_times_then_pauses	ok
+archive_password::aes256_archive_extracts_with_the_right_password	ok
+archive_password::empty_password_counts_as_missing	ok
+archive_password::inspect_lists_encrypted_entries_without_a_password	ok
+archive_password::missing_password_refuses_the_whole_plan_before_touching_disk	ok
+archive_password::wrong_password_fails_the_entry_with_e3009_and_writes_nothing	ok
+archive_password::zipcrypto_archive_extracts_with_the_right_password	ok
+cli::tests::invalid_plan_id_is_rejected	ok
+cli::tests::keep_is_only_valid_with_plan	ok
+cli::tests::plan_defaults_to_earliest	ok
+cli::tests::plan_document_round_trips_through_json	ok
+cli::tests::plan_rejects_fast_mode	ok
+cli::tests::transcode_rewriter_streams_identically_to_whole_file_transcode	ok
+cli::tests::valid_plan_arguments_are_accepted	ok
+corpus::assertions_table_covers_every_automated_corpus	ok
+corpus::e03_readonly_target_is_marked_by_preflight_and_named_in_preview	ok
+corpus::k01_gbk_sample_detects_as_gb18030_and_transcodes_clean	ok
+corpus::k02_utf8_sample_is_not_mistaken_for_gbk	ok
+corpus::k03_bom_wins_and_target_bom_follows_caller	ok
+corpus::k04_and_k06_are_never_silently_converted	ok
+corpus::k05_ascii_sample_defaults_to_utf8_with_hint	ok
+corpus::k05_short_ascii_sample_defaults_to_utf8_and_prompts_in_the_plan	ok
+corpus::k06_binary_magic_is_rejected_by_c02_plan	ok
+corpus::k07_mixed_encoding_is_flagged_not_repaired	ok
+corpus::k08_utf16_bom_sample_detects_transcodes_and_splits_with_a_bom_per_part	ok
+corpus::r01_long_path_samples_follow_path_length_tiers	ok
+corpus::r02_case_only_targets_conflict_only_on_case_insensitive_hosts	ok
+corpus::r03_reserved_names_are_blocked_in_preview	ok
+corpus::r04_trailing_space_and_dot_targets_are_blocked_in_preview	ok
+corpus::r06_extended_and_plain_paths_normalize_to_the_same_value	ok
+corpus::t01_unclosed_quote_is_kept_as_last_record_with_warning	ok
+corpus::t02_quoted_newlines_do_not_split_records	ok
+corpus::t03_overlong_line_occupies_its_own_part_and_is_flagged	ok
+corpus::t04_column_drift_is_counted_without_correction	ok
+corpus::t05_empty_file_is_reported_without_parts	ok
+corpus::t06_no_newline_file_is_hard_cut_with_warning	ok
+corpus::t07_headerless_sample_aligns_by_column_position	ok
+corpus::t08_duplicate_and_padded_headers_normalize_without_collapsing	ok
+kernel::apply::tests::adaptive_concurrency_follows_medium_and_work_class	ok
+kernel::apply::tests::apply_moves_files_and_writes_journal	ok
+kernel::apply::tests::apply_reports_entry_progress_and_finalizing	ok
+kernel::apply::tests::blocked_entry_is_skipped_without_journal	ok
+kernel::apply::tests::c09_crash_after_quarantine_move_leaves_a_journal_entry	ok
+kernel::apply::tests::c09_network_content_hash_failure_is_retried_three_times_then_pauses	ok
+kernel::apply::tests::c09_network_disconnect_is_retried_three_times_then_pauses	ok
+kernel::apply::tests::c09_network_stat_failure_is_retried_three_times_then_pauses	ok
+kernel::apply::tests::cancel_keeps_applied_entries_when_the_caller_asks_the_user_first	ok
+kernel::apply::tests::cancel_rolls_back_applied_entries_and_marks_journal_reverted	ok
+kernel::apply::tests::changed_content_is_skipped_before_quarantine	ok
+kernel::apply::tests::changed_size_is_skipped_before_quarantine	ok
+kernel::apply::tests::denied_license_does_not_touch_the_file	ok
+kernel::apply::tests::fast_mode_plans_are_rejected_before_apply	ok
+kernel::apply::tests::huge_entries_are_detected_and_capped	ok
+kernel::apply::tests::mapped_network_drive_apply_and_undo_are_retried	ok
+kernel::apply::tests::matching_fingerprint_allows_apply	ok
+kernel::apply::tests::non_delete_entries_are_rejected_before_apply	ok
+kernel::apply::tests::plan_work_class_separates_cpu_from_io	ok
+kernel::apply::tests::protected_source_is_skipped_even_without_plan_block	ok
+kernel::apply::tests::undo_dry_run_checks_quarantine_reverses_and_empty_dirs	ok
+kernel::apply::tests::undo_dry_run_flags_conflicts_and_missing_without_touching_files	ok
+kernel::apply::tests::undo_dry_run_retries_network_stat_and_does_not_report_missing	ok
+kernel::apply::tests::undo_dry_run_surfaces_e2005_when_the_host_cannot_pause	ok
+kernel::apply::tests::undo_network_disconnect_aborts_the_whole_task_without_a_pause_host	ok
+kernel::apply::tests::undo_network_disconnect_is_retried_three_times_then_pauses	ok
+kernel::apply::tests::undo_replays_reverse_rename_and_marks_reverted	ok
+kernel::apply::tests::undo_reports_progress_and_cancels_between_entries	ok
+kernel::archive::tests::archive_manifest_formatting_handles_empty_and_overflow	ok
+kernel::archive::tests::compression_plan_blocks_self_inclusion	ok
+kernel::archive::tests::compression_plan_skips_existing_target	ok
+kernel::archive::tests::entry_names_reject_traversal_and_absolute_paths	ok
+kernel::archive::tests::existing_and_protected_targets_are_skipped	ok
+kernel::archive::tests::gbk_fallback_is_reported	ok
+kernel::archive::tests::plan_blocks_encrypted_entries_until_a_password_is_promised	ok
+kernel::archive::tests::plan_blocks_when_limits_are_exceeded	ok
+kernel::archive::tests::plan_skips_unsafe_entries_and_extracts_safe_ones	ok
+kernel::archive::tests::plan_warns_but_does_not_record_a_password_for_a_plain_archive	ok
+kernel::archive::tests::target_join_stays_under_output_root	ok
+kernel::binary::tests::detects_common_binary_signatures	ok
+kernel::binary::tests::plain_text_and_short_samples_are_not_binary	ok
+kernel::c07::tests::copy_operation_produces_copy_actions	ok
+kernel::c07::tests::escaping_or_absolute_segments_are_rejected_with_e1003	ok
+kernel::c07::tests::missing_sources_skip_or_error_by_policy	ok
+kernel::c07::tests::occupied_targets_conflict_and_self_targets_are_blocked	ok
+kernel::c07::tests::plan_resolves_relative_paths_into_targets	ok
+kernel::c08::tests::date_and_size_ranges_use_inclusive_lexicographic_bounds	ok
+kernel::c08::tests::extension_matching_folds_case_and_requires_a_match	ok
+kernel::c08::tests::first_matching_rule_wins_and_new_columns_follow	ok
+kernel::c08::tests::high_hit_rules_surface_a_danger_warning	ok
+kernel::c08::tests::rule_sub_dirs_must_be_safe	ok
+kernel::c08::tests::unmatched_files_keep_or_move_by_policy	ok
+kernel::config::tests::config_round_trips_through_json_and_rejects_unknown_fields	ok
+kernel::config::tests::defaults_match_the_safety_registry	ok
+kernel::config::tests::higher_config_version_is_read_only	ok
+kernel::config::tests::invalid_enum_value_is_rejected	ok
+kernel::config::tests::migration_chain_is_empty_at_v1	ok
+kernel::config::tests::performance_setting_accepts_auto_or_numbers_only	ok
+kernel::config::tests::reset_scope_restores_defaults	ok
+kernel::config::tests::resolve_effective_prefers_override_then_user_then_default	ok
+kernel::config::tests::scope_view_reports_sources_and_defaults	ok
+kernel::config::tests::unknown_key_and_unknown_scope_are_rejected	ok
+kernel::conflict::tests::conflict_kinds_map_to_contract_strings_and_risk	ok
+kernel::conflict::tests::detects_case_only_conflicts_only_on_case_insensitive_hosts	ok
+kernel::conflict::tests::detects_conflicts_with_existing_files	ok
+kernel::conflict::tests::detects_within_batch_duplicates_and_case_variants	ok
+kernel::conflict::tests::empty_names_are_rejected_under_both_rule_sets	ok
+kernel::conflict::tests::existing_wins_over_batch_classification	ok
+kernel::conflict::tests::file_name_of_handles_both_separators	ok
+kernel::conflict::tests::posix_rules_accept_names_only_windows_forbids	ok
+kernel::conflict::tests::posix_rules_reject_only_slash_and_nul	ok
+kernel::conflict::tests::reports_name_warnings_for_platform_rules	ok
+kernel::conflict::tests::scan_conflicts_is_silent_about_posix_legal_names	ok
+kernel::conflict::tests::sequence_target_respects_case_insensitive_occupancy	ok
+kernel::conflict::tests::sequence_target_skips_occupied_names	ok
+kernel::create_dirs::tests::blocker_propagates_when_the_parent_was_planned_by_an_earlier_row	ok
+kernel::create_dirs::tests::branch_under_an_existing_file_is_skipped_and_reported	ok
+kernel::create_dirs::tests::duplicate_rows_and_invalid_rows_are_reported	ok
+kernel::create_dirs::tests::empty_or_only_invalid_rows_produce_an_empty_plan	ok
+kernel::create_dirs::tests::existing_file_at_the_leaf_stays_an_existing_target	ok
+kernel::create_dirs::tests::existing_target_is_a_skip_conflict	ok
+kernel::create_dirs::tests::expands_multi_level_paths_parents_first	ok
+kernel::create_dirs::tests::no_parent_is_file_report_without_the_file_fact	ok
+kernel::create_dirs::tests::normalize_rejects_absolute_and_escape_paths	ok
+kernel::create_dirs::tests::protected_target_is_blocked	ok
+kernel::create_dirs::tests::target_path_preserves_the_root_separator_style	ok
+kernel::csv::tests::accumulator_counts_column_drift_without_correcting	ok
+kernel::csv::tests::accumulator_repeats_header_and_splits_at_record_boundaries	ok
+kernel::csv::tests::accumulator_splits_by_row_count	ok
+kernel::csv::tests::header_can_be_disabled	ok
+kernel::csv::tests::header_only_file_has_no_shards	ok
+kernel::csv::tests::overlong_record_occupies_its_own_part	ok
+kernel::csv::tests::plan_blocks_utf16_without_bom_and_multi_line_header	ok
+kernel::csv::tests::plan_builds_csv_split_entries_with_repeated_header	ok
+kernel::csv::tests::plan_f05_blocks_utf16_without_a_bom	ok
+kernel::csv::tests::plan_f05_writes_a_bom_on_every_utf16_part	ok
+kernel::csv::tests::plan_rejects_bad_parameter_and_layout	ok
+kernel::csv::tests::plan_skips_empty_and_header_only_files	ok
+kernel::csv::tests::plan_warns_on_column_drift_and_unclosed_quote	ok
+kernel::csv::tests::plan_warns_when_delimiter_was_not_detected	ok
+kernel::csv::tests::scanner_handles_escaped_quotes_and_crlf	ok
+kernel::csv::tests::scanner_keeps_quoted_newlines_inside_one_record	ok
+kernel::csv::tests::scanner_reports_unclosed_quote_tail	ok
+kernel::csv::tests::scanner_state_survives_chunk_boundaries	ok
+kernel::csv::tests::sniff_picks_the_delimiter_with_stable_columns	ok
+kernel::csv::tests::sniff_returns_none_for_single_column_data	ok
+kernel::csv::tests::streaming_sniffer_matches_sniff_delimiter_for_every_chunk_split	ok
+kernel::csv::tests::utf16_scanner_ignores_structural_bytes_inside_wide_characters	ok
+kernel::csv::tests::utf16_scanner_projects_code_units_and_counts_source_bytes	ok
+kernel::csv::tests::utf16_scanner_survives_odd_chunk_boundaries	ok
+kernel::csv_columns::tests::merge_plan_appends_a_target_column_and_defaults_its_name	ok
+kernel::csv_columns::tests::merge_rejects_single_or_repeated_columns_with_e1002	ok
+kernel::csv_columns::tests::name_selection_without_header_is_blocked_with_e3004	ok
+kernel::csv_columns::tests::split_plan_inserts_new_columns_after_the_source_column	ok
+kernel::csv_columns::tests::split_rejects_invalid_regex_with_e1005	ok
+kernel::csv_columns::tests::split_value_covers_separator_regex_and_empty_segments	ok
+kernel::csv_dedup::tests::duplicate_output_targets_are_rejected	ok
+kernel::csv_dedup::tests::existing_target_is_marked_skip	ok
+kernel::csv_dedup::tests::full_row_dedup_keeps_first_occurrence	ok
+kernel::csv_dedup::tests::missing_key_column_blocks_the_entry	ok
+kernel::csv_dedup::tests::selected_columns_build_the_key	ok
+kernel::csv_extract::tests::ambiguous_encoding_blocks_with_e3001	ok
+kernel::csv_extract::tests::duplicate_header_names_use_first_occurrence_and_warn	ok
+kernel::csv_extract::tests::duplicate_targets_are_rejected	ok
+kernel::csv_extract::tests::headerless_files_require_index_selection	ok
+kernel::csv_extract::tests::headerless_files_select_by_position	ok
+kernel::csv_extract::tests::missing_column_name_blocks_with_e3004	ok
+kernel::csv_extract::tests::mixed_header_modes_are_rejected	ok
+kernel::csv_extract::tests::occupied_target_is_marked_as_skip_conflict	ok
+kernel::csv_extract::tests::out_of_range_index_blocks_with_e3004	ok
+kernel::csv_extract::tests::selecting_the_same_column_twice_is_rejected	ok
+kernel::csv_extract::tests::selects_columns_by_name_in_given_order	ok
+kernel::csv_extract::tests::selects_columns_by_one_based_index	ok
+kernel::csv_filter::tests::contains_keep_mode_keeps_only_matching_rows	ok
+kernel::csv_filter::tests::drop_mode_removes_matching_rows	ok
+kernel::csv_filter::tests::existing_target_is_marked_skip	ok
+kernel::csv_filter::tests::missing_column_blocks_the_entry	ok
+kernel::csv_filter::tests::non_numeric_never_satisfies_numeric_ne	ok
+kernel::csv_filter::tests::non_numeric_value_is_rejected_for_numeric_ops	ok
+kernel::csv_filter::tests::numeric_comparison_keeps_header_and_counts_non_numeric	ok
+kernel::csv_merge::tests::existing_target_is_a_conflict_skipped_by_default	ok
+kernel::csv_merge::tests::normalize_strips_bom_and_whitespace	ok
+kernel::csv_merge::tests::parse_records_handles_quotes_and_multiline_fields	ok
+kernel::csv_merge::tests::parse_records_supports_escaped_quotes_and_empty_fields	ok
+kernel::csv_merge::tests::plan_aligns_by_header_and_reports_schema_differences	ok
+kernel::csv_merge::tests::plan_blocks_manual_encoding_confirmation	ok
+kernel::csv_merge::tests::plan_blocks_mixed_header_modes	ok
+kernel::csv_merge::tests::plan_blocks_source_column_without_header	ok
+kernel::csv_merge::tests::plan_blocks_strict_mode_on_schema_mismatch	ok
+kernel::csv_merge::tests::plan_inserts_source_column_name	ok
+kernel::csv_merge::tests::plan_no_header_aligns_by_position	ok
+kernel::csv_merge::tests::plan_warns_when_headers_need_normalization_or_are_duplicated	ok
+kernel::csv_merge::tests::record_feeder_matches_parse_records_across_arbitrary_chunk_boundaries	ok
+kernel::csv_merge::tests::union_appends_new_columns_and_keeps_duplicates	ok
+kernel::csv_merge::tests::write_record_quotes_only_when_needed	ok
+kernel::csv_range::tests::builds_range_payload_with_header_and_data_offsets	ok
+kernel::csv_range::tests::dirty_rows_are_reported_for_selected_range	ok
+kernel::csv_range::tests::duplicate_targets_and_mixed_header_modes_are_rejected	ok
+kernel::csv_range::tests::empty_file_is_reported_without_an_entry	ok
+kernel::csv_range::tests::encoding_and_multiline_header_block_the_entry	ok
+kernel::csv_range::tests::headerless_payload_has_no_columns	ok
+kernel::csv_range::tests::invalid_ranges_are_rejected	ok
+kernel::csv_range::tests::occupied_target_is_a_skip_conflict	ok
+kernel::csv_range::tests::range_beyond_available_rows_warns_and_marks_selected_rows	ok
+kernel::csv_rows::tests::ambiguous_encoding_blocks_with_e3001	ok
+kernel::csv_rows::tests::count_exceeding_rows_warns_and_writes_all	ok
+kernel::csv_rows::tests::dirty_rows_produce_a_width_mismatch_warning	ok
+kernel::csv_rows::tests::duplicate_targets_and_mixed_header_modes_are_rejected	ok
+kernel::csv_rows::tests::first_window_builds_one_entry_per_file	ok
+kernel::csv_rows::tests::headerless_files_have_no_header_columns	ok
+kernel::csv_rows::tests::last_window_is_recorded_in_the_payload	ok
+kernel::csv_rows::tests::occupied_target_is_marked_as_skip_conflict	ok
+kernel::csv_rows::tests::select_window_takes_the_expected_rows	ok
+kernel::csv_rows::tests::zero_count_is_valid_and_keeps_the_header_payload	ok
+kernel::csv_sort::tests::date_and_lexicographic_kinds_are_inferred	ok
+kernel::csv_sort::tests::external_threshold_is_recorded_and_warns	ok
+kernel::csv_sort::tests::missing_key_column_blocks_with_e3004	ok
+kernel::csv_sort::tests::numeric_comparison_is_value_ordered_not_lexicographic	ok
+kernel::csv_sort::tests::numeric_key_kind_is_inferred_from_sample_values	ok
+kernel::duplicate::tests::different_size_or_full_hash_does_not_group	ok
+kernel::duplicate::tests::fast_mode_groups_by_quick_hash_as_candidate	ok
+kernel::duplicate::tests::fast_mode_requires_quick_hash	ok
+kernel::duplicate::tests::full_mode_requires_full_hash	ok
+kernel::duplicate::tests::groups_identical_content	ok
+kernel::duplicate::tests::hardlinks_are_skipped	ok
+kernel::duplicate::tests::missing_identity_flags_manual_review	ok
+kernel::duplicate::tests::single_candidate_does_not_group	ok
+kernel::duplicate::tests::zero_byte_default_is_ignored_and_optional_grouping	ok
+kernel::encoding::tests::ascii_samples_default_to_utf8_with_a_note	ok
+kernel::encoding::tests::bom_detection_orders_utf32_before_utf16	ok
+kernel::encoding::tests::gb18030_samples_are_detected_via_chardetng	ok
+kernel::encoding::tests::invalid_legacy_bytes_fall_back_to_manual_confirmation	ok
+kernel::encoding::tests::parameter_names_round_trip	ok
+kernel::encoding::tests::require_encoding_rejects_undetermined_with_e3001	ok
+kernel::encoding::tests::stream_transcoder_matches_whole_file_transcode_across_chunk_boundaries	ok
+kernel::encoding::tests::transcode_aborts_on_invalid_utf8_with_e3002	ok
+kernel::encoding::tests::transcode_counts_every_replacement_character	ok
+kernel::encoding::tests::transcode_gbk_to_utf8_bom_round_trips	ok
+kernel::encoding::tests::transcode_replaces_unmappable_output_for_latin1_target	ok
+kernel::encoding::tests::transcode_rewriter_from_plan_reads_the_c01_param_snapshot	ok
+kernel::encoding::tests::transcode_utf16_outputs_bom_for_every_part	ok
+kernel::encoding::tests::utf8_samples_are_detected_high_confidence	ok
+kernel::error::tests::constructors_use_registered_codes	ok
+kernel::generic_apply::tests::a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries	ok
+kernel::generic_apply::tests::cancel_keeps_applied_entries_under_keep_policy_and_undo_restores_them	ok
+kernel::generic_apply::tests::cancel_mid_batch_rolls_back_applied_entries	ok
+kernel::generic_apply::tests::cancel_rolls_back_applied_entries_in_each_write_arm	ok
+kernel::generic_apply::tests::cancel_rolls_back_the_batch_and_streaming_write_arms	ok
+kernel::generic_apply::tests::changed_size_is_skipped_with_e2010	ok
+kernel::generic_apply::tests::copy_applies_with_a_quarantine_reverse_and_undo_removes_the_output	ok
+kernel::generic_apply::tests::copy_overwrite_backs_up_the_target_and_undo_restores_its_content	ok
+kernel::generic_apply::tests::cross_volume_move_copies_verifies_removes_source_and_undoes	ok
+kernel::generic_apply::tests::cross_volume_move_verification_failure_keeps_the_source	ok
+kernel::generic_apply::tests::csv_columns_arm_streams_instead_of_whole_file_reads	ok
+kernel::generic_apply::tests::csv_dedup_and_filter_arms_stream_instead_of_whole_file_reads	ok
+kernel::generic_apply::tests::csv_extract_rejects_a_header_changed_since_plan	ok
+kernel::generic_apply::tests::csv_extract_selects_columns_in_order_and_undo_removes_the_output	ok
+kernel::generic_apply::tests::csv_extract_without_headers_uses_column_positions	ok
+kernel::generic_apply::tests::csv_merge_aligns_columns_and_prepends_source_column	ok
+kernel::generic_apply::tests::csv_merge_maps_by_header_name_not_position	ok
+kernel::generic_apply::tests::csv_merge_rejects_a_header_changed_since_plan	ok
+kernel::generic_apply::tests::csv_merge_without_headers_aligns_by_position	ok
+kernel::generic_apply::tests::csv_range_reads_only_header_and_selected_range_and_undo_removes_the_output	ok
+kernel::generic_apply::tests::csv_range_rejects_a_same_size_header_change	ok
+kernel::generic_apply::tests::csv_rows_first_window_writes_rows_and_undo_removes_the_output	ok
+kernel::generic_apply::tests::csv_rows_last_window_keeps_the_tail_and_clamps_to_available_rows	ok
+kernel::generic_apply::tests::csv_rows_rejects_a_header_changed_since_plan	ok
+kernel::generic_apply::tests::csv_sort_external_chunks_are_removed_even_when_the_output_write_fails	ok
+kernel::generic_apply::tests::csv_sort_external_merge_streams_the_source_and_pulls_each_chunk	ok
+kernel::generic_apply::tests::disk_full_pause_cancel_ends_as_a_normal_entry_failure	ok
+kernel::generic_apply::tests::disk_full_pauses_once_without_backoff_then_resumes_and_retries	ok
+kernel::generic_apply::tests::edit_content_carries_detail_per_entry_and_keeps_it_absent_when_not_produced	ok
+kernel::generic_apply::tests::edit_content_network_retry_reuses_a_single_quarantine_backup	ok
+kernel::generic_apply::tests::edit_content_requires_an_editor_on_the_context	ok
+kernel::generic_apply::tests::edit_content_rewrites_in_place_and_undo_restores_the_bytes	ok
+kernel::generic_apply::tests::edit_content_via_rewriter_carries_detail_per_entry	ok
+kernel::generic_apply::tests::entry_concurrency_out_of_range_is_rejected	ok
+kernel::generic_apply::tests::existing_target_is_skipped_by_default	ok
+kernel::generic_apply::tests::merge_does_not_overwrite_an_existing_target_by_default	ok
+kernel::generic_apply::tests::merge_rejects_an_ambiguous_source_encoding	ok
+kernel::generic_apply::tests::merge_reports_byte_level_entry_progress_for_large_inputs	ok
+kernel::generic_apply::tests::merge_skips_when_a_source_size_changed_since_plan	ok
+kernel::generic_apply::tests::merge_transcodes_inputs_in_order_and_undo_removes_the_output	ok
+kernel::generic_apply::tests::merge_writes_the_bom_only_once	ok
+kernel::generic_apply::tests::mid_stream_cancel_aborts_the_rewrite_and_leaves_the_source_untouched	ok
+kernel::generic_apply::tests::move_and_delete_use_their_own_operations	ok
+kernel::generic_apply::tests::network_disconnect_is_retried_three_times_then_pauses_and_resumes	ok
+kernel::generic_apply::tests::non_retryable_permission_error_is_not_retried	ok
+kernel::generic_apply::tests::occupied_target_is_retried_once_and_then_applies	ok
+kernel::generic_apply::tests::overwrite_without_confirmation_is_rejected_before_any_change	ok
+kernel::generic_apply::tests::permission_failure_still_fails_arms_outside_the_named_scope	ok
+kernel::generic_apply::tests::plan_entry_count_limit_is_rejected	ok
+kernel::generic_apply::tests::pooled_apply_matches_serial_results_and_undo	ok
+kernel::generic_apply::tests::pooled_cancel_stops_dispatch_and_rolls_back	ok
+kernel::generic_apply::tests::pooled_quota_is_enforced_deterministically	ok
+kernel::generic_apply::tests::pooled_same_source_edit_content_is_serialized	ok
+kernel::generic_apply::tests::protected_source_is_rechecked_during_execution	ok
+kernel::generic_apply::tests::protected_target_is_skipped_before_any_change	ok
+kernel::generic_apply::tests::readonly_rename_is_skipped_and_reported_without_failing_the_task	ok
+kernel::generic_apply::tests::readonly_source_is_skipped_for_content_rewrites	ok
+kernel::generic_apply::tests::rename_applies_and_writes_a_reversible_journal_entry	ok
+kernel::generic_apply::tests::sequence_resolution_picks_a_free_name	ok
+kernel::generic_apply::tests::split_plan_writes_line_aligned_parts_and_undo_quarantines_them	ok
+kernel::generic_apply::tests::transcode_entries_run_the_in_place_rewrite_and_undo_restores_the_bytes	ok
+kernel::generic_apply::tests::transcode_without_a_content_editor_is_rejected_before_touching_files	ok
+kernel::generic_apply::tests::undo_releases_the_plan_kind_recorded_in_the_journal	ok
+kernel::journal::tests::legacy_journal_lines_without_plan_kind_parse_as_none	ok
+kernel::journal::tests::plan_kind_round_trips_when_present	ok
+kernel::journal::tests::quarantine_inverse_is_a_rename_back	ok
+kernel::journal::tests::write_atomic_data_ref_is_omitted_when_absent	ok
+kernel::journal::tests::write_atomic_inverse_restores_from_backup_when_present	ok
+kernel::license::tests::always_allow_never_blocks_and_never_counts	ok
+kernel::line_endings::tests::already_target_and_no_newline_files_are_skipped	ok
+kernel::line_endings::tests::binary_magic_blocks_before_encoding_detection	ok
+kernel::line_endings::tests::confirmed_source_can_override_ambiguous_detection	ok
+kernel::line_endings::tests::crlf_split_across_chunks_is_converted_once	ok
+kernel::line_endings::tests::csv_escaped_quotes_across_chunk_boundary_are_preserved	ok
+kernel::line_endings::tests::csv_quoted_lf_is_preserved_when_target_is_crlf	ok
+kernel::line_endings::tests::csv_quoted_newlines_are_preserved_and_record_endings_converted	ok
+kernel::line_endings::tests::file_without_final_newline_keeps_that_property	ok
+kernel::line_endings::tests::plan_converts_mixed_files_and_warns	ok
+kernel::line_endings::tests::protected_source_is_blocked	ok
+kernel::line_endings::tests::structure_mode_resolves_by_extension	ok
+kernel::line_endings::tests::text_mixed_newlines_are_counted_and_converted	ok
+kernel::line_endings::tests::utf16_and_ambiguous_encodings_are_blocked	ok
+kernel::line_endings::tests::utf8_bom_is_preserved	ok
+kernel::listing::tests::builds_listing_entries_with_summary_counts	ok
+kernel::listing::tests::duplicate_targets_are_rejected	ok
+kernel::listing::tests::empty_directory_warns	ok
+kernel::listing::tests::occupied_target_is_a_skip_conflict	ok
+kernel::listing::tests::placeholder_and_skipped_entries_warn	ok
+kernel::listing::tests::target_inside_root_is_blocked	ok
+kernel::merge::tests::ambiguous_encoding_blocks_the_merge_with_e3001	ok
+kernel::merge::tests::existing_target_is_a_conflict_skipped_by_default	ok
+kernel::merge::tests::merge_payload_round_trips_through_json	ok
+kernel::merge::tests::plan_keeps_input_order_and_encodings	ok
+kernel::merge::tests::plan_params_carry_target_and_encoding	ok
+kernel::merge::tests::plan_rejects_empty_input_and_zero_sources	ok
+kernel::merge::tests::protected_source_blocks_the_merge_with_e2009	ok
+kernel::merge::tests::protected_target_blocks_the_merge_with_e2009	ok
+kernel::merge::tests::same_encoding_inputs_do_not_warn	ok
+kernel::name_replace::tests::empty_find_is_rejected_in_both_modes	ok
+kernel::name_replace::tests::invalid_regex_and_missing_capture_are_rejected	ok
+kernel::name_replace::tests::no_match_produces_no_entries	ok
+kernel::name_replace::tests::plain_replaces_first_level_scoped_segments	ok
+kernel::name_replace::tests::plain_scope_stem_only_touches_the_stem	ok
+kernel::name_replace::tests::regex_capture_groups_rebuild_the_name	ok
+kernel::path::tests::normalizes_separators_dot_segments_and_trailing_slash	ok
+kernel::path::tests::protected_check_uses_literal_and_canonical_forms	ok
+kernel::path::tests::protected_list_matches_unc_entries_in_literal_and_canonical_forms	ok
+kernel::path::tests::resolves_parent_segments_without_crossing_root	ok
+kernel::path::tests::subtree_check_can_fold_case_for_windows_and_macos	ok
+kernel::path::tests::subtree_check_handles_unc_and_drive_roots	ok
+kernel::path::tests::subtree_check_respects_component_boundaries	ok
+kernel::plan::tests::c01_blocks_ambiguous_samples_with_e3001	ok
+kernel::plan::tests::c01_blocks_protected_paths	ok
+kernel::plan::tests::c01_confirmed_source_overrides_detection_and_is_recorded	ok
+kernel::plan::tests::c01_plans_edit_content_for_detected_utf8	ok
+kernel::plan::tests::c01_rejects_empty_file_list_and_invalid_plan_ids	ok
+kernel::plan::tests::c01_skips_files_already_in_target_encoding	ok
+kernel::plan::tests::c01_treats_bom_policy_mismatch_as_conversion	ok
+kernel::plan::tests::candidate_groups_are_rejected	ok
+kernel::plan::tests::earliest_keeps_oldest_mtime	ok
+kernel::plan::tests::empty_hash_algorithm_is_rejected	ok
+kernel::plan::tests::empty_plan_id_is_rejected	ok
+kernel::plan::tests::entries_carry_expected_size_and_hex_hash	ok
+kernel::plan::tests::entry_ids_are_unique_and_include_the_plan_id	ok
+kernel::plan::tests::fast_mode_is_rejected	ok
+kernel::plan::tests::incomplete_zero_byte_and_scan_skips_become_warnings	ok
+kernel::plan::tests::invalid_plan_id_is_rejected	ok
+kernel::plan::tests::manual_review_groups_are_excluded_with_a_warning	ok
+kernel::plan::tests::missing_group_member_is_an_internal_error	ok
+kernel::plan::tests::newest_keeps_latest_mtime	ok
+kernel::plan::tests::protected_group_member_is_blocked_with_e2009	ok
+kernel::plan::tests::shortest_path_keeps_shortest_and_breaks_ties_lexicographically	ok
+kernel::preflight::tests::disk_margin_uses_floor_and_ratio	ok
+kernel::preflight::tests::disk_pass_at_boundary_and_block_one_byte_below	ok
+kernel::preflight::tests::each_affected_volume_gets_its_own_disk_item	ok
+kernel::preflight::tests::empty_input_reports_each_category_as_pass	ok
+kernel::preflight::tests::invalid_path_blocks_that_entry	ok
+kernel::preflight::tests::path_length_grades_at_200_259_and_260	ok
+kernel::preflight::tests::protected_literal_and_canonical_hits_block_the_entry	ok
+kernel::preflight::tests::readonly_locked_and_placeholder_are_warnings_not_task_blocks	ok
+kernel::preflight::tests::temp_peak_is_part_of_the_requirement	ok
+kernel::preflight::tests::unc_timeout_and_unreachable_warn_but_do_not_block	ok
+kernel::preview::tests::conflict_blocked_and_long_path_rows_are_labelled	ok
+kernel::preview::tests::each_conflict_kind_is_labelled_with_its_own_kind	ok
+kernel::preview::tests::non_rename_kinds_are_rejected_with_e1002	ok
+kernel::preview::tests::normal_rows_count_as_to_process	ok
+kernel::preview::tests::two_phase_entries_collapse_into_one_mapping_row	ok
+kernel::recipe::tests::content_rejects_scripts_and_nested_objects	ok
+kernel::recipe::tests::empty_steps_are_rejected	ok
+kernel::recipe::tests::migration_from_v3_binds_unique_features_and_leaves_many_to_many_unbound	ok
+kernel::recipe::tests::migration_never_overwrites_an_explicit_feature	ok
+kernel::recipe::tests::missing_schema_version_is_e1001	ok
+kernel::recipe::tests::newer_schema_version_is_rejected_with_e1007	ok
+kernel::recipe::tests::sampling_zero_is_rejected_and_unknown_keys_are_denied	ok
+kernel::recipe::tests::script_parameters_are_rejected	ok
+kernel::recipe::tests::single_step_binding_is_the_apply_gate	ok
+kernel::recipe::tests::step_binding_addresses_each_step_without_the_single_step_gate	ok
+kernel::recipe::tests::step_count_and_duplicate_ids_are_enforced	ok
+kernel::recipe::tests::strip_path_params_drops_real_paths_and_keeps_encodings	ok
+kernel::recipe::tests::strip_paths_covers_every_step_and_reports_each_key_once	ok
+kernel::recipe::tests::v1_recipe_is_wrapped_into_a_single_step	ok
+kernel::recipe::tests::v2_recipe_keeps_metadata_and_wraps_params	ok
+kernel::recipe::tests::v3_recipe_round_trips_and_strips_paths	ok
+kernel::recipe::tests::v4_payload_migrates_to_v5_with_sampling_absent	ok
+kernel::recipe::tests::v4_round_trip_keeps_feature_and_omits_the_key_when_absent	ok
+kernel::recipe::tests::v5_payload_migrates_to_v6_with_content_absent	ok
+kernel::recipe::tests::v5_round_trips_sampling_and_omits_the_block_when_absent	ok
+kernel::recipe::tests::v6_payload_migrates_to_v7_with_origin_absent	ok
+kernel::recipe::tests::v6_round_trips_content_and_strips_paths_from_it	ok
+kernel::recipe::tests::v7_round_trips_origin_and_omits_it_when_absent	ok
+kernel::recipe::tests::validate_rejects_malformed_feature_codes	ok
+kernel::regex_rename::tests::capture_groups_rewrite_full_names	ok
+kernel::regex_rename::tests::case_only_change_uses_two_phase	ok
+kernel::regex_rename::tests::dollar_escape_is_literal_and_does_not_require_a_group	ok
+kernel::regex_rename::tests::empty_pattern_is_rejected	ok
+kernel::regex_rename::tests::ext_scope_keeps_stem_and_rejects_missing_extension_changes	ok
+kernel::regex_rename::tests::invalid_regex_is_rejected_in_plan	ok
+kernel::regex_rename::tests::missing_capture_reference_is_rejected	ok
+kernel::regex_rename::tests::named_captures_apply_to_stem_only	ok
+kernel::regex_rename::tests::no_match_does_not_create_entries	ok
+kernel::regex_rename::tests::pathological_backtracking_pattern_returns_without_hanging	ok
+kernel::regex_rename::tests::reserved_target_names_are_blocked	ok
+kernel::rename::tests::absent_access_facts_produce_no_readonly_or_locked_warning	ok
+kernel::rename::tests::case_only_rename_uses_two_phase	ok
+kernel::rename::tests::chain_order_is_topological_and_direct	ok
+kernel::rename::tests::cycle_uses_two_phase_temporary_entries	ok
+kernel::rename::tests::existing_target_conflict_is_detected_on_case_insensitive_hosts	ok
+kernel::rename::tests::invalid_names_are_blocked	ok
+kernel::rename::tests::long_path_tiers_warn_and_skip_by_support	ok
+kernel::rename::tests::prefix_rule_builds_direct_rename_entries	ok
+kernel::rename::tests::readonly_and_locked_facts_are_named_in_preview_warnings	ok
+kernel::rename::tests::scope_stem_and_ext_are_applied_separately	ok
+kernel::rename::tests::source_target_chain_is_not_an_existing_conflict	ok
+kernel::rename::tests::windows_only_names_are_renamed_when_the_rules_are_posix	ok
+kernel::rename::tests::windows_style_targets_still_match_existing_conflicts	ok
+kernel::replace_content::tests::anchored_and_unbounded_regex_still_produce_whole_file_results	ok
+kernel::replace_content::tests::blocked_files_are_not_named_as_readonly	ok
+kernel::replace_content::tests::cell_arm_without_delimiter_asks_for_the_sniff_pass	ok
+kernel::replace_content::tests::cell_streaming_matches_whole_file_cell_replace_across_every_chunk_boundary	ok
+kernel::replace_content::tests::cell_streaming_still_refuses_unclosed_quotes_with_e3004	ok
+kernel::replace_content::tests::csv_cell_mode_replaces_inside_quoted_fields_without_breaking_structure	ok
+kernel::replace_content::tests::csv_text_mode_does_not_parse_cells	ok
+kernel::replace_content::tests::csv_unclosed_quote_is_reported_and_refused	ok
+kernel::replace_content::tests::empty_find_is_rejected	ok
+kernel::replace_content::tests::empty_replacement_is_a_danger_warning	ok
+kernel::replace_content::tests::plain_replacement_counts_and_replaces_non_overlapping	ok
+kernel::replace_content::tests::plain_streaming_does_not_split_when_the_find_never_matches	ok
+kernel::replace_content::tests::plain_streaming_keeps_e3001_on_invalid_utf8_and_handles_empty_input	ok
+kernel::replace_content::tests::plain_streaming_matches_whole_file_replace_across_every_chunk_boundary	ok
+kernel::replace_content::tests::plain_streaming_must_not_split_a_multibyte_character_at_the_overlap_edge	ok
+kernel::replace_content::tests::plan_blocks_binary_and_non_utf8_sources	ok
+kernel::replace_content::tests::plan_blocks_unclosed_csv_quote_in_cell_mode	ok
+kernel::replace_content::tests::plan_skips_no_matches_and_creates_entries_for_matches	ok
+kernel::replace_content::tests::readonly_and_locked_files_are_named_in_preview_warnings	ok
+kernel::replace_content::tests::regex_capture_groups_replace_and_count	ok
+kernel::replace_content::tests::regex_invalid_or_missing_capture_is_rejected	ok
+kernel::replace_content::tests::regex_streaming_matches_whole_file_replace_across_every_chunk_boundary	ok
+kernel::replace_content::tests::regex_window_bytes_only_accepts_patterns_with_a_computable_bound	ok
+kernel::replace_content::tests::regex_with_capture_reference_streams_identically_to_whole_file	ok
+kernel::replace_content::tests::streaming_plan_inspect_matches_whole_file_for_every_arm_and_chunk_size	ok
+kernel::replace_content::tests::unbounded_regex_keeps_the_whole_file_plan_channel	ok
+kernel::split::tests::closes_parts_on_line_boundaries	ok
+kernel::split::tests::empty_file_has_no_spans	ok
+kernel::split::tests::empty_input_returns_plan_with_warning_and_no_entries	ok
+kernel::split::tests::f02_closes_every_n_lines_and_keeps_tail_part	ok
+kernel::split::tests::f02_empty_file_has_no_spans	ok
+kernel::split::tests::f02_n_equals_one_puts_each_line_in_its_own_part	ok
+kernel::split::tests::f02_no_newline_file_stays_single_part_without_hard_cut	ok
+kernel::split::tests::f02_plan_does_not_warn_hard_cut_for_no_newline_file	ok
+kernel::split::tests::f02_plan_rejects_zero_lines_per_part	ok
+kernel::split::tests::f02_plan_uses_lines_params_and_split_entries	ok
+kernel::split::tests::f02_single_part_when_n_exceeds_total_lines	ok
+kernel::split::tests::f03_no_newline_file_is_single_part_without_hard_cut	ok
+kernel::split::tests::f03_plan_rejects_zero_parts	ok
+kernel::split::tests::f03_plan_uses_parts_params_and_split_entries	ok
+kernel::split::tests::f03_plan_warns_when_parts_exceed_lines	ok
+kernel::split::tests::hard_cuts_when_no_newline	ok
+kernel::split::tests::names_parts_with_padded_sequence	ok
+kernel::split::tests::overlong_line_occupies_its_own_part	ok
+kernel::split::tests::part_line_quotas_caps_parts_at_line_count	ok
+kernel::split::tests::part_line_quotas_distributes_remainder_to_first_parts	ok
+kernel::split::tests::plan_blocks_protected_source	ok
+kernel::split::tests::plan_builds_one_entry_per_part_with_relations	ok
+kernel::split::tests::plan_marks_existing_and_batch_duplicate_targets	ok
+kernel::split::tests::plan_rejects_layout_that_skips_bytes	ok
+kernel::split::tests::plan_rejects_zero_target_and_non_ulid	ok
+kernel::split::tests::plan_warns_on_overlong_and_no_newline	ok
+kernel::split::tests::quota_accumulator_absorbs_extra_lines_into_tail_part	ok
+kernel::split::tests::quota_accumulator_closes_on_each_quota_and_keeps_tail	ok
+kernel::tests::kernel_version_is_not_empty	ok
+kernel::ui_state::tests::defaults_use_the_current_version_and_are_empty	ok
+kernel::ui_state::tests::incompatible_version_is_detected_for_reset	ok
+kernel::ui_state::tests::patch_accepts_table_widths_and_sort	ok
+kernel::ui_state::tests::patch_accepts_whitelisted_sections	ok
+kernel::ui_state::tests::patch_rejects_selected_files_search_and_drafts	ok
+kernel::ui_state::tests::patch_rejects_unknown_nested_fields_and_managed_versions	ok
+kernel::ui_state::tests::patch_rejects_unsaved_state_inside_a_table	ok
+kernel::ui_state::tests::recent_directories_are_deduplicated_and_move_to_front	ok
+kernel::ui_state::tests::state_round_trips_through_json	ok
+platform::archive::tests::archive_network_io_error_keeps_e2005	ok
+platform::archive::tests::archive_zip_io_network_keeps_e2005	ok
+platform::archive::tests::compress_marks_non_ascii_names_utf8_with_bit11_in_both_headers	ok
+platform::archive::tests::compress_writes_directory_tree_and_inspect_counts_sources	ok
+platform::archive::tests::z01_gbk_name_is_decoded_with_fallback	ok
+platform::archive::tests::z02_lists_safe_and_traversal_entries_and_extracts_safe_one	ok
+platform::config_store::tests::corrupt_config_backup_is_the_only_write	ok
+platform::config_store::tests::corrupt_config_is_backed_up_and_defaults_restored	ok
+platform::config_store::tests::corrupt_ui_state_is_reset_without_touching_config	ok
+platform::config_store::tests::export_returns_current_schema_json	ok
+platform::config_store::tests::import_marks_the_copy_as_imported_even_if_payload_claims_local	ok
+platform::config_store::tests::import_migrates_low_versions_and_rejects_high_versions	ok
+platform::config_store::tests::list_recipes_reports_broken_files_without_aborting	ok
+platform::config_store::tests::missing_config_yields_defaults_without_writing	ok
+platform::config_store::tests::newer_config_version_is_read_only	ok
+platform::config_store::tests::recipe_files_are_not_written_for_invalid_templates	ok
+platform::config_store::tests::recipe_ids_with_path_separators_are_rejected	ok
+platform::config_store::tests::recipe_save_get_list_and_delete	ok
+platform::config_store::tests::saved_config_is_read_back	ok
+platform::config_store::tests::temp_dirs_are_unique_for_parallel_tests	ok
+platform::config_store::tests::ui_state_round_trips_and_reset	ok
+platform::config_store::tests::valid_config_read_writes_nothing	ok
+platform::csv::tests::empty_file_has_no_shards	ok
+platform::csv::tests::explicit_delimiter_overrides_sniffing	ok
+platform::csv::tests::records_do_not_break_on_quoted_newlines	ok
+platform::csv::tests::scans_records_and_repeats_header	ok
+platform::csv::tests::sniffs_semicolon_delimiter	ok
+platform::csv::tests::utf16_with_bom_splits_on_record_boundaries_and_flags_per_part_bom	ok
+platform::csv::tests::utf16_without_bom_is_short_circuited_for_blocking	ok
+platform::csv_merge::tests::dedup_inspect_returns_all_records_including_header	ok
+platform::csv_merge::tests::inspects_header_rows_and_drift	ok
+platform::csv_merge::tests::no_header_uses_the_max_column_count	ok
+platform::csv_merge::tests::sniffs_semicolon_and_reads_quoted_fields	ok
+platform::csv_merge::tests::undetermined_encoding_is_reported_as_none	ok
+platform::csv_merge::tests::utf16_source_is_decoded_for_inspection	ok
+platform::csv_range::tests::headerless_scan_starts_at_the_first_data_record	ok
+platform::csv_range::tests::invalid_range_is_rejected	ok
+platform::csv_range::tests::quoted_newlines_stay_inside_one_record	ok
+platform::csv_range::tests::range_beyond_rows_reads_to_eof_and_clamps_selection	ok
+platform::csv_range::tests::scans_header_and_selected_byte_range_and_stops_at_end_row	ok
+platform::csv_range::tests::start_beyond_rows_selects_nothing	ok
+platform::csv_range::tests::t02_corpus_quoted_newline_is_one_selected_record	ok
+platform::csv_range::tests::utf16_source_is_short_circuited_for_blocking	ok
+platform::diaglog::tests::cleanup_removes_rotated_files_older_than_retention	ok
+platform::diaglog::tests::level_filters_below_threshold	ok
+platform::diaglog::tests::parses_level_the_way_env_var_will_use_it	ok
+platform::diaglog::tests::redact_path_follows_full_paths_flag	ok
+platform::diaglog::tests::rotates_on_size_and_read_recent_spans_rotations_in_order	ok
+platform::diaglog::tests::total_cap_deletes_oldest_and_leaves_a_warn	ok
+platform::diaglog::tests::write_failure_is_swallowed_and_track_stays_usable	ok
+platform::diaglog::tests::writes_contract_shaped_lines_and_reads_them_back	ok
+platform::fs::medium_tests::local_volume_is_not_network	ok
+platform::fs::medium_tests::unc_is_network_and_relative_path_is_unknown	ok
+platform::fs::tests::backup_copies_into_quarantine_and_keeps_the_original	ok
+platform::fs::tests::case_sensitivity_follows_the_host_platform	ok
+platform::fs::tests::cleanup_of_missing_directory_is_a_noop	ok
+platform::fs::tests::cleanup_removes_copy_temps_of_dead_pids_only	ok
+platform::fs::tests::content_hash_matches_blake3_and_rejects_unknown_algorithm	ok
+platform::fs::tests::copy_range_atomic_writes_only_the_requested_slice	ok
+platform::fs::tests::copy_ranges_atomic_writes_the_prefix_once_before_all_ranges	ok
+platform::fs::tests::copy_replaces_existing_target_and_cleans_the_temp_file	ok
+platform::fs::tests::exited_child_process_is_not_alive_even_while_a_handle_remains_open	ok
+platform::fs::tests::extended_path_normalizes_before_prefixing_and_keeps_relative_paths	ok
+platform::fs::tests::extended_path_prefixes_drive_and_unc_paths	ok
+platform::fs::tests::failed_copy_preserves_an_existing_target	ok
+platform::fs::tests::name_rules_follow_the_host_platform	ok
+platform::fs::tests::network_path_detection_keeps_unc_and_rejects_local_drive	ok
+platform::fs::tests::open_read_stream_pulls_bytes_on_demand_and_reports_missing_files	ok
+platform::fs::tests::quarantine_rename_restores_the_file	ok
+platform::fs::tests::read_ranges_returns_selected_bytes_and_rejects_invalid_spans	ok
+platform::fs::tests::read_ranges_stream_delivers_the_same_bytes_in_order_and_propagates_callback_error	ok
+platform::fs::tests::read_stream_delivers_bounded_chunks_and_propagates_the_callback_error	ok
+platform::fs::tests::rename_sequence_avoids_existing_target	ok
+platform::fs::tests::rewrite_atomic_with_buffers_many_small_writes	ok
+platform::fs::tests::rewrite_atomic_with_replaces_the_file_and_preserves_it_on_error	ok
+platform::fs::tests::rfc3339_formats_a_known_timestamp	ok
+platform::fs::tests::short_or_failed_copy_never_reaches_the_target_path	ok
+platform::fs::tests::windows_network_disconnect_maps_to_e2005	ok
+platform::fs::tests::write_atomic_with_buffers_many_small_writes	ok
+platform::ids::tests::generated_plan_id_has_ulid_shape	ok
+platform::journal::tests::append_persists_and_mark_reverted_updates_status	ok
+platform::journal::tests::append_with_kind_persists_plan_kind	ok
+platform::journal::tests::discarded_pending_is_tombstoned_and_removed_on_reopen	ok
+platform::journal::tests::pending_entry_is_dropped_when_the_move_never_happened	ok
+platform::journal::tests::pending_quarantine_entry_recovers_applied_when_the_file_exists	ok
+platform::journal::tests::pending_then_applied_appends_and_merges_on_reopen	ok
+platform::line_endings::tests::counts_mixed_text_newlines	ok
+platform::line_endings::tests::csv_quoted_newlines_are_not_counted_as_records	ok
+platform::line_endings::tests::sample_is_truncated_for_short_files	ok
+platform::listing::tests::empty_directory_writes_only_the_header	ok
+platform::listing::tests::file_root_is_rejected	ok
+platform::listing::tests::inspect_counts_files_dirs_and_depth	ok
+platform::listing::tests::writes_bom_header_and_streamed_rows	ok
+platform::oplog::tests::corrupt_database_is_backed_up_and_rebuilt	ok
+platform::oplog::tests::full_paths_follow_the_log_full_paths_switch	ok
+platform::oplog::tests::newer_schema_version_is_rejected_read_only	ok
+platform::oplog::tests::operation_log_and_diagnostic_log_are_separate_tracks	ok
+platform::oplog::tests::operation_log_schema_has_no_file_content_column	ok
+platform::oplog::tests::purge_before_removes_only_expired_records	ok
+platform::oplog::tests::schema_migrates_once_and_round_trips_records	ok
+platform::preflight::tests::available_space_reads_a_positive_value_for_a_temp_directory	ok
+platform::preflight::tests::default_margin_constants_match_the_baseline	ok
+platform::preflight::tests::fact_gathering_writes_nothing_to_the_tree	ok
+platform::preflight::tests::non_network_paths_are_not_probed	ok
+platform::preflight::tests::path_check_light_reads_the_attribute_bit_without_probing_writes	ok
+platform::preflight::tests::path_check_reads_metadata_without_error_for_missing_paths	ok
+platform::preflight::tests::path_check_reports_readonly_files	ok
+platform::preflight::tests::same_volume_is_true_for_two_paths_on_the_same_temp_dir	ok
+platform::preflight::tests::unc_share_root_picks_the_share_not_the_local_root	ok
+platform::replace_content::tests::inspect_file_matches_whole_file_semantics_across_chunk_boundaries	ok
+platform::replace_content::tests::inspects_csv_cells_and_quoted_newlines	ok
+platform::replace_content::tests::inspects_text_matches_and_context	ok
+platform::replace_content::tests::short_file_sample_is_truncated	ok
+platform::scan::tests::fast_mode_falls_back_to_the_confirmed_default_window	ok
+platform::scan::tests::fast_mode_hashes_only_quick	ok
+platform::scan::tests::full_mode_with_window_only_full_hashes_quick_survivors	ok
+platform::scan::tests::quick_hash_prunes_unique_same_size_files	ok
+platform::scan::tests::quick_hash_samples_head_and_tail_then_full_hash_separates	ok
+platform::scan::tests::scans_and_hashes_duplicate_files	ok
+platform::scan::tests::scans_long_paths_beyond_the_win32_limit	ok
+platform::scan::tests::scans_nested_directories	ok
+platform::scan::tests::skips_hidden_files_and_directories_by_default	ok
+platform::scan::tests::windows_identity_uses_volume_and_file_index	ok
+platform::text::tests::counts_overlong_lines_against_caller_threshold	ok
+platform::text::tests::empty_file_has_no_lines	ok
+platform::text::tests::estimate_adds_last_line_without_newline_when_complete	ok
+platform::text::tests::estimate_flags_missing_newline	ok
+platform::text::tests::estimates_lines_by_byte_ratio	ok
+platform::text::tests::line_layout_keeps_unterminated_tail_in_same_part	ok
+platform::text::tests::part_layout_caps_at_line_count_and_keeps_unterminated_tail	ok
+platform::text::tests::part_layout_rejects_zero_parts	ok
+platform::text::tests::rejects_zero_window	ok
+platform::text::tests::reports_line_start_and_index	ok
+platform::text::tests::samples_adjacent_windows_once_when_they_overlap	ok
+platform::text::tests::samples_head_and_evenly_spaced_blocks	ok
+platform::text::tests::samples_small_file_in_full	ok
+platform::text::tests::splits_layout_by_line_count_and_keeps_tail	ok
+platform::text::tests::splits_layout_by_parts_with_remainder_on_first_parts	ok
+platform::text::tests::stops_early_when_caller_requests	ok
+platform::text::tests::streams_across_chunk_boundaries	ok
+platform::text::tests::streams_line_without_newline_and_flags_it	ok
+platform::text::tests::streams_segments_and_counts_lines	ok
+security_config::capabilities_stay_at_the_minimum_the_shell_needs	ok
+security_config::dev_csp_is_separate_and_only_adds_what_vite_dev_needs	ok
+security_config::production_csp_denies_by_default_and_forbids_inline_script	ok
+security_config::production_csp_keeps_ipc_reachable_for_the_shell	ok
+security_config::production_csp_keeps_only_the_style_exception_it_needs	ok
+security_config::window_does_not_expose_the_global_tauri_object	ok
+shell::ai::tests::bundle_over_ten_steps_is_rejected_with_e6010	ok
+shell::ai::tests::cancellation_returns_e6007	ok
+shell::ai::tests::catalog_covers_every_shell_routable_plan_kind	ok
+shell::ai::tests::clarification_finishes_without_bundle	ok
+shell::ai::tests::default_request_never_contains_file_names_or_paths	ok
+shell::ai::tests::dependency_cycle_is_rejected_with_e6010	ok
+shell::ai::tests::duplicate_step_id_is_rejected_with_e6003	ok
+shell::ai::tests::every_catalog_kind_reaches_the_plan_factory_with_one_bundle_step	ok
+shell::ai::tests::file_names_require_explicit_consent_e6005	ok
+shell::ai::tests::fixtures_ai_drive_the_contract	ok
+shell::ai::tests::forbidden_tool_call_is_rejected_with_e6004_and_emits_tool_card	ok
+shell::ai::tests::happy_path_emits_delta_tool_bundle_done	ok
+shell::ai::tests::history_defaults_to_empty_when_omitted	ok
+shell::ai::tests::history_is_forwarded_to_the_model_request	ok
+shell::ai::tests::http_status_maps_to_e6xxx	ok
+shell::ai::tests::invalid_model_params_are_normalized_to_e6003	ok
+shell::ai::tests::missing_provider_returns_e6001	ok
+shell::ai::tests::model_request_lists_every_phase_three_kind	ok
+shell::ai::tests::multi_step_intent_produces_a_topologically_ordered_bundle	ok
+shell::ai::tests::non_param_plan_errors_are_preserved	ok
+shell::ai::tests::non_plan_capable_or_unrouted_kinds_are_rejected_with_e6003	ok
+shell::ai::tests::phase_three_exposes_all_catalog_kinds_and_keeps_the_phase_one_subset	ok
+shell::ai::tests::provider_failure_is_emitted_without_bundle	ok
+shell::ai::tests::provider_parses_plain_and_fenced_json	ok
+shell::ai::tests::provider_rejects_non_json_output_with_e6003	ok
+shell::ai::tests::provider_request_body_includes_file_names_only_when_consented	ok
+shell::ai::tests::provider_request_body_includes_history_before_the_current_turn	ok
+shell::ai::tests::provider_request_body_is_minimal_and_lists_supported_kinds	ok
+shell::ai::tests::status_reports_phase_three_and_the_catalog_version	ok
+shell::ai::tests::storing_a_blank_api_key_is_rejected	ok
+shell::ai::tests::target_overlap_blocks_the_conflicting_steps	ok
+shell::ai::tests::unknown_dependency_is_rejected_with_e6010	ok
+shell::ai::tests::unknown_function_kind_is_rejected_with_e6003	ok
+shell::recipe_apply::tests::a_template_that_still_carries_paths_is_not_silently_overwritten	ok
+shell::recipe_apply::tests::build_invocation_step_selects_that_steps_slots	ok
+shell::recipe_apply::tests::c03_snapshot_becomes_a_valid_request_after_mapping	ok
+shell::recipe_apply::tests::c09_uses_the_source_paths_channel_instead_of_params	ok
+shell::recipe_apply::tests::c10_max_ratio_is_parsed_into_a_number	ok
+shell::recipe_apply::tests::c10_slots_follow_the_mode_in_the_snapshot	ok
+shell::recipe_apply::tests::content_features_refuse_without_content_and_apply_with_it	ok
+shell::recipe_apply::tests::describe_assesses_each_step_and_the_one_click_gate	ok
+shell::recipe_apply::tests::every_feature_in_the_feature_table_has_path_slots	ok
+shell::recipe_apply::tests::every_registered_feature_has_slots_and_no_duplicates	ok
+shell::recipe_apply::tests::f04_encoding_lands_on_target_after_rename	ok
+shell::recipe_apply::tests::f05_rows_rename_and_auto_delimiter_are_normalized	ok
+shell::recipe_apply::tests::load_recipe_builds_the_same_route_call_as_plan_operation	ok
+shell::recipe_apply::tests::missing_and_extra_slots_are_both_rejected_by_name	ok
+shell::recipe_apply::tests::older_c10_compress_template_is_refused_until_re_saved	ok
+shell::recipe_apply::tests::path_slots_and_param_maps_cover_the_same_features	ok
+shell::recipe_apply::tests::sampling_defaults_fill_and_template_values_win	ok
+shell::recipe_apply::tests::slot_shapes_are_strict_about_single_and_list_values	ok
+shell::recipe_apply::tests::slots_come_from_the_route_not_from_names	ok
+shell::recipe_apply::tests::unbound_and_multi_step_recipes_are_rejected_before_paths	ok
+shell::support::tests::build_honours_section_toggles_and_repro_steps	ok
+shell::support::tests::build_reports_environment_and_counts_codes_by_frequency	ok
+shell::support::tests::write_emits_pretty_json_and_avoids_same_second_collisions	ok
+shell::tasks::tests::apply_and_undo_run_through_the_queue_with_events	ok
+shell::tasks::tests::apply_completes_when_operation_log_is_unavailable	ok
+shell::tasks::tests::auto_concurrency_is_adaptive_for_cpu_bound_plans	ok
+shell::tasks::tests::auto_concurrency_respects_an_explicit_higher_request	ok
+shell::tasks::tests::auto_pause_sets_reason_and_resume_clears_it	ok
+shell::tasks::tests::blocked_preflight_leaves_the_disk_untouched_and_the_plan_stored	ok
+shell::tasks::tests::c01_transcode_plan_executes_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::c02_line_ending_plan_executes_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::c03_replace_plan_executes_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::corrupt_snapshot_is_backed_up_and_the_queue_starts_empty	ok
+shell::tasks::tests::csv_dedup_plan_executes_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::diag_log_records_failed_entry_codes_on_failure	ok
+shell::tasks::tests::diag_log_records_lifecycle_events_with_task_id	ok
+shell::tasks::tests::disk_requirements_sum_within_a_volume	ok
+shell::tasks::tests::encrypted_archive_without_a_secret_fails_the_whole_task_with_e3008	ok
+shell::tasks::tests::entry_concurrency_follows_the_manual_setting_and_stays_in_contract_range	ok
+shell::tasks::tests::entry_level_byte_progress_is_recorded_and_cleared_on_boundary	ok
+shell::tasks::tests::fatal_pause_message_is_actionable_per_error_code	ok
+shell::tasks::tests::generic_plan_kinds_execute_through_the_desktop_queue	ok
+shell::tasks::tests::huge_entries_force_the_concurrency_cap	ok
+shell::tasks::tests::legacy_snapshots_recover_job_from_the_stored_job	ok
+shell::tasks::tests::legacy_task_snapshots_without_plan_id_still_deserialize	ok
+shell::tasks::tests::listing_plan_streams_csv_through_the_desktop_queue_and_undoes	ok
+shell::tasks::tests::manual_concurrency_from_settings_is_read_once_at_dispatch	ok
+shell::tasks::tests::oplog_and_journal_agree_field_by_field_after_apply_and_undo	ok
+shell::tasks::tests::preflight_gate_blocks_dispatch_with_e2004_when_disk_margin_is_exceeded	ok
+shell::tasks::tests::preflight_gate_checks_disk_for_non_c09_write_plans	ok
+shell::tasks::tests::preflight_gate_is_recomputed_every_call_so_a_changed_environment_flips_the_verdict	ok
+shell::tasks::tests::preflight_gate_warns_on_unreachable_unc_without_blocking_the_task	ok
+shell::tasks::tests::preflight_passing_plan_then_applies_through_the_queue_and_quarantines_files	ok
+shell::tasks::tests::progress_bursts_are_coalesced_and_flushed_on_phase_change	ok
+shell::tasks::tests::queued_tasks_preview_in_reverse_insertion_order_with_entry_totals	ok
+shell::tasks::tests::recover_discard_keeps_applied_state_and_cancels_the_task	ok
+shell::tasks::tests::recover_rollback_restores_applied_entries_and_cancels_the_original_task	ok
+shell::tasks::tests::restart_marks_unfinished_tasks_interrupted_and_resume_skips_applied_entries	ok
+shell::tasks::tests::retry_after_orchestration_failure_requeues_all_entries	ok
+shell::tasks::tests::retry_rejects_undo_jobs_running_tasks_and_unknown_ids	ok
+shell::tasks::tests::retry_reruns_only_failed_entries_under_a_new_task_id	ok
+shell::tasks::tests::retry_succeeds_after_a_transient_environment_failure	ok
+shell::tasks::tests::startup_cleans_abandoned_copy_temps_in_quarantine	ok
+shell::tasks::tests::task_state_events_cover_pause_resume_and_queued_cancel	ok
+shell::tasks::tests::the_archive_password_never_reaches_the_task_snapshot	ok
+shell::tasks::tests::undo_tasks_report_job_undo_while_kind_stays_the_plan_code	ok
+shell::tasks::tests::zip_compress_plan_executes_through_the_desktop_queue_and_undoes	ok
+shell::tests::c09_slot_goes_to_source_paths_and_not_into_params	ok
+shell::tests::config_sourced_preview_is_invalidated_when_protected_list_changes	ok
+shell::tests::csv_and_ops_sampling_defaults_land_on_their_routes	ok
+shell::tests::every_slot_table_feature_has_a_landing_test	ok
+shell::tests::f11_facts_probe_every_parent_position_and_flag_files	ok
+shell::tests::manifest_archive_and_zip_slots_land_on_the_route_struct_fields	ok
+shell::tests::protected_snapshot_comparison_ignores_order_and_duplicates	ok
+shell::tests::protected_snapshot_comparison_sees_canonical_changes	ok
+shell::tests::rewrite_and_ops_slots_land_on_the_route_struct_fields	ok
+shell::tests::shell_only_routes_keep_their_own_slots	ok
+shell::tests::split_and_csv_slots_land_on_the_route_struct_fields	ok
+shell::tests::template_sampling_values_win_over_defaults	ok
+shell::window_state::tests::a_rect_on_the_secondary_monitor_is_restored_including_negative_offsets	ok
+shell::window_state::tests::a_rect_still_inside_a_monitor_is_restored_where_it_was	ok
+shell::window_state::tests::an_off_screen_rect_is_centered_on_the_primary_monitor	ok
+shell::window_state::tests::missing_or_empty_state_leaves_the_window_alone	ok
+shell::window_state::tests::only_full_containment_counts_not_mere_overlap	ok
+shell::window_state::tests::saved_size_without_a_position_restores_size_only	ok
+shell::window_state::tests::snapshot_round_trips_through_the_ui_state_patch_shape	ok
+unc_real_probe::real_unc_share_is_reachable_and_missing_hosts_warn	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-01 未配置模型：状态行给出引导，输入与发送禁用且不发请求	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-02 首次发送弹同意：列出将发送与不发送的字段，未确认前不发请求	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-03 同意弹窗取消：关闭弹窗、保留输入、不发请求	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-04 确认后发送：默认不带文件名，consentToken 非空，且无路径泄漏	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-05 文件名 opt-in：勾选后列出清单，请求里才出现文件名	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-06 流式文本：delta 按序拼接，done 只补未流出的收尾文案	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-07 工具卡（允许）：显示工具名与允许态，无错误条	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-08 工具卡（禁止）：标红并以 E6004 本地化文案收尾，不产计划束	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-09 计划束与唯一出口：只提供「去预览」，不存在执行按钮	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-10 多计划：按依赖顺序渲染步骤链，依赖未完成时等待	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-10c 依赖步骤失败：后续步骤停止，进度不前进	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-10b 目标重叠：冲突条可见，冲突步骤的去预览被阻断	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-11 非法 schema：E6003 本地化文案，无计划束	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-12 超时：E6006 文案带重试建议，无计划束	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-13 取消：cancel 只调一次，收尾 E6007，取消按钮消失且无计划束	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-14 事件幂等与卸载安全：bundle 只落一条消息，卸载后迟到事件不报错	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-17 多轮：后续请求带本会话先前的用户文字，不含当前句	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-18 模板入口：本地跳转，不发 AI 请求	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-15 双语：en-US 的状态、禁止工具与依赖环文案均走资源包	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-16 可访问性：面板/日志语义正确，同意弹窗初始焦点在「取消」	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-错误码 blocked-content：E6005 走本地化文案	ok
+vitest::AiPanel.test.tsx::F15 AI 面板（组件级） AI-UI-错误码 cycle：E6010 走本地化文案	ok
+vitest::App.aiPanel.test.tsx::F15 AI 面板（集成级） AI-INT-05 模板入口：切到处理模板视图并关闭面板，不产生 AI 请求	ok
+vitest::App.aiPanel.test.tsx::F15 AI 面板（集成级） AI-INT-01 面板开关：关闭再打开保留本次会话消息	ok
+vitest::App.aiPanel.test.tsx::F15 AI 面板（集成级） AI-INT-02 计划束交接：切到 f12 功能视图，预览表出现 AI 计划条目	ok
+vitest::App.aiPanel.test.tsx::F15 AI 面板（集成级） AI-INT-03 交接后不自动执行：无运行中任务，执行仍待用户显式点击	ok
+vitest::App.aiPanel.test.tsx::F15 AI 面板（集成级） AI-INT-04 无直接 apply：全流程 apply 计数恒为 0，面板内无执行入口	ok
+vitest::App.byteProgress.test.tsx::条目内（字节级）进度（ADR-0100／方案 §7.5） 条目内事件显示人类可读的字节进度，且不改条目计数	ok
+vitest::App.byteProgress.test.tsx::条目内（字节级）进度（ADR-0100／方案 §7.5） 对照：条目边界事件清掉字节进度，避免下一条目张冠李戴	ok
+vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 取消且有已完成项：先问数量，确认后走 undoPlan 撤销	ok
+vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 选择保留：不调用撤销，条目留在 Journal 里	ok
+vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：取消但一条都没完成时不得打扰用户	ok
+vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：撤销任务被取消时不得问「是否撤销」（只对 apply 成立）	ok
+vitest::App.cancel-review.test.tsx::取消后的撤销询问（方案 §7.7） 对照：正常完成的任务不得弹撤销询问	ok
+vitest::App.executionSettings.test.tsx::运行中调参与面板重算（C15-PRE-04） 设置页改并发后提示下一批生效，旧预览失效且执行入口关闭	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 侧栏每一项都渲染出对应功能页的参数区与执行区	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 默认视图是 C09 工作台，且能回到它	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 「任务与撤销」是能点开的真实视图，不是 disabled 占位	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 「设置」是能点开的真实视图：五组配置与语言选择都在	ok
+vitest::App.navigation.test.tsx::功能视图导航可达 「处理模板」是能点开的真实视图：列表出得来，可套用的模板给真按钮	ok
+vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检落地前不派发；期间界面仍可操作；落地瞬间参数已变则拒绝派发	ok
+vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检阻断时不派发执行（E2004 前移为执行前阻断，零副作用）	ok
+vitest::App.preflight.test.tsx::S01 预检的时序语义（TC v0.4 的 E○2 改写） 预检项只显示本地化类别＋错误码，内核英文明细（含路径）不进界面（OQ-38 同族收口）	ok
+vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §2／§3） 失败条目显示码位＋本地化摘要，不显示后端 message／detail 原文	ok
+vitest::App.result-copy.test.tsx::执行结果表的失败条目文案（06 §2／§3） 条目状态用本地化文案，不露出内核枚举原词（09 §2）	ok
+vitest::App.uiHandles.test.tsx::侧栏拖宽（设计 03 §11.2 的 layout.sidebarWidth） 键盘调宽后写 layout 分节，且不动 navigation 分节	ok
+vitest::App.uiHandles.test.tsx::侧栏拖宽（设计 03 §11.2 的 layout.sidebarWidth） 超出上界就贴边，不把越界的宽度写进本机状态（§11.3 clamp）	ok
+vitest::App.uiHandles.test.tsx::侧栏拖宽（设计 03 §11.2 的 layout.sidebarWidth） 启动时按已记录的宽度恢复，越界值同样 clamp 后再应用	ok
+vitest::App.uiHandles.test.tsx::侧栏拖宽（设计 03 §11.2 的 layout.sidebarWidth） 重置界面状态回到默认宽度，旧的侧栏值不再带着	ok
+vitest::App.uiHandles.test.tsx::侧栏收起与 AI 面板开关（设计 03 §11.2 的 layout） 收起侧栏写 layout.sidebarCollapsed 并套上折叠类	ok
+vitest::App.uiHandles.test.tsx::侧栏收起与 AI 面板开关（设计 03 §11.2 的 layout） AI 面板开关写 layout.aiPanelOpen，启动可恢复	ok
+vitest::App.uiHandles.test.tsx::列头排序与列宽（设计 03 §11.2 的 tables） 默认显示序就是计划序（没有任何排序记录时不动行）	ok
+vitest::App.uiHandles.test.tsx::列头排序与列宽（设计 03 §11.2 的 tables） 启动带回来的列宽与排序直接生效（设计 03 §11.3 的恢复）	ok
+vitest::App.uiHandles.test.tsx::列头排序与列宽（设计 03 §11.2 的 tables） 点列名升序、再点降序，两次都把 tables 写回本机状态	ok
+vitest::App.uiHandles.test.tsx::列头排序与列宽（设计 03 §11.2 的 tables） 排序不重新出计划、也不让旧计划失效（方案 §7.1/§7.3：排序是视图态不是参数）	ok
+vitest::App.uiHandles.test.tsx::列头排序与列宽（设计 03 §11.2 的 tables） 键盘调列宽把 columnWidths 写进 tables，列名排序值不受影响	ok
+vitest::App.uiHandles.test.tsx::列头排序与列宽（设计 03 §11.2 的 tables） 每张表各留一份记录：改了预览表不会带上执行结果表	ok
+vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 启动时把上次目录填进输入框，并把最近目录挂成候选	ok
+vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 生成预览后把这次目录写回 UiState，且保持去重置顶	ok
+vitest::App.uiState.test.tsx::上次目录与最近目录（设计 03 §11） 没有记录时不预填、也不写候选（空状态由用户自己选）	ok
+vitest::App.uiState.test.tsx::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 启动时回到上次的功能页	ok
+vitest::App.uiState.test.tsx::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 切换页面时写回 lastSection	ok
+vitest::App.undo-failure.test.tsx::撤销失败清单的三层结构（R3③／方案 §4.6／设计 06 §3） 撤销有失败时逐条给出码位＋人话摘要＋建议动作，且不露路径原文	ok
+vitest::App.undo-failure.test.tsx::撤销失败清单的三层结构（R3③／方案 §4.6／设计 06 §3） 对照：撤销全部成功时不出现失败清单	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 已知码位给出本地化摘要与建议动作，不再把后端英文原文当主文案	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 同一码位在英文下给英文文案	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 未收录的码位退回后端原文而不是空白，并标记未本地化	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 设计 06 §2 的码表已全量收口：56 个码位、每码两段	ok
+vitest::errors.test.tsx::错误码文案（设计 06 §3／设计 09 §5） 每个收录码位在中英两个语言包里都有 summary 与 action，且文案不为空	ok
+vitest::errors.test.tsx::错误横幅 渲染码位、本地化摘要与建议动作，且关闭按钮可用	ok
+vitest::errors.test.tsx::错误横幅 未收录码位时仍显示码位与后端原文，不出现 raw key	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 生成计划→执行→执行中可取消（调用 cancelTask）	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 partial-failed 后出现「重试失败项」并调用 retryTask	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 回滚预演的条目状态用本地化文案，不露出枚举原词（09 §2）	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 撤销调用 undoPlan（走共享 Journal 通道，不自建撤销）	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 改参数后旧计划立即失效：提示出现且执行/撤销被禁用（T 配方 P4）	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 保护目录命中：执行前必须二次确认，且初始焦点不在危险按钮（方案 §3.3/§7.11、U §3.5）	ok
+vitest::FeaturePages.controls.test.tsx::功能视图的任务控制与撤销 计划失败时呈现 06 码位而非自由文本	ok
+vitest::FeaturePages.manifest.test.tsx::功能页的逐文件清单（C10） 压缩/解压成功后，条目明细（逐文件清单）出现在终态横幅	ok
+vitest::FeaturePages.manifest.test.tsx::功能页的逐文件清单（C10） 对照：没有明细的条目不得凭空造出清单块	ok
+vitest::FeaturePages.password.test.tsx::C10 解压密码（ADR-0074） 密码字段是 type=password，且只在填写后才进计划请求	ok
+vitest::FeaturePages.password.test.tsx::C10 解压密码（ADR-0074） 不填密码时请求里没有这个字段（后端据此不置 passwordProvided）	ok
+vitest::FeaturePages.password.test.tsx::C10 解压密码（ADR-0074） 加密包告警如实说明「预览验不了密码」而不是只给绿色对勾	ok
+vitest::FeaturePages.stale.test.tsx::逐功能视图的参数变更失效（T 配方 P4 专属面） 逐视图改参数后旧计划失效：执行/撤销/回滚预演全部关闭	ok
+vitest::FeaturePages.stale.test.tsx::逐功能视图的参数变更失效（T 配方 P4 专属面） 重新生成计划后失效提示消失、执行入口恢复	ok
+vitest::FeaturePages.table.test.tsx::功能页预览表的把手（设计 03 §11.2 的 tables） 表头两列都有排序按钮与列宽把手	ok
+vitest::FeaturePages.table.test.tsx::功能页预览表的把手（设计 03 §11.2 的 tables） 排序写进带功能码的表 id，且行序真的变了	ok
+vitest::FeaturePages.table.test.tsx::功能页预览表的把手（设计 03 §11.2 的 tables） 每个功能页各留一份记录：c03 不会沿用 f12 的列宽/排序	ok
+vitest::FeaturePages.table.test.tsx::功能页预览表的把手（设计 03 §11.2 的 tables） 排序不重新出计划、也不改变派发的计划（方案 §7.1/§7.3）	ok
+vitest::FeaturePages.table.test.tsx::C05 预览表的把手（F12 页内嵌） C05 表有自己的排序按钮与列宽把手	ok
+vitest::FeaturePages.table.test.tsx::C05 预览表的把手（F12 页内嵌） 拖 C05 列宽写到 table.feature.c05，不碰 F12 计划表	ok
+vitest::FeaturePages.table.test.tsx::C05 预览表的把手（F12 页内嵌） C05 排序写 table.feature.c05.sort，行序按 oldPath 变	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 用计划里实际出现的动作存模板，参数快照取 plan.params	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 计划含多种动作时拒绝保存，不挑一个把另一部分语义丢掉	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 空计划不给存：没有条目就没有动作可存	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 采样口径进模板不进快照（v5，OQ-41）：表单当前值存进 sampling，快照保持计划形状	ok
+vitest::FeaturePages.template.test.tsx::功能页的「存为处理模板」 变换正文进模板不进快照（v6，OQ-43②）：规则按行拆数组、递归开关落布尔	ok
+vitest::FeaturePages.virtual.test.tsx::功能页计划预览的窗口化（方案 6.2） 3000 条计划只渲染窗口内的行，DOM 行数不随条目数线性增长	ok
+vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 类别标题走设计 06 §2A 的界面文案，不露出内核 slug	ok
+vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 界面没跟上的类别显示成缺陷，而不是伪装成一条正常文案	ok
+vitest::FeaturePages.warnings.test.tsx::功能页的集中报告（warnings）逐项点名 对照：计划没有 warnings 时不得凭空出现集中报告块	ok
+vitest::FeaturePages.warningViews.test.tsx::逐功能视图的计划警告与阻断呈现（T §3.2 PRE-03 专属面） 逐视图渲染集中报告：标题走本地化、不漏原始 key、建议随附	ok
+vitest::FeaturePages.warningViews.test.tsx::逐功能视图的计划警告与阻断呈现（T §3.2 PRE-03 专属面） 逐视图呈现阻断条目：码与落点同时可见	ok
+vitest::i18n.test.tsx::i18n 取词与插值 整句模板按参数插值，缺参数时保留占位符而不是渲染 undefined	ok
+vitest::i18n.test.tsx::i18n 取词与插值 同一 key 在两个语言包里给出各自语言的文案	ok
+vitest::i18n.test.tsx::i18n 取词与插值 中英文的占位符集合一致（I18N-01 的静态前提，运行期再兜一次）	ok
+vitest::i18n.test.tsx::语言与主题的运行期行为 切换语言即时改变文案与 document.lang，并写 general.language	ok
+vitest::i18n.test.tsx::语言与主题的运行期行为 切换主题即时落 dataset，并写 general.theme	ok
+vitest::i18n.test.tsx::语言与主题的运行期行为 没有 Provider 时按默认中文取词，组件单挂也不炸	ok
+vitest::i18n.test.tsx::语言包完整性 渲染出的界面里没有裸露的资源 key（I18N-07：不显示 raw key）	ok
+vitest::SettingsPage.test.tsx::设置页 按设计 03 的五组渲染，并逐项标出生效值来源	ok
+vitest::SettingsPage.test.tsx::设置页 改动字段即写 ConfigDocument 的对应 scope	ok
+vitest::SettingsPage.test.tsx::设置页 语言切换即时生效并写 general.language	ok
+vitest::SettingsPage.test.tsx::设置页 「恢复本组默认」调 resetScope，不逐项写空值	ok
+vitest::SettingsPage.test.tsx::设置页 只读档（E1007）给出可读提示，而不是静默失败	ok
+vitest::SettingsPage.test.tsx::执行期设置（方案 §7.10 的「新设置将在下一批生效」） 改并发：当场提示下一批生效，并通知调用方让旧预览失效	ok
+vitest::SettingsPage.test.tsx::执行期设置（方案 §7.10 的「新设置将在下一批生效」） 改其它字段不触发执行期设置失效	ok
+vitest::SettingsPage.test.tsx::执行期设置（方案 §7.10 的「新设置将在下一批生效」） 「恢复本组默认」把并发改回自动档时同样让旧预览失效	ok
+vitest::SettingsPage.test.tsx::本机界面状态（设计 03 §11.3） 重置界面状态调用回调并给出提示，且不碰任何 ConfigDocument 命令	ok
+vitest::SettingsPage.test.tsx::本机界面状态（设计 03 §11.3） 不传回调时按钮保持禁用（独立渲染不假装能重置）	ok
+vitest::SupportPackageCard.test.tsx::SupportPackageCard 预览按当前勾选组装并渲染环境、统计与日志	ok
+vitest::SupportPackageCard.test.tsx::SupportPackageCard 导出写回刚预览的那份并显示落盘路径	ok
+vitest::SupportPackageCard.test.tsx::SupportPackageCard 关掉段落后按新选择重新预览	ok
+vitest::SupportPackageCard.test.tsx::SupportPackageCard 失败后清空预览并只显示本地化提示	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 列出任务并把状态、进度如实呈现（不是只显示 id）	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 功能码在列表里给名字，码位仍然保留（09 §2／06 §3 的支持句柄口径）	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 执行中的任务可取消，调用 cancelTask	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 失败任务可重试，调用 retryTask（只重跑失败条目）	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 撤销按 planId 走 undoPlan，且 undo 任务自己不提供重试	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 中断任务给的是续跑/回滚/放弃，而不是取消	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 回滚任务不给二次撤销，回滚失败也不给重试（壳层会拒，判据是 job 不是 kind）	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 实时事件态覆盖静态快照：跑完的任务立刻显示已完成、取消按钮消失	ok
+vitest::TaskHistory.test.tsx::任务与撤销视图 加载失败时只显示本地化文案，不渲染后端 message／detail 原文	ok
+vitest::TaskHistory.test.tsx::任务表的列宽把手（设计 03 §11.2 的 tables） 四个列都有分隔把手，键盘调宽写进 table.tasks	ok
+vitest::TaskHistory.test.tsx::任务表的列宽把手（设计 03 §11.2 的 tables） 列头排序按 TaskSummary 字段写 table.tasks.sort（actions 列不参与）	ok
+vitest::TaskHistory.test.tsx::任务表的列宽把手（设计 03 §11.2 的 tables） 再点同一列翻成降序：排序是视图态，不改派发序	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 逐步骤：每步先预览再执行，后续步骤输入取自上一步产物	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 一键：首步确认后，后续步骤计划通过风险闸门即自动执行	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 风险闸门：后续步骤计划有警告时停下降级，不自动 apply	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 含高风险步骤：一键不可用（即便本机偏好存的是一键）	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 某步失败停止后续：applyPlan 抛错后不再 plan 第 2 步	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 某步无产物记「跳过」并继续，不当作成功	ok
+vitest::TemplateRunner.test.tsx::多步模板执行器（Phase B，§15.2.3） 已完成步骤可按各自 Journal 撤销	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 列出模板：动作显示中文名而不是线协议枚举，步骤与建议扩展名可见	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 删除是两段式：第一下只进入确认态，确认后才真调用	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 导入高版本模板：错误码与本地化摘要都要出现，不显示后端原文	ok
+vitest::TemplatesPage.test.tsx::处理模板视图 导出把模板 JSON 摊在可复制的文本框里	ok
+vitest::TemplatesPage.test.tsx::模板的功能码绑定（OQ-36 裁决①，schema v4） 绑定过就写明是哪个功能，而不是只报动作名	ok
+vitest::TemplatesPage.test.tsx::模板的功能码绑定（OQ-36 裁决①，schema v4） 没绑定的如实说「未绑定」，不假装可以套用	ok
+vitest::TemplatesPage.test.tsx::模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080） 可套用的模板：填路径槽位生成预览计划，只出计划不执行	ok
+vitest::TemplatesPage.test.tsx::模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080） 「执行此计划」显式走 applyPlan，不静默执行	ok
+vitest::TemplatesPage.test.tsx::模板一键套用（OQ-40①/OQ-41②，ADR-0077/0080） 正文缺失的模板：不给套用按钮，原因如实展示（OQ-43 的七类）	ok
+vitest::TemplatesPage.test.tsx::多步模板的运行模式偏好（设计 03 §5.2／§11.2） 本机新建（origin=local）默认一键，可改逐步骤并写回 UiState	ok
+vitest::TemplatesPage.test.tsx::多步模板的运行模式偏好（设计 03 §5.2／§11.2） 导入模板（origin=imported）默认逐步骤，一键需显式开启	ok
+vitest::TemplatesPage.test.tsx::多步模板的运行模式偏好（设计 03 §5.2／§11.2） 来源未知（v6 及更早模板迁移后）按导入默认：逐步骤	ok
+vitest::VirtualList.test.tsx::VirtualList 的窗口化 2000 条只挂窗口内的行，未渲染的条目不在 DOM 里	ok
+vitest::VirtualList.test.tsx::VirtualList 的窗口化 占位高度等于 条数 × 行高，滚动条比例因此真实	ok
+vitest::VirtualList.test.tsx::VirtualList 的窗口化 滚动后窗口跟着位移：新窗口渲染、旧窗口从 DOM 摘除	ok
+vitest::VirtualList.test.tsx::VirtualList 的窗口化 滚到底部能看到最后一条（大列表末页不被裁掉）	ok
+vitest::VirtualList.test.tsx::VirtualList 的窗口化 空列表不渲染任何行，占位高度为 0	ok
+vitest::VirtualList.test.tsx::VirtualList 的窗口化 行序号与集合大小对辅助技术可见（aria-posinset/aria-setsize）	ok
+vitest::uiState.test.ts::最近目录（设计 03 §11.2） 新目录置顶，重复目录被提到最前而不是出现两次	ok
+vitest::uiState.test.ts::最近目录（设计 03 §11.2） 只动 lastDirectory 与 recentDirectories，兄弟字段原样保留	ok
+vitest::uiState.test.ts::最近目录（设计 03 §11.2） 空目录不写入，也不把已有记录弄坏	ok
+vitest::uiState.test.ts::最近目录（设计 03 §11.2） 预填只看 lastDirectory：没有记录就返回 null（不阻塞启动）	ok
+vitest::uiState.test.ts::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 功能页记成 section=feature ＋ feature=<id>；离开时不清 feature	ok
+vitest::uiState.test.ts::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 恢复：section=feature 且功能仍在导航表里才回功能页	ok
+vitest::uiState.test.ts::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 恢复：功能已下线就回默认，不把用户带到空白页	ok
+vitest::uiState.test.ts::上次页面（设计 03 §11.2 的 lastSection/lastFeature） 恢复：顶层视图直接认 lastSection；无记录或未知值返回 null	ok
+vitest::uiState.test.ts::侧栏宽度与 clamp（设计 03 §11.2/§11.3） clampPixels 越界贴边，非数值退回下限	ok
+vitest::uiState.test.ts::侧栏宽度与 clamp（设计 03 §11.2/§11.3） readPixelVar 只认 px 形态的值，其它一律当作没定义	ok
+vitest::uiState.test.ts::侧栏宽度与 clamp（设计 03 §11.2/§11.3） rememberSidebarWidth 只动 sidebarWidth，兄弟字段原样保留	ok
+vitest::uiState.test.ts::列宽与排序（设计 03 §11.2 的 tables） 列宽按表按列合并，别的表与别的列不被擦掉	ok
+vitest::uiState.test.ts::列宽与排序（设计 03 §11.2 的 tables） 同列翻转方向、换列回升序，且只留最后一次排序	ok
+vitest::uiState.test.ts::列宽与排序（设计 03 §11.2 的 tables） 换表写入排序，前一张表的列宽仍在	ok
+vitest::uiState.test.ts::列宽与排序（设计 03 §11.2 的 tables） 没有排序记录时原样返回：显示序就是计划序	ok
+vitest::uiState.test.ts::列宽与排序（设计 03 §11.2 的 tables） 升序/降序互为反序，同值保持计划序（sort 是稳定的）	ok
+vitest::uiState.test.ts::列宽与排序（设计 03 §11.2 的 tables） 取不到值的行排在最后，翻转方向也不把它推到前面	ok
+vitest::mock.uiState.test.ts::mock 的 UiState 透传（设计 03 §11） layout 与 tables 写入后能原样读回	ok
+vitest::mock.uiState.test.ts::mock 的 UiState 透传（设计 03 §11） 读改写之间不丢兄弟分节：写 tables 不会擦掉 navigation	ok
+vitest::mock.uiState.test.ts::mock 的 UiState 透传（设计 03 §11） 返回的是副本：调用方改返回值不会污染壳层状态	ok
+vitest::mock.uiState.test.ts::mock 的 UiState 透传（设计 03 §11） uiStateVersion 与 updatedAt 由壳层管，写入即 E1002	ok
+vitest::mock.uiState.test.ts::mock 的 UiState 透传（设计 03 §11） 重置只清界面状态，回到没有 layout/tables 的默认	ok
+playwright::ai-panel.spec.ts::AI-E2E-01 未配置：状态行与手动引导可见，输入禁用	ok
+playwright::ai-panel.spec.ts::AI-E2E-02 happy path：同意→流式→工具卡→计划束→去预览，面板内无执行入口	ok
+playwright::ai-panel.spec.ts::AI-E2E-03 禁止工具：工具卡标红，E6004 错误条，无计划束	ok
+playwright::ai-panel.spec.ts::AI-E2E-04 多计划：依赖步骤先等待，首步去预览	ok
+playwright::ai-panel.spec.ts::AI-E2E-05 取消：E6007 收尾，无计划束，输入恢复可用	ok
+playwright::ai-panel.spec.ts::AI-E2E-06 英文：关键路径在 en-US 下成立	ok
+playwright::feature-views.spec.ts::23 个功能视图在真实浏览器里逐个可达	ok
+playwright::feature-views.spec.ts::功能页不残留上一视图的计划与预览	ok
+playwright::layout-scroll.spec.ts::侧栏下折导航可用鼠标滚轮到达（处理模板），brand 保持固定	ok
+playwright::plan-warnings.spec.ts::F11 的 parent-is-file 报告逐项列出类别与建议，而不只给计数	ok
+playwright::plan-warnings.spec.ts::对照：夹具没有 warnings 的功能页不得凭空出现集中报告块	ok
+playwright::preflight-report.spec.ts::预检报告给出逐项结论与三类计数	ok
+playwright::preflight-report.spec.ts::界面上不存在跳过预检的入口（默认必检）	ok
+playwright::protection-confirm.spec.ts::C09 工作台：执行先出危险对话框，取消即零派发	ok
+playwright::protection-confirm.spec.ts::保护名单为空时不出现对话框（默认空名单不误拦）	ok
+playwright::rename-preview.spec.ts::无计划时执行入口被禁用（PRE-03 的入口阻断面）	ok
+playwright::rename-preview.spec.ts::生成计划后渲染计划预览与 C05 对照面板	ok
+playwright::rename-preview.spec.ts::改参数后重新预览：旧面板被新面板替换（PRE-04 / PRE-06）	ok
+playwright::rename-preview.spec.ts::回滚预演面板呈现零冲突判定（C06 的 UI 面）	ok
+playwright::rename-preview.spec.ts::预览→执行链跑通：C05 标注逐项可见，确认后执行进入终态（EXE-01）	ok
+playwright::settings-i18n.spec.ts::设置页可达，切到英文后整页换语言且关键操作不被遮挡	ok
+playwright::stale-plan.spec.ts::C09 工作台：改保留策略后执行入口关闭（勾选确认后仍关闭）	ok
+playwright::stale-plan.spec.ts::F12 功能页：改前缀后执行/撤销/回滚预演全部关闭	ok
+playwright::support-package.spec.ts::支持包：设置页可达，预览后才可导出，文案随语言切换	ok
+playwright::templates.spec.ts::模板库可达：列表出得来，导入高版本被拒并给出错误码	ok
+playwright::templates.spec.ts::套用模板：填路径槽位生成预览计划，执行是显式按钮	ok
+playwright::templates.spec.ts::多步模板：本机新建默认一键，后续步骤自动推进	ok

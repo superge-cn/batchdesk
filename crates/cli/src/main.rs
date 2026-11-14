@@ -2,9 +2,9 @@
 //!
 //! 当前提供 C09 只读检测与计划预览切片，以及 C01 编码转换的计划/执行切片：
 //! 扫描 + 大小/快速/全量哈希 + 纯函数分组；`--plan` 只生成 `PlanDocument`，
-//! 不删除、不执行 apply。快速哈希窗口必须由调用方显式给出，本程序不设产品
-//! 默认值（见 PDR-001 与 OQ-28）；C01 采样窗口/块数同样必须显式给出（方案
-//! §5.2 未给数值）。
+//! 不删除、不执行 apply。快速哈希窗口由调用方显式给出、显式值优先；`--mode fast`
+//! 省略时按缺省（头尾各 64 KiB，方案 §5.10／v1.23 R128）。C01 采样窗口/块数必须
+//! 显式给出（方案 §5.2 未给数值）。
 
 use std::env;
 use std::path::PathBuf;
@@ -7306,7 +7306,14 @@ mod tests {
             // rewriter 不读 entry；空 JSON 缺字段会失败，故构造最小合法条目。
             let entry: kernel::plan::PlanEntry =
                 serde_json::from_str("{\"entryId\":\"e1\",\"source\":\"/x\",\"action\":\"edit-content\",\"reason\":\"t\"}").unwrap();
-            let outcome = rewriter.rewrite(&entry, &mut &gb[..], &mut output).unwrap();
+            let outcome = rewriter
+                .rewrite(
+                    &entry,
+                    &mut &gb[..],
+                    &mut output,
+                    &kernel::progress::NoCancel,
+                )
+                .unwrap();
             (output, outcome.detail)
         };
 

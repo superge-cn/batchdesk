@@ -275,4 +275,108 @@ mod tests {
         ));
         assert!(is_under(r"C:\file", "C:", CaseSense::CaseInsensitive));
     }
+
+    #[test]
+    fn protected_list_matches_unc_entries_in_literal_and_canonical_forms() {
+        // S02-PRE-05：保护名单里配 UNC 共享根时，命中判定必须覆盖
+        // ① 字面量形（\\server\share）② 规范形（\\?\UNC\server\share）
+        // ③ canonical 形（长路径前缀）④ 大小写不敏感（Windows 主机语义）
+        // 并给出反向对照：别的共享／别的服务器／本地盘同名路径都不得误拦。
+        let protected = vec![ProtectedDir::with_canonical(
+            r"\\server\share\protected",
+            Some(r"\\?\UNC\server\share\protected".to_string()),
+        )];
+
+        // ① 字面量名单 ↔ 字面量路径
+        assert_eq!(
+            protected_by(
+                r"\\server\share\protected\dir\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            Some(r"\\server\share\protected".to_string())
+        );
+        // ② 规范形路径（长路径前缀归一后同根）
+        assert_eq!(
+            protected_by(
+                r"\\?\UNC\server\share\protected\dir\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            Some(r"\\server\share\protected".to_string())
+        );
+        // ③ canonical 形路径走 canonical 名单分支
+        assert_eq!(
+            protected_by(
+                r"\\server\share\other\file",
+                Some(r"\\?\UNC\server\share\protected\real.file"),
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            Some(r"\\server\share\protected".to_string())
+        );
+        // 大小写不敏感：服务器名与共享名大小写不同仍命中
+        assert_eq!(
+            protected_by(
+                r"\\SERVER\Share\Protected\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            Some(r"\\server\share\protected".to_string())
+        );
+
+        // 反向对照：共享名不同
+        assert_eq!(
+            protected_by(
+                r"\\server\other\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            None
+        );
+        // 服务器名不同
+        assert_eq!(
+            protected_by(
+                r"\\other\share\protected\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            None
+        );
+        // 本地盘同名路径（不得把 UNC 名单套到本地盘上）
+        assert_eq!(
+            protected_by(
+                r"C:\server\share\protected\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            None
+        );
+        // 名单前缀相同但不是子树（protected2 不是 protected 的子目录）
+        assert_eq!(
+            protected_by(
+                r"\\server\share\protected2\file",
+                None,
+                &protected,
+                CaseSense::CaseInsensitive
+            ),
+            None
+        );
+        // 大小写敏感（POSIX 语义）下大小写不同不命中
+        assert_eq!(
+            protected_by(
+                r"\\SERVER\SHARE\protected\file",
+                None,
+                &protected,
+                CaseSense::Sensitive
+            ),
+            None
+        );
+    }
 }

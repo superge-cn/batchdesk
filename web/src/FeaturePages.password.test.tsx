@@ -26,7 +26,8 @@ const plan: PlanDocument = {
     {
       kind: "encrypted-archive",
       riskLevel: "caution",
-      suggestion: "encrypted entries are decrypted at execution"
+      suggestion:
+        "encrypted entries are decrypted at execution; a wrong password fails the whole archive and preview cannot tell"
     }
   ]
 };
@@ -104,4 +105,25 @@ describe("C10 解压密码（ADR-0074）", () => {
     };
     expect("password" in call.params).toBe(false);
   });
+
+// ADR-0074 §5.2：预览**不能**提前验证密码，所以界面必须如实说清楚，
+// 不能只给一个绿色对勾让用户误以为"密码已经验过了"。
+// 这里钉住两件事：类别标题走本地化、内核的明细文本原样显示。
+it("加密包告警如实说明「预览验不了密码」而不是只给绿色对勾", async () => {
+  const user = userEvent.setup();
+  render(<FeaturePages view="c10" onBack={() => undefined} />);
+
+  await user.type(screen.getByLabelText(/压缩包路径/), "/data/secret.zip");
+  await user.type(screen.getByLabelText(/解压输出目录/), "/out");
+  await user.type(screen.getByLabelText(/解压总量上限/), "10000");
+  await user.type(screen.getByLabelText(/解压比例上限/), "100");
+  await user.click(screen.getByRole("button", { name: /生成计划预览/ }));
+
+  await waitFor(() => expect(planOperation).toHaveBeenCalled());
+  await waitFor(() => {
+    expect(screen.getByText(/压缩包已加密/)).toBeTruthy();
+  });
+  // 内核明细（英文）原样呈现：明确告诉用户"错密码会让整包失败、预览看不出来"。
+  expect(screen.getByText(/preview cannot tell/)).toBeTruthy();
+});
 });

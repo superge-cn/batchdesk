@@ -60,6 +60,7 @@ dependencies = [
  "batchdesk-kernel",
  "batchdesk-platform",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]

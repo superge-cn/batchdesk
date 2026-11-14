@@ -200,7 +200,17 @@ fn finish_record(
 }
 
 /// 按 RFC 4180 写出单条记录（字段含分隔符/引号/换行时加引号并转义）。
-pub fn write_record(fields: &[String], delimiter: u8, out: &mut String) {
+/// 写出一条记录。`terminator` 是**记录终止符**（引号内的换行属于字段数据、由字段自身携带，不受此影响）。
+///
+/// 缺省 LF（历史行为）
+/// ：F06 合并／C11 去重／C12 过滤／C13 排序的产物按 LF 输出。
+/// C03 单元格模式传源文件的终止符（流式推断），避免把源 CRLF 静默规范化成 LF（TC-C03-EXE-04）。
+pub fn write_record_with_terminator(
+    fields: &[String],
+    delimiter: u8,
+    terminator: &[u8],
+    out: &mut String,
+) {
     for (index, field) in fields.iter().enumerate() {
         if index > 0 {
             out.push(delimiter as char);
@@ -221,7 +231,114 @@ pub fn write_record(fields: &[String], delimiter: u8, out: &mut String) {
             out.push_str(field);
         }
     }
-    out.push('\n');
+    out.push_str(std::str::from_utf8(terminator).unwrap_or("\n"));
+}
+
+/// 缺省终止符＝LF（保持 F06/C11/C12/C13 的既有产物形态）。
+pub fn write_record(fields: &[String], delimiter: u8, out: &mut String) {
+    write_record_with_terminator(fields, delimiter, b"\n", out)
+}
+
+/// 源 CSV 的**记录终止符**（TC-C03-EXE-04）。
+///
+/// C03 单元格模式只改单元格内容、不改文件结构，因此产物必须沿用源的终止符。
+/// 判定口径与 [`LineEndingCounts`] 一致：**引号内的换行是字段数据、不计入**；
+/// 引号外 CR 紧跟 LF 记为 CRLF，单独的 LF 记为 LF，单独的 CR 记为 CR。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordTerminator {
+    Crlf,
+    Lf,
+    Cr,
+}
+
+impl RecordTerminator {
+    pub const fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::Crlf => b"\r\n",
+            Self::Lf => b"\n",
+            Self::Cr => b"\r",
+        }
+    }
+
+    /// 流式推断：喂入一段字节，累计各终止符的出现次数；全部喂完后按多数派定档。
+    ///
+    /// 状态机与 [`RecordFeeder::push`] 同构（`at_field_start`/`in_quotes`/`after_quote`
+    /// 三个状态的迁移逐条对齐），引号内的换行不会被误计成终止符。
+    /// 分块调用之间状态保留，故跨块的引号也能正确识别。
+    pub fn infer(data: &[u8], state: &mut TerminatorState) {
+        // 与 [`RecordFeeder::push`] 同构：三个状态（字段开头／引号内／引号后）的迁移
+        // 逐条对齐。引号内的 CR/LF 是字段数据，不会被计成终止符。
+        for &byte in data {
+            if state.in_quotes {
+                if state.after_quote {
+                    if byte == b'"' {
+                        state.after_quote = false;
+                        continue;
+                    }
+                    state.in_quotes = false;
+                    state.after_quote = false;
+                    // 结束引号后的这一字节落到下面的引号外分支处理。
+                } else if byte == b'"' {
+                    state.after_quote = true;
+                }
+                continue;
+            }
+            if state.at_field_start && byte == b'"' {
+                state.in_quotes = true;
+                state.at_field_start = false;
+            } else if byte == b'\r' {
+                state.cr = state.cr.saturating_add(1);
+            } else if byte == b'\n' {
+                // 紧跟在 CR 后的 LF 与那条 CR 合成一个 CRLF，不能重复计数。
+                if state.cr > 0 {
+                    state.cr -= 1;
+                    state.crlf = state.crlf.saturating_add(1);
+                } else {
+                    state.lf = state.lf.saturating_add(1);
+                }
+                state.at_field_start = true;
+            } else {
+                state.at_field_start = false;
+            }
+        }
+    }
+
+    /// 多数派定档；全为 0（空文件／无终止符）时取 LF（与历史产物形态一致）。
+    pub fn finalize(state: &TerminatorState) -> Self {
+        if state.crlf >= state.lf && state.crlf >= state.cr {
+            Self::Crlf
+        } else if state.lf >= state.cr {
+            Self::Lf
+        } else {
+            Self::Cr
+        }
+    }
+}
+
+/// [`RecordTerminator::infer`] 的可变状态；跨块保留。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminatorState {
+    in_quotes: bool,
+    after_quote: bool,
+    at_field_start: bool,
+    crlf: u64,
+    lf: u64,
+    cr: u64,
+}
+
+impl Default for TerminatorState {
+    /// `at_field_start` 必须以 `true` 起手——CSV 的第一条记录的第一个字段开头
+    /// 也是"字段开头"，否则文件开头的引号会被当普通字符。
+    fn default() -> Self {
+        Self {
+            in_quotes: false,
+            after_quote: false,
+            at_field_start: true,
+            crlf: 0,
+            lf: 0,
+            cr: 0,
+        }
+    }
 }
 
 /// RFC 4180 增量记录供给器（A 类流式执行臂，ADR-0054）：跨块喂入 UTF-8 字节，

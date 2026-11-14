@@ -14,7 +14,7 @@ use platform::journal::FileJournal;
 use kernel::apply::{ApplyOptions, ApplyState};
 use kernel::archive::{
     apply_archive_plan, plan_c10, ArchiveApplyContext, ArchiveCompression, ArchiveInspect,
-    ArchiveService, PlanC10Input,
+    ArchiveService, CompressedArchive, PlanC10Input,
 };
 use kernel::error::KernelError;
 use kernel::fs::{CaseSense, FsAdapter};
@@ -84,7 +84,7 @@ impl ArchiveService for FailingArchive {
         &self,
         sources: &[String],
         compression: ArchiveCompression,
-    ) -> Result<Vec<u8>, KernelError> {
+    ) -> Result<CompressedArchive, KernelError> {
         self.inner.compress(sources, compression)
     }
 }

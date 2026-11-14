@@ -34,6 +34,7 @@ export const ERROR_TEXT_KEYS = {
   E3007: { summary: "error.E3007.summary", action: "error.E3007.action" },
   E3008: { summary: "error.E3008.summary", action: "error.E3008.action" },
   E3009: { summary: "error.E3009.summary", action: "error.E3009.action" },
+  E3010: { summary: "error.E3010.summary", action: "error.E3010.action" },
   E5001: { summary: "error.E5001.summary", action: "error.E5001.action" },
   E5009: { summary: "error.E5009.summary", action: "error.E5009.action" },
   E9001: { summary: "error.E9001.summary", action: "error.E9001.action" },

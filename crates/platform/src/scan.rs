@@ -4,9 +4,9 @@
 //! stays pure and only groups the resulting candidates.
 //!
 //! The scan implements the project's three stages: size grouping, an optional
-//! head/tail quick digest, and the full digest. The quick window is always an
-//! explicit caller parameter; this crate defines no product default (the
-//! baseline only says "head/tail some KB", see PDR-001 and OQ-28).
+//! head/tail quick digest, and the full digest. The quick window defaults to
+//! head 64 KiB + tail 64 KiB in fast mode when the caller omits it (产品方案 §5.10,
+//! v1.23/R128); an explicit value always wins.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -29,8 +29,8 @@ pub enum ScanMode {
 }
 
 /// Head/tail window used by the quick-hash stage when the caller does not pass
-/// one. Value confirmed by the product owner on 2026-11-02 (`PENDING-DECISIONS.md`,
-/// incorporation target = 产品方案 §5.10) — 64 KiB head plus 64 KiB tail.
+/// one. Confirmed by the product owner on 2026-11-02 and incorporated into
+/// 产品方案 §5.10 (v1.23, R128) — 64 KiB head plus 64 KiB tail.
 pub const DEFAULT_QUICK_WINDOW_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

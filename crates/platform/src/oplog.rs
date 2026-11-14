@@ -427,4 +427,138 @@ mod tests {
         };
         assert_eq!(error.code, "E1007");
     }
+
+    /// TC-C17a-XCT-04 判据①：**日志不含文件内容**（隐私底线）。
+    ///
+    /// 这是结构性保证——直接读 SQLite 的 `PRAGMA table_info`，而不是靠"调用方没往里写"。
+    /// 一旦有人给操作日志加一列文件内容（正文/摘要/样例），本测试即红。
+    #[test]
+    fn operation_log_schema_has_no_file_content_column() {
+        let dir = TempDir::new();
+        let path = dir.0.join("oplog.sqlite3");
+        {
+            let (mut log, _) = SqliteOperationLog::open(path.clone()).unwrap();
+            log.append_batch(&[record(
+                "01OPLOG0000000000000000000001",
+                "01PLAN000000000000000000000001",
+                "2026-11-14T00:00:00Z",
+                "ok",
+                "start",
+            )])
+            .unwrap();
+        }
+
+        // 用**独立连接**读 schema（不复用 log 的连接，避免只看内存态）。
+        let connection = Connection::open(&path).unwrap();
+        let mut statement = connection
+            .prepare("PRAGMA table_info(operation_log)")
+            .unwrap();
+        let columns: Vec<String> = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|value| value.unwrap())
+            .collect();
+        assert!(!columns.is_empty(), "operation_log 表应存在");
+
+        // 疑似"文件内容"的列名一律禁止（子串匹配，覆盖 content/contents/body/payload…）。
+        let forbidden = [
+            "content", "body", "data", "payload", "bytes", "text", "preview", "sample", "snippet",
+            "raw", "blob",
+        ];
+        for column in &columns {
+            let lower = column.to_ascii_lowercase();
+            assert!(
+                !forbidden.iter().any(|word| lower.contains(word)),
+                "operation_log 出现疑似文件内容列 {column}——违反 C17a 隐私底线（TC-C17a-XCT-04）"
+            );
+        }
+
+        // 方案 §10.2 字段集必须落列（缺列即丢审计/反查能力）。
+        for expected in [
+            "id",
+            "ts",
+            "task_id",
+            "plan_id",
+            "entry_id",
+            "op_kind",
+            "phase",
+            "status",
+            "code",
+            "dir_name",
+            "old_name",
+            "new_name",
+            "before_path",
+            "after_path",
+            "overall_completed",
+            "detail",
+        ] {
+            assert!(
+                columns.iter().any(|column| column == expected),
+                "operation_log 缺列 {expected}（方案 §10.2 字段集）"
+            );
+        }
+    }
+
+    /// TC-C17a-XCT-04 判据②：**与完整日志分轨**——操作日志（审计轨）与诊断日志是两套独立载体，
+    /// 阶段 0 只落最小字段、不落 4.6／9.6 的七要素完整记录（方案 §10.2）。
+    #[test]
+    fn operation_log_and_diagnostic_log_are_separate_tracks() {
+        let dir = TempDir::new();
+        let oplog_path = dir.0.join("operation_log.db");
+        let diag_path = dir.0.join("diagnostic.log");
+
+        {
+            let (mut log, _) = SqliteOperationLog::open(oplog_path.clone()).unwrap();
+            log.append_batch(&[record(
+                "01OPLOG0000000000000000000002",
+                "01PLAN000000000000000000000002",
+                "2026-11-14T00:00:00Z",
+                "ok",
+                "finish",
+            )])
+            .unwrap();
+        }
+        let diagnostic = crate::diaglog::DiagnosticLog::open(diag_path.clone(), Default::default());
+        diagnostic.log(
+            crate::diaglog::Level::Info,
+            "test",
+            "diagnostic track probe",
+        );
+
+        // 两条轨各自落盘、互不共用文件。
+        assert!(oplog_path.is_file(), "操作日志应落自己的库文件");
+        assert!(diag_path.is_file(), "诊断日志应落自己的文件");
+        assert_ne!(
+            oplog_path, diag_path,
+            "操作日志与诊断日志不得共用同一文件（分轨）"
+        );
+
+        // 载体格式不同：SQLite 数据库 vs JSONL 文本。
+        let oplog_head = std::fs::read(&oplog_path).unwrap()[0..16].to_vec();
+        assert_eq!(
+            oplog_head, b"SQLite format 3\0",
+            "操作日志应是 SQLite 库（设计 10 §1）"
+        );
+        let diag_text = std::fs::read_to_string(&diag_path).unwrap();
+        assert!(
+            diag_text.starts_with('{') && diag_text.contains("diagnostic track probe"),
+            "诊断日志应是 JSONL 文本（ADR-0091）：{diag_text:?}"
+        );
+
+        // 跨轨不得互相写入：审计轨只有 operation_log 一张表，诊断轨里也不出现审计轨的表名。
+        let connection = Connection::open(&oplog_path).unwrap();
+        let mut statement = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap();
+        let tables: Vec<String> = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|value| value.unwrap())
+            .collect();
+        assert_eq!(tables, vec!["operation_log".to_string()]);
+        assert!(
+            !diag_text.contains("operation_log"),
+            "诊断轨不得写入审计轨的表名/内容"
+        );
+    }
 }

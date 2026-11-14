@@ -6,7 +6,8 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use kernel::archive::{
-    ArchiveCompression, ArchiveEntryInfo, ArchiveEntryKind, ArchiveInspect, ArchiveService,
+    ArchiveCompression, ArchiveEntryInfo, ArchiveEntryKind, ArchiveInspect, ArchiveManifestItem,
+    ArchiveService, CompressedArchive,
 };
 use kernel::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
 use kernel::error::KernelError;
@@ -105,7 +106,7 @@ impl ArchiveService for ZipArchiveService {
         &self,
         sources: &[String],
         compression: ArchiveCompression,
-    ) -> Result<Vec<u8>, KernelError> {
+    ) -> Result<CompressedArchive, KernelError> {
         let options =
             zip::write::SimpleFileOptions::default().compression_method(match compression {
                 ArchiveCompression::Store => zip::CompressionMethod::Stored,
@@ -113,25 +114,40 @@ impl ArchiveService for ZipArchiveService {
             });
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let mut names = BTreeSet::new();
+        // 方案 §5.11「压缩完成后自动生成文件清单」：在遍历源的同时收集逐文件事实，
+        // 不再二次解析产物（对大压缩包那是整整多一遍全量读）。
+        let mut manifest = Vec::new();
         for source in sources {
             let path = crate::fs::fs_path(Path::new(source));
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| KernelError::invalid_params("source path has no file name"))?;
-            add_path(&mut writer, &path, name.to_string(), options, &mut names)?;
+            add_path(
+                &mut writer,
+                &path,
+                name.to_string(),
+                options,
+                &mut names,
+                &mut manifest,
+            )?;
         }
         let cursor = writer.finish().map_err(zip_error)?;
-        Ok(cursor.into_inner())
+        Ok(CompressedArchive {
+            bytes: cursor.into_inner(),
+            manifest,
+        })
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_path<W: Write + std::io::Seek>(
     writer: &mut zip::ZipWriter<W>,
     path: &Path,
     entry_name: String,
     options: zip::write::SimpleFileOptions,
     names: &mut BTreeSet<String>,
+    manifest: &mut Vec<ArchiveManifestItem>,
 ) -> Result<(), KernelError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         let mapped = crate::fs::io_error(&error, path);
@@ -183,6 +199,7 @@ fn add_path<W: Write + std::io::Seek>(
                 format!("{entry_name}/{name}"),
                 options,
                 names,
+                manifest,
             )?;
         }
         return Ok(());
@@ -192,6 +209,11 @@ fn add_path<W: Write + std::io::Seek>(
             "duplicate archive entry: {entry_name}"
         )));
     }
+    // 先登记再写：清单反映的是"产物里有哪些文件"，写失败时整体报错、清单随之丢弃。
+    manifest.push(ArchiveManifestItem {
+        name: entry_name.clone(),
+        size: metadata.len(),
+    });
     writer.start_file(entry_name, options).map_err(zip_error)?;
     let mut file = fs::File::open(path).map_err(|error| {
         let mapped = crate::fs::io_error(&error, path);
@@ -417,6 +439,97 @@ mod tests {
         assert_eq!(inspect.entries[0].size, 77);
     }
 
+    /// Z01 的**写入侧**对称面：压缩产出的 ZIP 必须让 Windows 资源管理器／7-Zip／
+    /// macOS 都能正确读出非 ASCII 文件名。做法是「名字字节写 UTF-8 ＋ 通用标志位
+    /// bit 11 置上」；**本地头与中央目录两处都要置**——只写一处会让按本地头解码的
+    /// 工具读成 CP437 乱码。
+    ///
+    /// 台账原写「压缩时不写 bit11/GB18030 标志」，实测为误：zip 9.1.3 对合法 UTF-8
+    /// 名会在两处置 bit 11。本用例把这条事实钉住，防止将来换库／改选项时悄悄回退。
+    #[test]
+    fn compress_marks_non_ascii_names_utf8_with_bit11_in_both_headers() {
+        let dir = std::env::temp_dir().join(format!(
+            "batchdesk-compress-utf8-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("中文文件.txt"), b"payload").unwrap();
+        fs::write(dir.join("plain.txt"), b"plain").unwrap();
+        let sources = vec![dir.to_string_lossy().into_owned()];
+        let service = ZipArchiveService;
+        let bytes = service
+            .compress(&sources, ArchiveCompression::Deflate)
+            .unwrap()
+            .bytes;
+
+        // ① 中央目录（zip crate 读取口）：非 ASCII 名必须是 UTF-8 字节且 bit 11 置上
+        let zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+        let mut non_ascii: Vec<Vec<u8>> = Vec::new();
+        for index in 0..zip.len() {
+            let entry = zip.by_index_data(index).unwrap();
+            let raw = entry.name_raw().to_vec();
+            let flags = entry.flags().as_u16();
+            if raw.iter().all(u8::is_ascii) {
+                assert_eq!(
+                    flags & 0x0800,
+                    0,
+                    "纯 ASCII 名不该置 bit 11（保持与老工具的兼容）：{raw:?}"
+                );
+                continue;
+            }
+            assert!(
+                std::str::from_utf8(&raw).is_ok(),
+                "非 ASCII 名必须是合法 UTF-8 字节：{raw:?}"
+            );
+            assert!(
+                flags & 0x0800 != 0,
+                "中央目录里非 ASCII 名必须置 bit 11（UTF-8 标志）：{raw:?}"
+            );
+            non_ascii.push(raw.clone());
+        }
+        assert_eq!(non_ascii.len(), 1, "应恰好一个非 ASCII 条目");
+
+        // ② 本地头（原始字节扫描）：名字出现处往前 30 字节是头起点，+6 是 flags
+        for raw in &non_ascii {
+            let needle = bytes
+                .windows(raw.len())
+                .position(|window| window == raw.as_slice())
+                .expect("本地头里应能找到该名字");
+            // 本地头布局：签名(4)＋版本(2)＋**flags(2)**＋方法(2)…，名字在 +30
+            let flags_at = needle - 30 + 6;
+            let flags = u16::from_le_bytes([bytes[flags_at], bytes[flags_at + 1]]);
+            assert!(
+                flags & 0x0800 != 0,
+                "本地头里非 ASCII 名也必须置 bit 11，否则按本地头解码的工具会乱码：{raw:?}"
+            );
+        }
+
+        // ③ 回环：自己压自己解，名字原样保留，且不触发 GBK 回退（说明读侧认为是 UTF-8）
+        let zip_path = dir.join("out.zip");
+        fs::write(&zip_path, &bytes).unwrap();
+        let inspect = service.inspect(zip_path.to_str().unwrap()).unwrap();
+        let names: Vec<_> = inspect
+            .entries
+            .iter()
+            .filter_map(|entry| entry.name.as_deref())
+            .collect();
+        assert!(
+            names.iter().any(|name| name.ends_with("中文文件.txt")),
+            "回环后中文名必须原样：{names:?}"
+        );
+        assert!(
+            inspect.entries.iter().all(|entry| !entry.gbk_fallback),
+            "我们自己写的是 UTF-8＋bit11，读侧不该走 GBK 回退：{:?}",
+            inspect.entries
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn compress_writes_directory_tree_and_inspect_counts_sources() {
         let dir = std::env::temp_dir().join(format!(
@@ -436,9 +549,35 @@ mod tests {
         assert_eq!(inspect.total_bytes, 9);
 
         let service = ZipArchiveService;
-        let bytes = service
+        let compressed = service
             .compress(&sources, ArchiveCompression::Deflate)
             .unwrap();
+        // 方案 §5.11「压缩完成后自动生成文件清单」：清单与产物同源，逐文件可查。
+        // 源是目录时，ZIP 会保留顶层目录名（与"双击解压出一个文件夹"的预期一致）。
+        let mut manifest_names: Vec<&str> = compressed
+            .manifest
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        manifest_names.sort_unstable();
+        let root = dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("temp dir has a name");
+        assert_eq!(
+            manifest_names,
+            vec![format!("{root}/a.txt"), format!("{root}/sub/b.txt")]
+        );
+        assert_eq!(
+            compressed
+                .manifest
+                .iter()
+                .map(|item| item.size)
+                .sum::<u64>(),
+            9,
+            "清单总字节数必须与实际写出的文件体积一致"
+        );
+        let bytes = compressed.bytes;
         let zip_path = dir.join("out.zip");
         fs::write(&zip_path, &bytes).unwrap();
         let archive = service.inspect(zip_path.to_str().unwrap()).unwrap();

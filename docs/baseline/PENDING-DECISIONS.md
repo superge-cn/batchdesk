@@ -5,10 +5,8 @@
 
 | 决策 | 用户确认 | 收编目标 | 下游已按此执行 | 备注 |
 |---|---|---|---|---|
-| C09 快速哈希采样窗口 | 2026-11-02，用户「定头尾各 64 KiB」：`--mode fast` 省略 `--quick-window-bytes` 时按 65536 运行，显式值优先；full 模式不传窗口仍跳过快速阶段 | 产品方案 §5.10（下次升版） | `crates/platform/src/scan.rs::DEFAULT_QUICK_WINDOW_BYTES`＋`ScanOptions::effective_quick_window()`；CLI help/JSON/计划 params 同步；C-6 断言 `assert_c09.py` 增加缺省窗口路径；platform 新增 `fast_mode_falls_back_to_the_confirmed_default_window` | 桌面 c09 计划链当前恒为 full 模式，故该缺省目前只在 CLI fast 路径生效；收编后把代码注释的注源从本表改为方案章节号 |
-| C09 清理计划默认保留策略 | 2026-10-29，用户“按建议实施”：默认 `earliest`（保留最早文件） | 产品方案 §5.10（下次升版） | 计划预览 `--keep` 缺省 earliest；C-6 默认计划断言；显式 `shortest-path`/`newest` 可覆盖 | OQ-29 已关闭；C-6 的 `shortest-path` 仅为测试参数 |
 
-> 当前待收编：C09 默认保留策略、C09 快速哈希采样窗口（64 KiB）；C37 处理模板与配置/界面状态持久化已收编方案 v1.19/T v1.12/设计 03 v1.3（2026-10-28）。D-U2=A、D-U4 与 OQ-07／OQ-12 已分别收编到 U v1.2 与产品方案 v1.18；D-U3、D-U5 已收编到 U v1.3，故从本表移除。
+> **当前无待收编项**：C09 快速哈希采样窗口（64 KiB）已收编方案 v1.23 §5.10（R128）；C09 默认保留策略（`earliest`）已收编方案 v1.24 §5.10（R129）——均 2026-11-14；C37 处理模板与配置/界面状态持久化已收编方案 v1.19/T v1.12/设计 03 v1.3（2026-10-28）。D-U2=A、D-U4 与 OQ-07／OQ-12 已分别收编到 U v1.2 与产品方案 v1.18；D-U3、D-U5 已收编到 U v1.3，故从本表移除。
 
 ## 使用规则
 

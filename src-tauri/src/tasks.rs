@@ -19,7 +19,7 @@ use kernel::apply::{
 use kernel::config::AutoOrNumber;
 use kernel::encoding::TranscodeRewriter;
 use kernel::error::KernelError;
-use kernel::fs::CaseSense;
+use kernel::fs::{CaseSense, FsAdapter as _};
 use kernel::journal::{FsOp, JournalStore};
 use kernel::license::LicenseService;
 use kernel::path::ProtectedDir;
@@ -91,6 +91,12 @@ pub struct TaskSummary {
     pub finished_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// 条目内进度（字节，ADR-0100）：当前条目已处理／总字节。
+    /// `None` 表示当前没有条目内进度（条目边界事件会清掉它）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_done: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_total: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -241,19 +247,30 @@ impl kernel::retry::NetworkRetry for TaskNetworkRetry {
     }
 
     fn pause(&self, error: &KernelError) -> kernel::retry::PauseAction {
-        self.inner.auto_pause(
-            &self.task_id,
-            &format!(
-                "网络路径在 3 次退避重试后仍不可达（{}）；已暂停，恢复网络后点继续",
-                error.message
-            ),
-        );
+        self.inner
+            .auto_pause(&self.task_id, &fatal_pause_message(error));
         self.control.wait_while_paused();
         if self.control.cancel.load(Ordering::SeqCst) {
             kernel::retry::PauseAction::Cancel
         } else {
             kernel::retry::PauseAction::Resumed
         }
+    }
+}
+
+/// ADR-0093：端口名保留 `NetworkRetry`，但它承载的是**致命错误暂停**——
+/// 网络断线（E2005，退避 3 次后暂停）与磁盘满（E2004，第一次就暂停）共用。
+/// 两种都必须给出**可操作**的下一步动作，而不是把任务判死。
+fn fatal_pause_message(error: &KernelError) -> String {
+    match error.code.as_str() {
+        "E2004" => format!(
+            "磁盘空间不足（{}）；已暂停，清理空间后点继续",
+            error.message
+        ),
+        _ => format!(
+            "网络路径在 3 次退避重试后仍不可达（{}）；已暂停，恢复网络后点继续",
+            error.message
+        ),
     }
 }
 
@@ -622,6 +639,8 @@ impl TaskQueue {
             started_at: None,
             finished_at: None,
             message,
+            entry_done: None,
+            entry_total: None,
         };
         {
             let mut state = self.inner.state.lock().unwrap();
@@ -647,6 +666,8 @@ impl TaskQueue {
             done: 0,
             total,
             message: None,
+            entry_done: None,
+            entry_total: None,
         });
         if self
             .sender
@@ -1029,6 +1050,8 @@ impl Inner {
                 done: 0,
                 total,
                 message: Some("resumed after restart".to_string()),
+                entry_done: None,
+                entry_total: None,
             });
         }
         changed
@@ -1077,8 +1100,17 @@ impl Inner {
                 event.phase,
                 ProgressPhase::Queued | ProgressPhase::Executing
             ) {
-                record.summary.done = event.done;
-                record.summary.total = event.total;
+                if event.entry_total.is_some() {
+                    // 条目内（字节级）事件：只更新字节字段，条目计数由边界事件维护。
+                    record.summary.entry_done = event.entry_done;
+                    record.summary.entry_total = event.entry_total;
+                } else {
+                    record.summary.done = event.done;
+                    record.summary.total = event.total;
+                    // 条目边界：清掉上一段的字节进度，避免张冠李戴。
+                    record.summary.entry_done = None;
+                    record.summary.entry_total = None;
+                }
             }
             record.summary.message = event.message.clone();
 
@@ -1339,13 +1371,53 @@ fn edit_content_rewriter(
 ///
 /// `configured` 是设置页的 `performance.concurrency`，**派发时**读取；`requested` 是调用方
 /// 随计划请求带来的 `entryConcurrency`（设计 01 §4）。手动档以设置为准并夹取到 1–16
-/// （配置文件可被手工改写，执行层仍按 `validate_apply_limits` 复核）；自动档/未设置沿用
-/// 请求值——介质自适应的自动档仍未落地，缺省 1＝串行（ADR-0033 §4 的已知缺口）。
-pub fn resolve_entry_concurrency(configured: Option<AutoOrNumber>, requested: usize) -> usize {
-    match configured {
+/// （配置文件可被手工改写，执行层仍按 `validate_apply_limits` 复核）。
+///
+/// **自动档／未设置走介质自适应**（方案 §5.12「并发的默认值（决策）」）：
+/// I/O 密集 SSD/NVMe 取 4、机械盘与网络盘取 2；CPU 密集取核数减一（上限 8）。
+/// `requested` 目前没有调用方显式设置（恒为缺省 1），故不再作为自动档的取值依据。
+pub fn resolve_entry_concurrency(
+    configured: Option<AutoOrNumber>,
+    requested: usize,
+    plan: &PlanDocument,
+    fs: &CliFsAdapter,
+) -> usize {
+    let resolved = match configured {
         Some(AutoOrNumber::Number(value)) => value.clamp(1, MAX_ENTRY_CONCURRENCY as u64) as usize,
-        _ => requested,
+        Some(AutoOrNumber::Auto) | None => adaptive_entry_concurrency(plan, fs, requested),
+    };
+    // 方案 §5.12 的队列背压规则：**超大文件（>2 GB）自动把并发降为 1–2**。
+    // 它是内存背压而不是用户偏好，故对手动档同样生效（否则设了 8 就绕过了背压）。
+    if kernel::apply::plan_has_huge_entry(plan) {
+        let cap = kernel::apply::huge_entry_cap(plan_medium(plan, fs));
+        return resolved.min(cap).max(1);
     }
+    resolved
+}
+
+/// 自动档：按计划的介质与工作类别算并发默认值（方案 §5.12）。
+fn adaptive_entry_concurrency(plan: &PlanDocument, fs: &CliFsAdapter, requested: usize) -> usize {
+    let class = kernel::apply::plan_work_class(plan);
+    let medium = plan_medium(plan, fs);
+    let cpus = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let adaptive = kernel::apply::adaptive_concurrency(medium, class, cpus);
+    // 调用方显式要求更高时尊重其意图（当前无人设置，恒为缺省 1）。
+    if requested > 1 {
+        adaptive.max(requested.min(MAX_ENTRY_CONCURRENCY))
+    } else {
+        adaptive
+    }
+}
+
+/// 取计划第一个可用路径问介质：优先 target（写在哪块盘上决定并发代价）。
+fn plan_medium(plan: &PlanDocument, fs: &CliFsAdapter) -> kernel::fs::MediumKind {
+    plan.entries
+        .iter()
+        .find_map(|entry| entry.target.as_deref().or(Some(entry.source.as_str())))
+        .map(|path| fs.medium_kind(path))
+        .unwrap_or(kernel::fs::MediumKind::Unknown)
 }
 
 fn run_apply(
@@ -1357,12 +1429,15 @@ fn run_apply(
     secret: Option<String>,
 ) -> JobResult {
     let plan_id = plan.plan.plan_id.clone();
+    let adapter = CliFsAdapter::new(Some(inner.paths.quarantine_dir.clone()));
     // 方案 §7.10：并发设置在任务**派发时**读取一次——运行中的任务不改写在途批次，
-    // 界面提示「新设置将在下一批生效」（设置页）。
+    // 界面提示「新设置将在下一批生效」（设置页）。介质也要在此刻问，理由相同。
     let options = ApplyOptions {
         entry_concurrency: resolve_entry_concurrency(
             (inner.performance_concurrency)(),
             options.entry_concurrency,
+            &plan.plan,
+            &adapter,
         ),
         ..options
     };
@@ -1370,7 +1445,6 @@ fn run_apply(
         Ok(journal) => journal,
         Err(error) => return failed_result(plan_id, task_id, error),
     };
-    let adapter = CliFsAdapter::new(Some(inner.paths.quarantine_dir.clone()));
     let sink = JobSink {
         inner: Arc::clone(inner),
         task_id: task_id.to_string(),
@@ -1981,6 +2055,7 @@ mod tests {
     use kernel::plan::{PlanEntry, PlanParamValue, PlanStats};
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     struct TempDir(PathBuf);
@@ -2605,6 +2680,92 @@ mod tests {
         );
     }
 
+    /// ADR-0074 §5.1：崩溃恢复与重试都拿不到密码——秘密只活在内存，`retry` 插
+    /// `secret=None`。加密包任务一旦没有秘密，前置门必须**整单 E3008**，
+    /// 而不是逐条失败或"解一半"。
+    #[test]
+    fn encrypted_archive_without_a_secret_fails_the_whole_task_with_e3008() {
+        use kernel::archive::ArchiveService;
+        let dir = TempDir::new();
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixtures/archive/password/zipcrypto.zip");
+        let service = platform::archive::ZipArchiveService;
+        let inspect = service
+            .inspect(fixture.to_str().unwrap())
+            .expect("inspect password fixture");
+        let archive = fixture.to_string_lossy().into_owned();
+        let build = |output_dir: &Path| {
+            kernel::archive::plan_c10(kernel::archive::PlanC10Input {
+                plan_id: new_ulid("c10-password"),
+                archive: archive.clone(),
+                archive_size: inspect.archive_size,
+                entries: inspect.entries.clone(),
+                output_dir: output_dir.to_string_lossy().into_owned(),
+                max_total_bytes: 10_000,
+                max_ratio: 100.0,
+                existing_targets: Vec::new(),
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                name_rules: platform::fs::name_rules(),
+                password_provided: true,
+            })
+            .expect("plan encrypted archive")
+        };
+        let queue = test_queue(paths_for(&dir), Arc::new(|_, _| {}));
+
+        // ① 计划说要密码、执行期却没给 → 前置门整单 E3008，不进条目循环、不写任何产物。
+        let out = dir.0.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let no_secret = queue.enqueue_apply(stored(build(&out)), ApplyOptions::default(), None);
+        let failed = wait_terminal(&queue, &no_secret);
+        assert_eq!(
+            failed.summary.state,
+            TaskState::Failed,
+            "缺秘密应整单失败，不是 partial-failed"
+        );
+        let message = failed.summary.message.clone().unwrap_or_default();
+        assert!(
+            message.starts_with("E3008"),
+            "缺秘密应报 E3008，实际 {message}"
+        );
+        assert!(
+            failed.entries.is_empty(),
+            "前置门在条目循环之前，报告里不该有条目明细"
+        );
+        assert_eq!(
+            fs::read_dir(&out).unwrap().count(),
+            0,
+            "前置门不得写出任何文件（含空目录）"
+        );
+
+        // ② 重试同一条失败任务：秘密不会被复活，仍是 E3008。
+        let retried_id = queue.retry(&no_secret, None).expect("失败任务应可重试");
+        let retried = wait_terminal(&queue, &retried_id);
+        assert_eq!(retried.summary.state, TaskState::Failed);
+        let retried_message = retried.summary.message.clone().unwrap_or_default();
+        assert!(
+            retried_message.starts_with("E3008"),
+            "重试拿不到秘密应仍报 E3008，实际 {retried_message}"
+        );
+        assert_eq!(
+            fs::read_dir(&out).unwrap().count(),
+            0,
+            "重试也不得写出任何文件"
+        );
+
+        // ③ 对照：给对密码就真能解开——证明上面的失败确实是"缺秘密"而非包坏了。
+        let out_ok = dir.0.join("out-ok");
+        fs::create_dir_all(&out_ok).unwrap();
+        let ok_id = queue.enqueue_apply(
+            stored(build(&out_ok)),
+            ApplyOptions::default(),
+            Some("secret123".to_string()),
+        );
+        let ok = wait_terminal(&queue, &ok_id);
+        assert_eq!(ok.summary.state, TaskState::Completed, "对密码应解开");
+        assert_eq!(fs::read(out_ok.join("a.txt")).unwrap(), b"hello zip\n");
+    }
+
     fn write_snapshot(paths: &TaskPaths, task_id: &str, plan: &PlanDocument, state: TaskState) {
         let summary = TaskSummary {
             task_id: task_id.to_string(),
@@ -2618,6 +2779,8 @@ mod tests {
             started_at: Some(now_rfc3339()),
             finished_at: None,
             message: None,
+            entry_done: None,
+            entry_total: None,
         };
         let queue = PersistedQueue {
             tasks: vec![PersistedTask {
@@ -2737,6 +2900,130 @@ mod tests {
     }
 
     #[test]
+    fn oplog_and_journal_agree_field_by_field_after_apply_and_undo() {
+        // C17a 一致性（T §2.2 注 3）：Journal 记「怎么撤」，操作日志记「做了什么」，
+        // 两条审计轨必须逐字段对得上——条目集合、逐条状态、计划类别。
+        // 缺这条对照，两边可以各自漂移（例如 Journal 记 Reverted 而日志仍写 ok）而无人发现。
+        let temp = TempDir::new();
+        let root = temp.0.join("data");
+        let quarantine = temp.0.join("quarantine");
+        let journal = temp.0.join("journal.jsonl");
+        let queue_path = temp.0.join("tasks.json");
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("a.txt");
+        let second = root.join("b.txt");
+        fs::write(&first, b"same").unwrap();
+        fs::write(&second, b"same").unwrap();
+        let plan = plan_for(
+            &new_ulid("consistency-plan"),
+            &[first.clone(), second.clone()],
+        );
+        let plan_id = plan.plan_id.clone();
+
+        let queue = test_queue(
+            TaskPaths {
+                quarantine_dir: quarantine.clone(),
+                journal_path: journal.clone(),
+                queue_path: queue_path.clone(),
+                oplog_path: temp.0.join("oplog.sqlite3"),
+                diag_log_path: temp.0.join("logs/diagnostic.log"),
+            },
+            Arc::new(|_, _| {}),
+        );
+
+        let apply_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+            None,
+        );
+        assert_eq!(
+            wait_terminal(&queue, &apply_id).summary.state,
+            TaskState::Completed
+        );
+        let undo_id = queue.enqueue_undo(plan_id.clone());
+        assert_eq!(
+            wait_terminal(&queue, &undo_id).summary.state,
+            TaskState::Completed
+        );
+
+        let journal = FileJournal::open(queue.inner.paths.journal_path.clone()).unwrap();
+        let journal_entries = journal.entries_for_plan(&plan_id).unwrap();
+        let (oplog, _) = SqliteOperationLog::open(queue.inner.paths.oplog_path.clone()).unwrap();
+        let records = oplog.entries_for_plan(&plan_id).unwrap();
+
+        // 条目集合：Journal 的每条 entry_id 都必须出现在操作日志里，反之亦然。
+        let mut journal_ids: Vec<&str> = journal_entries
+            .iter()
+            .map(|e| e.entry_id.as_str())
+            .collect();
+        journal_ids.sort_unstable();
+        let mut logged_ids: Vec<&str> = records
+            .iter()
+            .filter(|record| record.phase == "entry")
+            .map(|record| record.entry_id.as_deref().expect("逐条记录必须带 entry_id"))
+            .collect();
+        logged_ids.sort_unstable();
+        assert_eq!(
+            journal_ids, logged_ids,
+            "Journal 与操作日志的条目集合不一致"
+        );
+
+        // 逐条状态：Journal 的 Reverted ↔ 操作日志 rollback 相的 reverted。
+        for entry in &journal_entries {
+            assert_eq!(
+                entry.status,
+                kernel::journal::JournalStatus::Reverted,
+                "撤销后 Journal 条目应为 Reverted"
+            );
+            let rolled_back = records
+                .iter()
+                .find(|record| {
+                    record.phase == "rollback"
+                        && record.entry_id.as_deref() == Some(entry.entry_id.as_str())
+                })
+                .expect("Journal 条目在操作日志里没有对应的 rollback 记录");
+            assert_eq!(rolled_back.status, "reverted");
+            assert_eq!(rolled_back.code, None, "成功恢复的条目不该带错误码");
+        }
+
+        // 计划类别：两边记的是同一个 plan.kind（缺省补 c09 的兜底不得分歧）。
+        let journal_kind = journal_entries
+            .iter()
+            .find_map(|entry| entry.plan_kind.clone())
+            .expect("本批 Journal 条目应带 plan_kind");
+        let logged_kind = records
+            .iter()
+            .find(|record| record.phase == "entry")
+            .map(|record| record.op_kind.clone())
+            .expect("操作日志应含逐条记录");
+        assert_eq!(
+            journal_kind, logged_kind,
+            "Journal 与操作日志的计划类别不一致"
+        );
+
+        // 批次骨架：apply 与 rollback 各有一套 start/finish，且两条都整体完成。
+        for phase in ["start", "finish"] {
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|record| record.phase == phase)
+                    .count(),
+                2,
+                "phase={phase} 应各有 apply/rollback 两条"
+            );
+        }
+        assert!(records
+            .iter()
+            .filter(|record| record.phase == "finish")
+            .all(|record| record.overall_completed));
+    }
+
+    #[test]
     fn task_state_events_cover_pause_resume_and_queued_cancel() {
         let temp = TempDir::new();
         let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
@@ -2788,6 +3075,75 @@ mod tests {
     }
 
     #[test]
+    fn queued_tasks_preview_in_reverse_insertion_order_with_entry_totals() {
+        // C15-PRE-01：两条任务同时在队列时的预览与排序。
+        // `insert` 只入队不自动执行，所以排队态可被稳定断言（不会被执行线程抢跑）。
+        let temp = TempDir::new();
+        let queue = test_queue(paths_for(&temp), Arc::new(|_, _| {}));
+
+        let first_files: Vec<PathBuf> = (0..2)
+            .map(|index| temp.0.join(format!("a{index}.txt")))
+            .collect();
+        let second_files: Vec<PathBuf> = (0..5)
+            .map(|index| temp.0.join(format!("b{index}.txt")))
+            .collect();
+        let first_id = queue.enqueue_apply(
+            stored(plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &first_files)),
+            ApplyOptions::default(),
+            None,
+        );
+        let second_id = queue.enqueue_apply(
+            stored(plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QA", &second_files)),
+            ApplyOptions::default(),
+            None,
+        );
+
+        // 排序：最新入队的排在最前（`list` 取 order 的倒序）。
+        let page = queue.list(0, 10);
+        assert_eq!(page.total, 2, "队列里应有两条任务");
+        let ids: Vec<&str> = page
+            .items
+            .iter()
+            .map(|item| item.task_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![second_id.as_str(), first_id.as_str()],
+            "队列预览应按入队倒序（最新在前）"
+        );
+
+        // 分页：total 是全量、items 是当前页。
+        let head = queue.list(0, 1);
+        assert_eq!(head.total, 2);
+        assert_eq!(head.items.len(), 1);
+        assert_eq!(head.items[0].task_id, second_id);
+        let tail = queue.list(1, 1);
+        assert_eq!(tail.total, 2);
+        assert_eq!(tail.items[0].task_id, first_id);
+        let beyond = queue.list(2, 1);
+        assert!(beyond.items.is_empty(), "越界页应为空");
+
+        // 每条任务的预览字段：排队态 + 条目总数 = 计划条目数。
+        let second = queue.get(&second_id).expect("第二条任务应可见");
+        assert_eq!(second.summary.state, TaskState::Queued);
+        assert_eq!(second.summary.phase, ProgressPhase::Queued);
+        assert_eq!(second.summary.total, 5, "总数应取计划条目数");
+        assert_eq!(second.summary.done, 0, "排队态不得有已完成进度");
+        assert!(second.summary.started_at.is_none());
+        let first = queue.get(&first_id).expect("第一条任务应可见");
+        assert_eq!(first.summary.total, 2);
+
+        // 条目明细在执行期才逐条回填，排队态为空——但计划条目数必须已可见，
+        // 否则界面无法在派发前告诉用户"这次要动多少条"。
+        assert!(second.entries.is_empty(), "排队态不该有已回填的条目明细");
+        assert_eq!(
+            queue.get(&second_id).unwrap().summary.plan_id.as_deref(),
+            Some("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8QA"),
+            "预览应带 planId，供界面在派发前反查计划"
+        );
+    }
+
+    #[test]
     fn startup_cleans_abandoned_copy_temps_in_quarantine() {
         let temp = TempDir::new();
         let quarantine = temp.0.join("quarantine");
@@ -2796,6 +3152,37 @@ mod tests {
         std::fs::write(&dead, b"partial").unwrap();
         let _queue = test_queue(paths_for(&temp), Arc::new(|_event, _payload| {}));
         assert!(!dead.exists(), "启动必须清理上一进程崩溃留下的复制临时文件");
+    }
+
+    /// ADR-0093：致命错误自动暂停的文案必须**按错误码分岔**且都可操作——
+    /// 磁盘满让用户去清理空间，网络断让用户去恢复网络。两者都不能只说"失败了"。
+    #[test]
+    fn fatal_pause_message_is_actionable_per_error_code() {
+        let disk_full = KernelError::new("E2004", "write failed: no space left", None, true);
+        let message = super::fatal_pause_message(&disk_full);
+        assert!(
+            message.contains("磁盘空间不足"),
+            "磁盘满必须点名磁盘：{message}"
+        );
+        assert!(
+            message.contains("清理空间后点继续"),
+            "磁盘满必须给出可操作的下一步：{message}"
+        );
+        assert!(
+            message.contains("no space left"),
+            "必须带上底层原因，便于用户判断是哪块盘：{message}"
+        );
+
+        let network = KernelError::new("E2005", "network path disconnected", None, true);
+        let message = super::fatal_pause_message(&network);
+        assert!(
+            message.contains("网络路径"),
+            "网络断必须点名网络：{message}"
+        );
+        assert!(
+            message.contains("恢复网络后点继续"),
+            "网络断必须给出可操作的下一步：{message}"
+        );
     }
 
     #[test]
@@ -3245,6 +3632,99 @@ mod tests {
         );
     }
 
+    /// TC-C15-RBK-02：部分失败重试的「失败 → 重试 → 成功」全链路（可复现的瞬时故障注入）。
+    ///
+    /// 既有两条重试用例只验**队列簿记**（重跑哪些条目、新 taskId、原任务保持终态），
+    /// 且重试仍以失败告终；本条注入的是**环境瞬时故障**（源文件缺失），
+    /// 解除后重试必须真的把活干完——这才是「重试」这个动作的产品意义。
+    #[test]
+    fn retry_succeeds_after_a_transient_environment_failure() {
+        let temp = TempDir::new();
+        let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let sink = Arc::clone(&events);
+        let queue = test_queue(
+            paths_for(&temp),
+            Arc::new(move |event, payload| {
+                sink.lock().unwrap().push((event.to_string(), payload));
+            }),
+        );
+
+        let root = temp.0.join("data");
+        fs::create_dir_all(&root).unwrap();
+        let present = root.join("a.txt");
+        let transient = root.join("b.txt");
+        fs::write(&present, b"same").unwrap();
+        // b.txt 故意缺失：第一次 apply 该条目因 E2001 失败（可复现的失败注入）。
+        let plan = plan_for(
+            &new_ulid("retry-transient-plan"),
+            &[present.clone(), transient.clone()],
+        );
+        let failed_entry = plan.entries[1].entry_id.clone();
+
+        let apply_id = queue.enqueue_apply(
+            StoredPlan {
+                plan,
+                protected_dirs: Vec::new(),
+                case_sense: CaseSense::Sensitive,
+                protected_source: ProtectedSource::Params,
+            },
+            ApplyOptions::default(),
+            None,
+        );
+        let done = wait_terminal(&queue, &apply_id);
+        assert_eq!(done.summary.state, TaskState::PartialFailed);
+        assert_eq!(done.entries.len(), 2);
+        assert_eq!(done.entries[0].status, ApplyStatus::Ok);
+        assert_eq!(done.entries[1].status, ApplyStatus::Failed);
+        assert!(!present.exists(), "成功的条目已被删进隔离目录");
+        assert!(!transient.exists(), "失败的条目本就不存在");
+
+        // 解除瞬时故障：把缺失的源补回来（这是「重试能成功」的唯一条件）。
+        fs::write(&transient, b"same").unwrap();
+
+        let retry_id = queue.retry(&apply_id, None).unwrap();
+        assert_ne!(retry_id, apply_id, "重试必须开新任务（设计 01 §6）");
+        let retried = wait_terminal(&queue, &retry_id);
+        assert_eq!(
+            retried.summary.state,
+            TaskState::Completed,
+            "解除故障后重试应把剩下的活干完"
+        );
+        assert_eq!(retried.entries.len(), 1, "只重跑失败的那一条");
+        assert_eq!(retried.entries[0].entry_id, failed_entry);
+        assert_eq!(retried.entries[0].status, ApplyStatus::Ok);
+        assert!(!transient.exists(), "重试把补回来的文件也删掉了");
+        assert_eq!(
+            queue.get(&apply_id).unwrap().summary.state,
+            TaskState::PartialFailed,
+            "原任务保持终态，不被复活"
+        );
+
+        // 事件链：新任务走完整的 queued → executing → progress → done。
+        // done 由 worker 在 persist/state **之后**才发出，而 wait_terminal 可能先观察到终态，
+        // 所以这里用有界等待而不是抢跑断言（实测约 1/5 概率踩到这个竞态）。
+        let event_count = |name: &str| {
+            let events = events.lock().unwrap();
+            events
+                .iter()
+                .filter(|(event, payload)| {
+                    event == name
+                        && payload.get("taskId").and_then(Value::as_str) == Some(retry_id.as_str())
+                })
+                .count()
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while event_count(EVENT_DONE) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "重试任务未发出 done 事件（重试任务 {retry_id}）"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(event_count(EVENT_DONE), 1, "重试任务应发出一次 done 事件");
+        assert!(event_count(EVENT_PROGRESS) >= 1, "重试任务应发出进度事件");
+    }
+
     #[test]
     fn apply_completes_when_operation_log_is_unavailable() {
         let temp = TempDir::new();
@@ -3390,6 +3870,8 @@ mod tests {
                     done,
                     total: 200,
                     message: None,
+                    entry_done: None,
+                    entry_total: None,
                 },
             );
         }
@@ -3401,6 +3883,8 @@ mod tests {
                 done: 1,
                 total: 1,
                 message: None,
+                entry_done: None,
+                entry_total: None,
             },
         );
 
@@ -3448,6 +3932,82 @@ mod tests {
             queue.get(&task_id).unwrap().summary.done,
             200,
             "TaskSummary keeps updating even when the push is coalesced"
+        );
+    }
+
+    /// 条目内（字节级）进度（ADR-0100）：条目内事件只更新字节字段、不动条目计数；
+    /// 条目边界事件清掉字节进度，避免下一条目张冠李戴。
+    #[test]
+    fn entry_level_byte_progress_is_recorded_and_cleared_on_boundary() {
+        let temp = TempDir::new();
+        let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let sink = Arc::clone(&events);
+        let queue = test_queue(
+            paths_for(&temp),
+            Arc::new(move |event, payload| {
+                sink.lock().unwrap().push((event.to_string(), payload));
+            }),
+        );
+        let task_id = new_ulid("entry-progress");
+        insert_control_task(&queue, &task_id);
+
+        queue.inner.record_progress(
+            &task_id,
+            &ProgressEvent {
+                task_id: task_id.clone(),
+                phase: ProgressPhase::Executing,
+                done: 0,
+                total: 0,
+                message: None,
+                entry_done: Some(1024),
+                entry_total: Some(4096),
+            },
+        );
+        {
+            let summary = queue.get(&task_id).unwrap().summary.clone();
+            assert_eq!(summary.entry_done, Some(1024));
+            assert_eq!(summary.entry_total, Some(4096));
+            assert_eq!(
+                summary.done, 0,
+                "条目内事件不得改动条目计数（此时仍是本条目进行中）"
+            );
+        }
+
+        queue.inner.record_progress(
+            &task_id,
+            &ProgressEvent {
+                task_id: task_id.clone(),
+                phase: ProgressPhase::Executing,
+                done: 1,
+                total: 1,
+                message: None,
+                entry_done: None,
+                entry_total: None,
+            },
+        );
+        let summary = queue.get(&task_id).unwrap().summary.clone();
+        assert_eq!(summary.entry_done, None, "条目边界事件清掉字节进度");
+        assert_eq!(summary.entry_total, None);
+        assert_eq!(summary.done, 1);
+        assert_eq!(summary.total, 1);
+
+        // 推给界面的负载里确实带过字节字段
+        let emitted: Vec<Value> = {
+            let guard = events.lock().unwrap();
+            guard
+                .iter()
+                .filter(|(name, _)| name == EVENT_PROGRESS)
+                .filter(|(_, payload)| {
+                    payload.get("taskId").and_then(Value::as_str) == Some(task_id.as_str())
+                })
+                .map(|(_, payload)| payload.clone())
+                .collect()
+        };
+        assert!(
+            emitted
+                .iter()
+                .any(|payload| payload.get("entryTotal").and_then(Value::as_u64) == Some(4096)),
+            "条目内进度要推到界面"
         );
     }
 
@@ -3534,25 +4094,102 @@ mod tests {
     #[test]
     fn entry_concurrency_follows_the_manual_setting_and_stays_in_contract_range() {
         // 方案 §5.12（手动档 1–16）＋§7.10（运行中调整只影响尚未派发的条目）。
-        assert_eq!(resolve_entry_concurrency(None, 1), 1, "未设置＝串行");
+        let fs = CliFsAdapter::new(None);
+        // 无盘符的路径问不出介质 → Unknown（保守档），自动档因此是确定值。
+        let plan = plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &[PathBuf::from("/virtual/a")]);
         assert_eq!(
-            resolve_entry_concurrency(Some(AutoOrNumber::Auto), 3),
-            3,
-            "自动档沿用调用方请求值（介质自适应仍未落地，见 ADR-0033 §4）"
-        );
-        assert_eq!(
-            resolve_entry_concurrency(Some(AutoOrNumber::Number(4)), 1),
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(4)), 1, &plan, &fs),
             4
         );
         assert_eq!(
-            resolve_entry_concurrency(Some(AutoOrNumber::Number(0)), 1),
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(0)), 1, &plan, &fs),
             1,
             "越界下沿夹到 1"
         );
         assert_eq!(
-            resolve_entry_concurrency(Some(AutoOrNumber::Number(99)), 1),
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(99)), 1, &plan, &fs),
             16,
             "越界上沿夹到契约上限 16"
+        );
+    }
+
+    /// 方案 §5.12「并发的默认值（决策）：按介质自适应」的自动档接线。
+    /// c09 是 CPU 密集（哈希去重），核数减一、上限 8。
+    #[test]
+    fn auto_concurrency_is_adaptive_for_cpu_bound_plans() {
+        let fs = CliFsAdapter::new(None);
+        let plan = plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &[PathBuf::from("/virtual/a")]);
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let expected = (cpus - 1).clamp(1, 8);
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Auto), 1, &plan, &fs),
+            expected,
+            "自动档应取介质自适应值（c09＝CPU 密集＝核数减一，上限 8）"
+        );
+        assert_eq!(
+            resolve_entry_concurrency(None, 1, &plan, &fs),
+            expected,
+            "未设置同样走自适应"
+        );
+    }
+
+    /// 方案 §5.12 的队列背压：**超大文件（>2 GB）自动把并发降为 1–2**。
+    /// 它是内存背压而不是用户偏好，所以手动档设 8 也一样被压下来。
+    #[test]
+    fn huge_entries_force_the_concurrency_cap() {
+        use kernel::plan::PlanExpected;
+        let fs = CliFsAdapter::new(None);
+
+        let mut huge = plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &[PathBuf::from("/virtual/a")]);
+        huge.entries[0].expected = Some(PlanExpected {
+            size: kernel::apply::HUGE_FILE_ENTRY_BYTES + 1,
+            algorithm: "sha256".to_string(),
+            hash: None,
+        });
+        // 无盘符路径 → 介质 Unknown → 上限取 1（方案给的是区间 1–2）
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Auto), 1, &huge, &fs),
+            1,
+            "超大条目必须把自动档压到 1"
+        );
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Number(8)), 1, &huge, &fs),
+            1,
+            "手动档设 8 也不得绕过超大文件背压"
+        );
+
+        // 边界：恰好 2 GiB 不算超大，并发不受影响
+        let mut boundary = plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &[PathBuf::from("/virtual/a")]);
+        boundary.entries[0].expected = Some(PlanExpected {
+            size: kernel::apply::HUGE_FILE_ENTRY_BYTES,
+            algorithm: "sha256".to_string(),
+            hash: None,
+        });
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Auto), 1, &boundary, &fs),
+            (cpus - 1).clamp(1, 8),
+            "恰好 2 GiB 是「>2 GB」之外的边界，不该触发背压"
+        );
+
+        // 条目不带体积信息时按原值，不臆测
+        let plain = plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &[PathBuf::from("/virtual/a")]);
+        assert!(plain.entries[0].expected.is_none());
+    }
+
+    /// 调用方显式要求更高时，自动档尊重其意图（上限 16）。
+    #[test]
+    fn auto_concurrency_respects_an_explicit_higher_request() {
+        let fs = CliFsAdapter::new(None);
+        let plan = plan_for("01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8", &[PathBuf::from("/virtual/a")]);
+        assert_eq!(
+            resolve_entry_concurrency(Some(AutoOrNumber::Auto), 12, &plan, &fs),
+            12,
+            "调用方要求 12 就应给 12，不被自适应压低"
         );
     }
 
@@ -4124,6 +4761,8 @@ mod tests {
             started_at: None,
             finished_at: None,
             message: None,
+            entry_done: None,
+            entry_total: None,
         };
         let mut state = queue.inner.state.lock().unwrap();
         state.tasks.insert(

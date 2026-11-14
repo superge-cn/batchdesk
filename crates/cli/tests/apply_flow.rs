@@ -2700,6 +2700,239 @@ fn read_only_rename_target_is_skipped_without_failing_the_task() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn read_only_attribute_does_not_block_rename_on_windows() {
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    let locked = root.join("a.txt");
+    fs::write(&locked, b"a").unwrap();
+    fs::write(root.join("b.txt"), b"b").unwrap();
+
+    // Windows 的"只读"是 FILE_ATTRIBUTE_READONLY 属性位，不是 POSIX 的写位。
+    // 实机日 F12-EXE-04 要核的执行期行为：置位后改名是否被挡。
+    let mut permissions = fs::metadata(&locked).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&locked, permissions).unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan_doc: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let locked_id = plan_doc["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["source"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("a.txt")
+        })
+        .map(|entry| entry["entryId"].as_str().unwrap_or_default().to_string())
+        .expect("计划里应有 a.txt 条目");
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, plan.stdout).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    // Windows 的 FILE_ATTRIBUTE_READONLY 不阻止改名（与 POSIX 的目录写位不同）：
+    // 只读文件被正常改名、属性保留，任务不因它判死。这正是实机日 F12-EXE-04
+    // 要核的执行期表现，与 E03（POSIX chmod 0444 → E2002 skipped）互为平台对照。
+    assert!(
+        apply.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(
+        report["state"], "completed",
+        "只读写不进去不得把整任务判死：{report}"
+    );
+    let entries = report["report"]["entries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(entries.len(), 2, "两条都应在报告里：{entries:?}");
+    let locked_entry = entries
+        .iter()
+        .find(|entry| entry["entryId"].as_str() == Some(locked_id.as_str()))
+        .expect("被锁定的条目必须在报告里");
+    assert_eq!(
+        locked_entry["status"], "ok",
+        "Windows 只读属性不阻止改名，条目应成功：{locked_entry}"
+    );
+
+    let renamed = root.join("new_a.txt");
+    assert!(
+        !locked.exists() && renamed.exists(),
+        "只读文件应被改名而非留在原处/被删"
+    );
+    assert!(
+        fs::metadata(&renamed).unwrap().permissions().readonly(),
+        "改名不得丢掉只读属性"
+    );
+    assert!(root.join("new_b.txt").exists(), "可写条目应正常改名");
+
+    // RBK-03（R3「撤销时让目标被占用/只读/已被第三方改动」）的 Windows 段：
+    // 撤销是把 new_a.txt 改回 a.txt——同样是一次改名，只读属性同样不该挡住它。
+    // 不恢复写位，直接撤销。
+    let undo = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        undo.status.success(),
+        "undo failed
+stdout:
+{}
+stderr:
+{}",
+        String::from_utf8_lossy(&undo.stdout),
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    let undo_report: serde_json::Value = serde_json::from_slice(&undo.stdout).unwrap();
+    assert_eq!(
+        undo_report["reverted"], 2,
+        "只读属性不该阻止撤销：{undo_report}"
+    );
+    assert_eq!(
+        undo_report["failed"].as_array().map(Vec::len).unwrap_or(0),
+        0
+    );
+    assert!(
+        root.join("a.txt").exists() && !renamed.exists(),
+        "撤销应把只读文件改回原名"
+    );
+
+    // 先恢复写位，任何断言失败都不该把临时目录留在不可清理的状态。
+    {
+        let mut permissions = fs::metadata(root.join("a.txt")).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(root.join("a.txt"), permissions).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn case_only_targets_collide_on_windows_ntfs() {
+    let dir = TempDir::new();
+    let root = dir.0.join("case");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("x1.txt"), b"a").unwrap();
+    fs::write(root.join("X2.txt"), b"b").unwrap();
+
+    let plan = batchdesk(&[
+        "f13",
+        "--dir",
+        path_text(&root),
+        "--regex",
+        r"^([xX])([12])\.txt$",
+        "--replace",
+        "${1}Y.txt",
+        "--scope",
+        "full",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    // 目标 xY.txt 与 XY.txt 在 NTFS（不敏感卷）上仅大小写不同 → 必须判 case-only。
+    // 这是实机日 F12-EXE-02 的核对点：折叠不能只停在计划层，要不敏感卷上真的成立。
+    let folded = document["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["source"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("x1.txt")
+        })
+        .expect("计划里应有 x1.txt 条目");
+    assert_eq!(
+        folded["conflict"]["kind"], "case-only",
+        "NTFS 不敏感卷上仅大小写不同的目标应判 case-only：{document}"
+    );
+    assert_eq!(folded["resolution"], "skip");
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, plan.stdout).unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&apply.stdout),
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(report["state"], "completed", "{report}");
+    // 注意：NTFS 不敏感，xY.txt 与 XY.txt 是同一个名字——不能用 exists() 区分，只能看内容。
+    assert_eq!(
+        fs::read(root.join("x1.txt")).unwrap(),
+        b"a",
+        "折叠命中的条目应保持原文件不动"
+    );
+    assert_eq!(
+        fs::read(root.join("XY.txt")).unwrap(),
+        b"b",
+        "另一条应正常改名"
+    );
+
+    // 直接核对文件系统层：NTFS 把 XY.txt 与 xy.txt 当同一个文件。
+    fs::write(root.join("xy.txt"), b"c").unwrap();
+    assert_eq!(
+        fs::read(root.join("XY.txt")).unwrap(),
+        b"c",
+        "NTFS 应把 xy.txt 与 XY.txt 视为同一文件（不敏感卷）"
+    );
+}
+
 #[test]
 fn f12_reports_existing_conflicts_and_invalid_targets() {
     let dir = TempDir::new();
@@ -3352,6 +3585,66 @@ fn c03_csv_cell_mode_preserves_quoted_newlines() {
     ]);
     assert!(undo.status.success());
     assert_eq!(fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn c03_csv_cell_mode_preserves_crlf_record_terminators() {
+    // TC-C03-EXE-04 缺口：单元格级替换把记录终止符一律写成 LF，源 CRLF 被静默规范化
+    // （C-2 集 32 MiB 子档实测：末条无终止符的记录被补 1 个 LF，产物＋1 字节、记录数＋1）。
+    let dir = TempDir::new();
+    let source = dir.0.join("crlf.csv");
+    let original = b"id,name\r\n1,\"a,b\"\r\n2,foo\r\n3,bar";
+    fs::write(&source, original).unwrap();
+
+    let plan = batchdesk(&[
+        "c03",
+        "--file",
+        path_text(&source),
+        "--find",
+        "foo",
+        "--replace",
+        "FOO",
+        "--csv-mode",
+        "cell",
+        "--delimiter",
+        ",",
+        "--sample-bytes",
+        "4096",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "c03 csv plan failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    fs::write(
+        dir.0.join("plan.json"),
+        serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&dir.0.join("plan.json")),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&dir.0.join("journal.jsonl")),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+
+    // 只换内容、不动结构：引号外记录终止符保持 CRLF；末条原本无终止符，仍无。
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        b"id,name\r\n1,\"a,b\"\r\n2,FOO\r\n3,bar",
+        "单元格级替换不得改写记录终止符（TC-C03-EXE-04）"
+    );
 }
 
 #[test]
@@ -5489,12 +5782,13 @@ fn c13_external_merge_sort_with_small_chunks() {
 /// ① 重复预览幂等（同一输入＋固定 plan-id 两次输出逐字节一致）；
 /// ② 预览零落盘（源树文件集合与内容前后一致）。
 /// 执行仍需显式 apply（不变量 2"plan 为纯函数绝不落盘"的横切验证）。
-#[test]
-fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
-    let dir = TempDir::new();
-    let root = dir.0.join("tree");
+/// C18 横切用的源树与辅助输入（各功能共用同一套夹具）。
+/// 返回 (root, out_dir, manifest, f11_list, f11_root)。
+fn c18_setup(base: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
+    let root = base.join("tree");
     fs::create_dir_all(root.join("sub")).unwrap();
-    fs::write(root.join("a.txt"), b"alpha\nbeta\n").unwrap();
+    // 用 CRLF 内容：让 C02（换行转换）与 C03（替换）都有真实事可做。
+    fs::write(root.join("a.txt"), b"alpha\r\nbeta\r\n").unwrap();
     fs::write(root.join("b.csv"), b"id,value\n2,10\n1,20\n").unwrap();
     fs::write(root.join("c.csv"), b"id,value\n1,x\n").unwrap();
     fs::write(root.join("photo.jpg"), b"jpg").unwrap();
@@ -5502,25 +5796,27 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
     fs::write(root.join("sub").join("dup.txt"), b"dup").unwrap();
     fs::write(root.join("d.txt"), b"gamma\n").unwrap();
 
-    // 源树快照（相对路径 + 内容哈希占位：内容长度 + 字节）。
-    let snapshot = || -> Vec<(String, u64)> {
-        let mut files: Vec<(String, u64)> = walk_source(&root);
-        files.sort();
-        files
-    };
-    let before = snapshot();
-
-    // 各功能 plan 命令（固定 --plan-id 保证输出可复现）。
-    let out_dir = dir.0.join("out");
+    let out_dir = base.join("out");
     fs::create_dir_all(&out_dir).unwrap();
-    let manifest = dir.0.join("manifest.csv");
+    let manifest = base.join("manifest.csv");
     fs::write(&manifest, "a.txt,archived\n").unwrap();
     // F11 的清单与建档根：建档根必须已存在，清单里的多级路径由计划展开。
-    let f11_list = dir.0.join("f11-list.csv");
+    let f11_list = base.join("f11-list.csv");
     fs::write(&f11_list, b"a/b\nc\n").unwrap();
-    let f11_root = dir.0.join("f11-root");
+    let f11_root = base.join("f11-root");
     fs::create_dir_all(&f11_root).unwrap();
-    let plan_commands: Vec<Vec<String>> = vec![
+    (root, out_dir, manifest, f11_list, f11_root)
+}
+
+/// 全部 plan 命令（固定 --plan-id 保证输出可复现）。
+fn c18_commands(
+    root: &Path,
+    out_dir: &Path,
+    manifest: &Path,
+    f11_list: &Path,
+    f11_root: &Path,
+) -> Vec<Vec<String>> {
+    vec![
         vec![
             "c01".into(),
             "--file".into(),
@@ -5538,7 +5834,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "c04".into(),
             "--dir".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--find".into(),
             "dup".into(),
             "--replace".into(),
@@ -5550,11 +5846,11 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "c07".into(),
             "--manifest".into(),
-            path_text(&manifest).to_string(),
+            path_text(manifest).to_string(),
             "--source-root".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--target-root".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--operation".into(),
             "move".into(),
             "--plan-id".into(),
@@ -5564,9 +5860,9 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "c08".into(),
             "--source-root".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--target-root".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--rule".into(),
             "jpgs|ext:jpg".into(),
             "--plan-id".into(),
@@ -5575,7 +5871,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         ],
         vec![
             "c09".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--plan".into(),
             "--plan-id".into(),
             PLAN_ID.into(),
@@ -5588,7 +5884,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--sort-column".into(),
             "value".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--target".into(),
             "utf-8".into(),
             "--sample-bytes".into(),
@@ -5606,7 +5902,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--split-separator".into(),
             " ".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--target".into(),
             "utf-8".into(),
             "--sample-bytes".into(),
@@ -5622,7 +5918,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--target-bytes".into(),
             "8".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--plan-id".into(),
             PLAN_ID.into(),
             "--json".into(),
@@ -5630,7 +5926,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "f12".into(),
             "--dir".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--prefix".into(),
             "r_".into(),
             "--plan-id".into(),
@@ -5669,7 +5965,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--extract".into(),
             path_text(&corpus_zip("Z01", "gbk_name.zip")).to_string(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--max-total-bytes".into(),
             "10000".into(),
             "--max-ratio".into(),
@@ -5720,7 +6016,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--lines".into(),
             "1".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--plan-id".into(),
             PLAN_ID.into(),
             "--json".into(),
@@ -5732,7 +6028,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--parts".into(),
             "2".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--plan-id".into(),
             PLAN_ID.into(),
             "--json".into(),
@@ -5762,7 +6058,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--rows".into(),
             "1".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--sample-bytes".into(),
             "4096".into(),
             "--plan-id".into(),
@@ -5792,7 +6088,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             "--column".into(),
             "id".into(),
             "--output-dir".into(),
-            path_text(&out_dir).to_string(),
+            path_text(out_dir).to_string(),
             "--target".into(),
             "utf-8".into(),
             "--sample-bytes".into(),
@@ -5838,7 +6134,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "f10".into(),
             "--root".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--output".into(),
             path_text(&out_dir.join("list.csv")).to_string(),
             "--plan-id".into(),
@@ -5848,9 +6144,9 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "f11".into(),
             "--list".into(),
-            path_text(&f11_list).to_string(),
+            path_text(f11_list).to_string(),
             "--root".into(),
-            path_text(&f11_root).to_string(),
+            path_text(f11_root).to_string(),
             "--plan-id".into(),
             PLAN_ID.into(),
             "--json".into(),
@@ -5858,7 +6154,7 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
         vec![
             "f13".into(),
             "--dir".into(),
-            path_text(&root).to_string(),
+            path_text(root).to_string(),
             "--regex".into(),
             "^a\\.txt$".into(),
             "--replace".into(),
@@ -5869,13 +6165,33 @@ fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
             PLAN_ID.into(),
             "--json".into(),
         ],
-    ];
+    ]
+}
+
+#[test]
+fn c18_plan_dry_run_is_idempotent_and_side_effect_free_across_features() {
+    let dir = TempDir::new();
+    let (root, out_dir, manifest, f11_list, f11_root) = c18_setup(&dir.0);
+
+    // 源树快照（相对路径 + 内容哈希占位：内容长度 + 字节）。
+    let snapshot = || -> Vec<(String, u64)> {
+        let mut files: Vec<(String, u64)> = walk_source(&root);
+        files.sort();
+        files
+    };
+    let before = snapshot();
+
+    let plan_commands = c18_commands(&root, &out_dir, &manifest, &f11_list, &f11_root);
 
     for command in &plan_commands {
         let first = batchdesk_str(command);
         assert!(
             first.status.success(),
-            "plan failed: {}\nstdout:\n{}\nstderr:\n{}",
+            "plan failed: {}
+stdout:
+{}
+stderr:
+{}",
             command[0],
             String::from_utf8_lossy(&first.stdout),
             String::from_utf8_lossy(&first.stderr)
@@ -6092,4 +6408,1123 @@ fn c10_encrypted_archive_with_a_wrong_password_reports_e3009() {
         outcome["report"]["entries"][0]
     );
     assert!(!output.join("a.txt").exists(), "错密码不得留下任何产物");
+}
+
+// ---------------------------------------------------------------------------
+// RBK-02（R2，方案 §7.8）：逐功能的部分失败注入
+//
+// 通用 apply 层已有 `a_failing_entry_marks_partial_and_undo_reverts_only_applied_entries`
+// （kernel 的 TestFs 注入）与 `cancel_rolls_back_applied_entries_in_each_write_arm`，
+// 但那是**跨功能通用臂**；TC §3.2 要求每个功能**用自己的真实计划形态**证明
+// 「部分失败 → 只回滚成功项、失败项保持原状」。本节用 CLI 真实生成计划，再按计划
+// 形态注入确定性失败，避免用通用臂的 2 条 copy 条目代替各功能的真实语义。
+// ---------------------------------------------------------------------------
+
+/// 注入方式：三种都是**确定性**的，不依赖平台权限语义。
+enum PartialInjection {
+    /// target 臂：把该条 target 的父目录换成一个"文件"（写不进去 → E2008）。
+    BlockTarget { index: usize, blocker: &'static str },
+    /// in-place 臂（edit-content／transcode 无 target）：把该条 source 换成不存在的路径（E2001）。
+    MissingSource { index: usize },
+    /// merge 臂（N:1 单条目）：把该条 merge 的某个 source 换成不存在的路径。
+    MissingMergeSource { index: usize, source_index: usize },
+}
+
+/// 一次"部分失败"用例的句柄：apply 已跑完，undo 尚未跑，
+/// 便于用例在**撤销前**断言成功项的产物确实落盘。
+struct PartialFailure {
+    apply: serde_json::Value,
+    journal: PathBuf,
+}
+
+impl PartialFailure {
+    /// 跑撤销并返回报告。
+    fn undo(self) -> serde_json::Value {
+        let undo = batchdesk(&[
+            "undo",
+            "--plan",
+            PLAN_ID,
+            "--journal",
+            path_text(&self.journal),
+            "--json",
+        ]);
+        assert!(
+            undo.status.success(),
+            "undo 失败\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&undo.stdout),
+            String::from_utf8_lossy(&undo.stderr)
+        );
+        serde_json::from_slice(&undo.stdout).unwrap()
+    }
+}
+
+/// 真实生成计划 → 按注入改写 → apply。返回句柄，撤销由调用方自行触发。
+fn partial_failure_case(
+    args: &[String],
+    workdir: &Path,
+    injection: PartialInjection,
+) -> PartialFailure {
+    let plan = batchdesk_str(args);
+    assert!(
+        plan.status.success(),
+        "计划生成失败\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&plan.stdout),
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let mut document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    match injection {
+        PartialInjection::BlockTarget { index, blocker } => {
+            let target = document["entries"][index]["target"]
+                .as_str()
+                .unwrap_or_else(|| {
+                    panic!("条目 {index} 应带 target：{}", document["entries"][index])
+                })
+                .to_string();
+            let blocker_path = workdir.join(blocker);
+            fs::write(&blocker_path, b"blocker").unwrap();
+            let name = Path::new(&target)
+                .file_name()
+                .expect("target 应有文件名")
+                .to_owned();
+            let bad = blocker_path.join(name);
+            document["entries"][index]["target"] =
+                serde_json::Value::String(path_text(&bad).to_string());
+        }
+        PartialInjection::MissingSource { index } => {
+            let missing = workdir.join("missing-source.bin");
+            document["entries"][index]["source"] =
+                serde_json::Value::String(path_text(&missing).to_string());
+        }
+        PartialInjection::MissingMergeSource {
+            index,
+            source_index,
+        } => {
+            // F04 的载荷是 `merge.sources`，F06 是 `csvMerge.files`——两者语义同构。
+            let missing = workdir.join("missing-source.bin");
+            let entry = &mut document["entries"][index];
+            let container = if entry["merge"]["sources"].is_array() {
+                &mut entry["merge"]["sources"]
+            } else {
+                &mut entry["csvMerge"]["files"]
+            };
+            container[source_index]["path"] =
+                serde_json::Value::String(path_text(&missing).to_string());
+        }
+    }
+
+    finish_partial_apply(document, workdir)
+}
+
+/// 把（可能已被注入改写的）计划落盘并执行，返回 apply 报告与 Journal 路径。
+fn finish_partial_apply(document: serde_json::Value, workdir: &Path) -> PartialFailure {
+    let plan_path = workdir.join("plan-partial.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    let quarantine = workdir.join("quarantine");
+    let journal = workdir.join("journal.jsonl");
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    // 部分失败时 apply 以非零码退出（partial-failed 态），但报告仍须完整落地。
+    let apply_report: serde_json::Value =
+        serde_json::from_slice(&apply.stdout).unwrap_or_else(|_| {
+            panic!(
+                "apply 未产出报告\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&apply.stdout),
+                String::from_utf8_lossy(&apply.stderr)
+            )
+        });
+    PartialFailure {
+        apply: apply_report,
+        journal,
+    }
+}
+
+/// RBK-02 的通用不变量（apply 段）：一个条目失败、其余成功；失败条目带错误码。
+fn assert_partial_apply(case: &PartialFailure, arm: &str, total: usize, failed_index: usize) {
+    assert_eq!(
+        case.apply["state"], "partial-failed",
+        "{arm}：部分失败不得把整单判死/判成完成，实际 {}",
+        case.apply["state"]
+    );
+    let entries = case.apply["report"]["entries"]
+        .as_array()
+        .expect("报告应含条目数组");
+    assert_eq!(entries.len(), total, "{arm}：条目数不符");
+    for (index, entry) in entries.iter().enumerate() {
+        let expected = if index == failed_index {
+            "failed"
+        } else {
+            "ok"
+        };
+        assert_eq!(
+            entry["status"], expected,
+            "{arm}：第 {index} 条应为 {expected}，实际 {}",
+            entry["status"]
+        );
+    }
+    assert!(
+        !entries[failed_index]["error"].is_null(),
+        "{arm}：失败条目应带错误码，实际 {}",
+        entries[failed_index]
+    );
+}
+
+/// RBK-02 的通用不变量（undo 段）：只回滚成功项，且不报失败。
+fn assert_partial_undo(undo: &serde_json::Value, arm: &str, total: usize) {
+    let reverted = undo["reverted"].as_u64().unwrap_or_default();
+    assert_eq!(
+        reverted,
+        (total - 1) as u64,
+        "{arm}：撤销只应回滚成功项（{total} 条里 1 条失败），实际 reverted={reverted}"
+    );
+    assert_eq!(
+        undo["failed"].as_array().map(Vec::len).unwrap_or(0),
+        0,
+        "{arm}：撤销不该报失败：{}",
+        undo["failed"]
+    );
+}
+
+/// 把 `--plan-id PLAN_ID --json` 之外的计划参数拼成 `Vec<String>`。
+fn plan_args(feature: &str, mid: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = vec![feature.to_string()];
+    args.extend(mid.iter().map(|value| (*value).to_string()));
+    args.push("--plan-id".to_string());
+    args.push(PLAN_ID.to_string());
+    args.push("--json".to_string());
+    args
+}
+
+#[test]
+fn f01_partial_failure_keeps_the_applied_part_and_undoes_only_it() {
+    let dir = TempDir::new();
+    let source = dir.0.join("big.txt");
+    let parts = dir.0.join("parts");
+    fs::write(&source, b"aaa\nbbb\nccc\n").unwrap();
+    let args = plan_args(
+        "f01",
+        &[
+            "--file",
+            path_text(&source),
+            "--target-bytes",
+            "6",
+            "--output-dir",
+            path_text(&parts),
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f01", 2, 1);
+    // 撤销前：成功分片确实落盘，失败分片连空文件都不许有。
+    assert!(parts.join("big.1.txt").exists(), "成功分片已落盘，等待撤销");
+    assert!(!parts.join("big.2.txt").exists(), "失败分片不得留下半成品");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f01", 2);
+    assert!(!parts.join("big.1.txt").exists(), "撤销只回滚成功分片");
+    assert_eq!(fs::read(&source).unwrap(), b"aaa\nbbb\nccc\n", "分割不动源");
+}
+
+#[test]
+fn f02_partial_failure_keeps_the_applied_parts_and_undoes_only_them() {
+    let dir = TempDir::new();
+    let source = dir.0.join("rows.txt");
+    let parts = dir.0.join("parts");
+    fs::write(&source, b"aaa\nbbb\nccc\nddd\neee\n").unwrap();
+    let args = plan_args(
+        "f02",
+        &[
+            "--file",
+            path_text(&source),
+            "--lines",
+            "2",
+            "--output-dir",
+            path_text(&parts),
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 2,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f02", 3, 2);
+    assert!(parts.join("rows.1.txt").exists());
+    assert!(parts.join("rows.2.txt").exists());
+    assert!(!parts.join("rows.3.txt").exists(), "失败分片不得落盘");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f02", 3);
+    assert!(!parts.join("rows.1.txt").exists());
+    assert!(!parts.join("rows.2.txt").exists());
+}
+
+#[test]
+fn f03_partial_failure_keeps_the_applied_parts_and_undoes_only_them() {
+    let dir = TempDir::new();
+    let source = dir.0.join("ten.txt");
+    let parts = dir.0.join("parts");
+    let body: String = (1..=10).map(|line| format!("{line:02}\n")).collect();
+    fs::write(&source, body.as_bytes()).unwrap();
+    let args = plan_args(
+        "f03",
+        &[
+            "--file",
+            path_text(&source),
+            "--parts",
+            "3",
+            "--output-dir",
+            path_text(&parts),
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 2,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f03", 3, 2);
+    assert!(parts.join("ten.1.txt").exists());
+    assert!(!parts.join("ten.3.txt").exists(), "失败分片不得落盘");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f03", 3);
+    assert!(!parts.join("ten.1.txt").exists());
+}
+
+#[test]
+fn f05_partial_failure_keeps_the_applied_parts_and_undoes_only_them() {
+    let dir = TempDir::new();
+    let source = dir.0.join("data.csv");
+    let parts = dir.0.join("parts");
+    fs::write(&source, b"h1,h2\n1,2\n3,4\n5,6\n").unwrap();
+    let args = plan_args(
+        "f05",
+        &[
+            "--file",
+            path_text(&source),
+            "--rows",
+            "2",
+            "--output-dir",
+            path_text(&parts),
+            "--sample-bytes",
+            "4096",
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f05", 2, 1);
+    assert!(parts.join("data.1.csv").exists());
+    assert!(!parts.join("data.2.csv").exists(), "失败分片不得落盘");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f05", 2);
+    assert!(!parts.join("data.1.csv").exists());
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        b"h1,h2\n1,2\n3,4\n5,6\n",
+        "CSV 分割不动源"
+    );
+}
+
+#[test]
+fn f07_partial_failure_keeps_the_applied_extract_and_undoes_only_it() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let out_dir = dir.0.join("out");
+    fs::write(&first, b"id, name \n1,Alice\n").unwrap();
+    fs::write(&second, b"name,id\nBob,2\n").unwrap();
+    let args = plan_args(
+        "f07",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--column",
+            "name",
+            "--column",
+            "id",
+            "--output-dir",
+            path_text(&out_dir),
+            "--target",
+            "utf-8",
+            "--sample-bytes",
+            "4096",
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f07", 2, 1);
+    assert!(out_dir.join("a.csv").exists(), "成功条目已导出");
+    assert!(!out_dir.join("b.csv").exists(), "失败条目不得产出");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f07", 2);
+    assert!(!out_dir.join("a.csv").exists());
+}
+
+#[test]
+fn f08_partial_failure_keeps_the_applied_window_and_undoes_only_it() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let out_dir = dir.0.join("out");
+    fs::write(&first, b"id,name\n1,Alice\n2,Bob\n3,Cara\n").unwrap();
+    fs::write(&second, b"id,name\n4,Dave\n5,Eve\n").unwrap();
+    let args = plan_args(
+        "f08",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--first",
+            "2",
+            "--output-dir",
+            path_text(&out_dir),
+            "--target",
+            "utf-8",
+            "--sample-bytes",
+            "4096",
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f08", 2, 1);
+    assert!(out_dir.join("a.csv").exists());
+    assert!(!out_dir.join("b.csv").exists(), "失败条目不得产出");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f08", 2);
+    assert!(!out_dir.join("a.csv").exists());
+}
+
+#[test]
+fn f09_partial_failure_keeps_the_applied_range_and_undoes_only_it() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let out_dir = dir.0.join("out");
+    fs::write(&first, b"id,name\n1,Alice\n2,Bob\n3,Cara\n").unwrap();
+    fs::write(&second, b"id,name\n4,Dave\n5,Eve\n6,Fay\n").unwrap();
+    let args = plan_args(
+        "f09",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--start",
+            "2",
+            "--end",
+            "4",
+            "--output-dir",
+            path_text(&out_dir),
+            "--target",
+            "utf-8",
+            "--sample-bytes",
+            "4096",
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f09", 2, 1);
+    assert!(out_dir.join("a.csv").exists());
+    assert!(!out_dir.join("b.csv").exists(), "失败条目不得产出");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f09", 2);
+    assert!(!out_dir.join("a.csv").exists());
+}
+
+#[test]
+fn f10_partial_failure_keeps_the_applied_listing_and_undoes_only_it() {
+    let dir = TempDir::new();
+    let first = dir.0.join("t1");
+    let second = dir.0.join("t2");
+    let out_dir = dir.0.join("out");
+    fs::create_dir_all(first.join("sub")).unwrap();
+    fs::write(first.join("a.txt"), b"abc").unwrap();
+    fs::write(first.join("sub").join("b.txt"), b"hello").unwrap();
+    fs::create_dir_all(&second).unwrap();
+    fs::write(second.join("c.txt"), b"ccc").unwrap();
+    let args = plan_args(
+        "f10",
+        &[
+            "--root",
+            path_text(&first),
+            "--root",
+            path_text(&second),
+            "--output-dir",
+            path_text(&out_dir),
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f10", 2, 1);
+    assert!(out_dir.join("t1.csv").exists(), "成功根已出清单");
+    assert!(!out_dir.join("t2.csv").exists(), "失败根不得出清单");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f10", 2);
+    assert!(!out_dir.join("t1.csv").exists());
+}
+
+#[test]
+fn f13_partial_failure_keeps_the_applied_rename_and_undoes_only_it() {
+    let dir = TempDir::new();
+    let root = dir.0.join("regex");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("photo-001.jpg"), b"a").unwrap();
+    fs::write(root.join("photo-002.jpg"), b"b").unwrap();
+    let args = plan_args(
+        "f13",
+        &[
+            "--dir",
+            path_text(&root),
+            "--regex",
+            r"^photo-(\d+)\.jpg$",
+            "--replace",
+            "img_$1.jpg",
+            "--scope",
+            "full",
+        ],
+    );
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 1,
+            blocker: "blocker",
+        },
+    );
+    assert_partial_apply(&case, "f13", 2, 1);
+    assert!(
+        root.join("img_001.jpg").exists(),
+        "成功条目已改名，等待撤销"
+    );
+    assert!(!root.join("img_002.jpg").exists(), "失败条目不得产出新名");
+    assert!(root.join("photo-002.jpg").exists(), "失败条目的源保持原状");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "f13", 2);
+    assert!(root.join("photo-001.jpg").exists(), "撤销恢复旧名");
+    assert!(!root.join("img_001.jpg").exists());
+}
+
+#[test]
+fn c01_partial_failure_transcodes_one_file_and_leaves_the_failed_one() {
+    let dir = TempDir::new();
+    let first = dir.0.join("one.txt");
+    let second = dir.0.join("two.txt");
+    // GB18030 的「中」＝D6 D0，第二个文件保持同编码不动。
+    fs::write(&first, [0xD6, 0xD0, 0x0A]).unwrap();
+    fs::write(&second, [0xD6, 0xD0, 0x0A]).unwrap();
+    let args = plan_args(
+        "c01",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--target",
+            "utf-8",
+            "--source",
+            "gb18030",
+            "--sample-window",
+            "8",
+            "--sample-blocks",
+            "1",
+        ],
+    );
+    let case = partial_failure_case(&args, &dir.0, PartialInjection::MissingSource { index: 1 });
+    assert_partial_apply(&case, "c01", 2, 1);
+    assert_eq!(
+        fs::read(&first).unwrap(),
+        "中\n".as_bytes(),
+        "成功条目已转成 UTF-8"
+    );
+    assert_eq!(
+        fs::read(&second).unwrap(),
+        [0xD6, 0xD0, 0x0A],
+        "失败条目保持原状（不得被改写一半）"
+    );
+    let undo = case.undo();
+    assert_partial_undo(&undo, "c01", 2);
+    assert_eq!(
+        fs::read(&first).unwrap(),
+        [0xD6, 0xD0, 0x0A],
+        "撤销还原字节"
+    );
+}
+
+#[test]
+fn c02_partial_failure_converts_one_file_and_leaves_the_failed_one() {
+    let dir = TempDir::new();
+    let first = dir.0.join("one.txt");
+    let second = dir.0.join("two.txt");
+    fs::write(&first, b"a\nb\n").unwrap();
+    fs::write(&second, b"c\nd\n").unwrap();
+    let args = plan_args(
+        "c02",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--to",
+            "crlf",
+            "--sample-bytes",
+            "64",
+        ],
+    );
+    let case = partial_failure_case(&args, &dir.0, PartialInjection::MissingSource { index: 1 });
+    assert_partial_apply(&case, "c02", 2, 1);
+    assert_eq!(
+        fs::read(&first).unwrap(),
+        b"a\r\nb\r\n",
+        "成功条目已转 CRLF"
+    );
+    assert_eq!(fs::read(&second).unwrap(), b"c\nd\n", "失败条目保持原状");
+    let undo = case.undo();
+    assert_partial_undo(&undo, "c02", 2);
+    assert_eq!(fs::read(&first).unwrap(), b"a\nb\n", "撤销还原换行");
+}
+
+#[test]
+fn c03_partial_failure_replaces_in_one_file_and_leaves_the_failed_one() {
+    let dir = TempDir::new();
+    let first = dir.0.join("one.txt");
+    let second = dir.0.join("two.txt");
+    fs::write(&first, b"alpha beta alpha").unwrap();
+    fs::write(&second, b"alpha beta alpha").unwrap();
+    let args = plan_args(
+        "c03",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--find",
+            "alpha",
+            "--replace",
+            "gamma",
+            "--sample-bytes",
+            "64",
+        ],
+    );
+    let case = partial_failure_case(&args, &dir.0, PartialInjection::MissingSource { index: 1 });
+    assert_partial_apply(&case, "c03", 2, 1);
+    assert_eq!(
+        fs::read(&first).unwrap(),
+        b"gamma beta gamma",
+        "成功条目已替换"
+    );
+    assert_eq!(
+        fs::read(&second).unwrap(),
+        b"alpha beta alpha",
+        "失败条目保持原状"
+    );
+    let undo = case.undo();
+    assert_partial_undo(&undo, "c03", 2);
+    assert_eq!(
+        fs::read(&first).unwrap(),
+        b"alpha beta alpha",
+        "撤销还原内容"
+    );
+}
+
+#[test]
+fn f04_merge_partial_failure_writes_no_half_output() {
+    // F04 是 N:1 单条目，"部分失败"落在两处，两种都不得产出半成品合并文件：
+    //  ① 源缺失 → 条目跳过、任务不判死、无 Journal（没有成功项）；
+    //  ② 目标被阻断 → 单条目无成功项，整单判 failed、无 Journal。
+    let dir = TempDir::new();
+    let first = dir.0.join("a.txt");
+    let second = dir.0.join("b.txt");
+    let third = dir.0.join("c.txt");
+    let output = dir.0.join("merged.txt");
+    fs::write(&first, b"A\n").unwrap();
+    fs::write(&second, b"B\n").unwrap();
+    fs::write(&third, b"C\n").unwrap();
+    let args = plan_args(
+        "f04",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--file",
+            path_text(&third),
+            "--output",
+            path_text(&output),
+            "--target",
+            "utf-8",
+            "--source",
+            "utf-8",
+        ],
+    );
+
+    // ① 源缺失
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::MissingMergeSource {
+            index: 0,
+            source_index: 1,
+        },
+    );
+    assert_eq!(
+        case.apply["state"], "completed",
+        "单条目被跳过不等于任务失败：{}",
+        case.apply["state"]
+    );
+    let entries = case.apply["report"]["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["status"], "skipped", "源缺失应跳过整条合并");
+    assert_eq!(
+        entries[0]["error"]["code"], "E2001",
+        "跳过原因应如实带码：{}",
+        entries[0]
+    );
+    assert!(!output.exists(), "源缺失不得产出少了一段的半成品合并文件");
+    assert!(!case.journal.exists(), "没有成功项就不该产生 Journal");
+
+    // ② 目标被阻断
+    let blocked = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 0,
+            blocker: "blocker",
+        },
+    );
+    assert_eq!(
+        blocked.apply["state"], "failed",
+        "单条目计划没有成功项，整单判 failed（partial-failed 需至少一项成功）：{}",
+        blocked.apply["state"]
+    );
+    let entries = blocked.apply["report"]["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["status"], "failed");
+    assert!(!output.exists(), "失败条目不得留下半成品");
+    assert!(
+        !blocked.journal.exists(),
+        "没有成功项就没有可撤销的映射，不该产生 Journal"
+    );
+}
+
+#[test]
+fn f06_csv_merge_partial_failure_writes_no_half_output() {
+    let dir = TempDir::new();
+    let first = dir.0.join("a.csv");
+    let second = dir.0.join("b.csv");
+    let output = dir.0.join("all.csv");
+    fs::write(&first, b"id,name\n1,Alice\n").unwrap();
+    fs::write(&second, b"name,extra\nBob,x\n").unwrap();
+    let args = plan_args(
+        "f06",
+        &[
+            "--file",
+            path_text(&first),
+            "--file",
+            path_text(&second),
+            "--output",
+            path_text(&output),
+            "--target",
+            "utf-8",
+            "--sample-bytes",
+            "4096",
+            "--source-column",
+        ],
+    );
+
+    // ① 源缺失
+    let case = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::MissingMergeSource {
+            index: 0,
+            source_index: 1,
+        },
+    );
+    assert_eq!(case.apply["state"], "completed");
+    let entries = case.apply["report"]["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["status"], "skipped");
+    assert_eq!(entries[0]["error"]["code"], "E2001");
+    assert!(!output.exists(), "源缺失不得产出缺列/缺行的半成品合并 CSV");
+    assert!(!case.journal.exists(), "没有成功项就不该产生 Journal");
+
+    // ② 目标被阻断
+    let blocked = partial_failure_case(
+        &args,
+        &dir.0,
+        PartialInjection::BlockTarget {
+            index: 0,
+            blocker: "blocker",
+        },
+    );
+    assert_eq!(blocked.apply["state"], "failed");
+    let entries = blocked.apply["report"]["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["status"], "failed");
+    assert!(!output.exists(), "失败条目不得留下半成品");
+    assert!(!blocked.journal.exists(), "没有成功项就不该产生 Journal");
+}
+
+/// C18-EXE-01（§3.2 C18）：逐功能比对**预览预言的产物**与**执行的真实结果**。
+/// 预览说要把某个 target 写出来，执行后它就必须存在；预览里被阻断/跳过的条目
+/// 不得留下任何产物；`expected.size` 预言的字节数必须与实际落盘一致。
+/// 每个功能用独立工作区，避免相互覆盖。
+#[test]
+fn c18_preview_predicts_execution_for_every_feature() {
+    let dir = TempDir::new();
+    let commands = c18_commands(
+        &dir.0.join("template/tree"),
+        &dir.0.join("template/out"),
+        &dir.0.join("template/manifest.csv"),
+        &dir.0.join("template/f11-list.csv"),
+        &dir.0.join("template/f11-root"),
+    );
+    assert_eq!(commands.len(), 25, "横切应覆盖全部 25 个 plan 命令");
+
+    let mut checked = 0usize;
+    let mut total_verified = 0usize;
+    let mut total_in_place = 0usize;
+    for command in &commands {
+        let feature = command[0].clone();
+        let base = dir.0.join("w").join(&feature);
+        let (root, out_dir, manifest, f11_list, f11_root) = c18_setup(&base);
+        let feature_commands = c18_commands(&root, &out_dir, &manifest, &f11_list, &f11_root);
+        let this = feature_commands
+            .iter()
+            .find(|candidate| candidate[0] == feature)
+            .expect("命令表应含本功能")
+            .clone();
+
+        let plan = batchdesk_str(&this);
+        assert!(
+            plan.status.success(),
+            "{feature} 计划生成失败\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&plan.stdout),
+            String::from_utf8_lossy(&plan.stderr)
+        );
+        let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+        let plan_path = base.join("plan.json");
+        fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+
+        let quarantine = base.join("quarantine");
+        let journal = base.join("journal.jsonl");
+        let apply = batchdesk(&[
+            "apply",
+            "--plan",
+            path_text(&plan_path),
+            "--quarantine-dir",
+            path_text(&quarantine),
+            "--journal",
+            path_text(&journal),
+            "--json",
+        ]);
+        let report: serde_json::Value =
+            serde_json::from_slice(&apply.stdout).unwrap_or_else(|_| {
+                panic!(
+                    "{feature} apply 未产出报告\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&apply.stdout),
+                    String::from_utf8_lossy(&apply.stderr)
+                )
+            });
+        let entries = report["report"]["entries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let planned = document["entries"].as_array().cloned().unwrap_or_default();
+        assert_eq!(
+            entries.len(),
+            planned.len(),
+            "{feature}：执行报告条目数应与预览一致"
+        );
+
+        let mut verified = 0usize;
+        let mut in_place = 0usize;
+        for (index, (before, after)) in planned.iter().zip(entries.iter()).enumerate() {
+            // 执行报告只带 entryId／status，预言的 target 要从**计划**里取。
+            let target = before["target"].as_str().map(str::to_string);
+            let status = after["status"].as_str().unwrap_or_default();
+            let blocked = !before["blocked"].is_null();
+            let Some(target) = target else {
+                // in-place 臂（edit-content／transcode）无 target 可核对：
+                // 预览若标了阻断，执行就必须是 skipped；否则源文件必须仍在
+                // （改写是原地的，源消失即说明被误删）。
+                if blocked {
+                    assert_eq!(
+                        status, "skipped",
+                        "{feature} 第 {index} 条：预览阻断的条目执行应跳过，实际 {status}"
+                    );
+                } else if status == "ok" {
+                    // 无 target 的臂只有两类：原地改写（源必须还在）与删除（源必须已移走）。
+                    let action = before["action"].as_str().unwrap_or_default();
+                    let source = Path::new(before["source"].as_str().unwrap_or_default());
+                    match action {
+                        "edit-content" | "transcode" => {
+                            assert!(
+                                source.exists(),
+                                "{feature} 第 {index} 条：原地改写后源文件不得消失"
+                            );
+                            in_place += 1;
+                        }
+                        "delete" => {
+                            assert!(
+                                !source.exists(),
+                                "{feature} 第 {index} 条：删除后源文件应已移入隔离目录"
+                            );
+                            in_place += 1;
+                        }
+                        other => panic!("{feature} 第 {index} 条：无 target 的未知动作 {other}"),
+                    }
+                }
+                continue;
+            };
+            let target_path = Path::new(&target);
+
+            if blocked || status != "ok" {
+                assert!(
+                    !target_path.exists(),
+                    "{feature} 第 {index} 条：预览阻断/执行失败的条目不得留下产物 {target}"
+                );
+                continue;
+            }
+
+            assert!(
+                target_path.exists(),
+                "{feature} 第 {index} 条：预览预言的产物 {target} 必须存在"
+            );
+            // `expected.size` 是**计划期内容指纹**，口径随动作而变（设计 01 §5）：
+            // split＝该分片输出字节数（byte-range），csv*／merge＝源（首输入）大小。
+            if let Some(expected) = before["expected"]["size"].as_u64() {
+                let algorithm = before["expected"]["algorithm"].as_str().unwrap_or("");
+                let source_path = PathBuf::from(before["source"].as_str().unwrap_or_default());
+                // move／delete 会消费源，此时指纹对象取产物；否则按契约取源。
+                let subject = if algorithm.ends_with("byte-range") || !source_path.exists() {
+                    target_path.to_path_buf()
+                } else {
+                    source_path
+                };
+                let actual = fs::metadata(&subject).map(|meta| meta.len()).unwrap_or(0);
+                assert_eq!(
+                    actual,
+                    expected,
+                    "{feature} 第 {index} 条：指纹对象 {} 大小应与预览 expected.size 一致",
+                    subject.display()
+                );
+            }
+            verified += 1;
+        }
+        checked += 1;
+        total_verified += verified;
+        total_in_place += in_place;
+    }
+    assert_eq!(checked, 25, "每个 plan 命令都应跑完一遍");
+    assert!(
+        total_verified >= 20,
+        "至少应有 20 条带 target 的条目被核对，实际 {total_verified}——否则断言空转"
+    );
+    // c02（换行）＋ c03（替换）＋ c09（删除）各一条；c01 在纯 ASCII 源上无事可做。
+    assert!(
+        total_in_place >= 3,
+        "至少应有 3 条无 target 臂条目被核对，实际 {total_in_place}"
+    );
+}
+
+/// RBK-03（R3）「撤销时让目标被占用」的**真实句柄**版本。
+///
+/// 之前 `c06_undo_dry_run_previews_rollback_and_occupied_targets_are_skipped` 只是把
+/// 目标文件重新写出来（第三方改动），不是操作系统意义上的"被占用"。Windows 上
+/// `std::fs` 的打开默认带 `FILE_SHARE_READ|WRITE|DELETE`，造不出独占占用；
+/// 这里改用 `CreateFileW(dwShareMode = FILE_SHARE_NONE)` 持独占句柄。
+///
+/// 断言三件事（方案 §7.8）：
+/// ① 给出明确失败原因（E2008）且**不清空映射**（Journal 仍可重试）；
+/// ② 不造成二次破坏（被占用的文件内容原样）；
+/// ③ 释放句柄后同一 Journal 能补完撤销。
+#[cfg(windows)]
+#[test]
+fn undo_reports_e2008_on_an_exclusively_held_target_and_keeps_the_mapping() {
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, OPEN_EXISTING,
+    };
+
+    struct HeldHandle(HANDLE);
+
+    impl HeldHandle {
+        fn open_exclusive(path: &Path) -> Self {
+            let wide: Vec<u16> = path
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    GENERIC_READ,
+                    FILE_SHARE_NONE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(
+                handle,
+                INVALID_HANDLE_VALUE,
+                "应能拿到独占句柄：{}",
+                path.display()
+            );
+            Self(handle)
+        }
+    }
+
+    impl Drop for HeldHandle {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    let dir = TempDir::new();
+    let root = dir.0.join("rename");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"payload-a").unwrap();
+
+    let plan = batchdesk(&[
+        "f12",
+        "--dir",
+        path_text(&root),
+        "--prefix",
+        "new_",
+        "--scope",
+        "stem",
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(plan.status.success());
+    let plan_path = dir.0.join("plan.json");
+    fs::write(&plan_path, plan.stdout).unwrap();
+    let journal = dir.0.join("journal.jsonl");
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&dir.0.join("quarantine")),
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    assert!(apply.status.success());
+    let renamed = root.join("new_a.txt");
+    assert!(renamed.exists(), "改名应已生效");
+
+    // 先记下内容：独占句柄一旦拿上，本进程也读不到它（dwShareMode=0）。
+    let original = fs::read(&renamed).unwrap();
+
+    // 独占持有新名字，模拟"撤销时目标被占用"。
+    let held = HeldHandle::open_exclusive(&renamed);
+
+    let blocked = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    let blocked_report: serde_json::Value =
+        serde_json::from_slice(&blocked.stdout).unwrap_or_else(|_| {
+            panic!(
+                "undo 未产出报告\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&blocked.stdout),
+                String::from_utf8_lossy(&blocked.stderr)
+            )
+        });
+    assert_eq!(
+        blocked_report["reverted"], 0,
+        "被占用时一条都不该回滚：{blocked_report}"
+    );
+    let failed = blocked_report["failed"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(failed.len(), 1, "失败清单应点名该条目：{blocked_report}");
+    assert_eq!(
+        failed[0]["error"]["code"], "E2008",
+        "占用应报 E2008（os error 32/1224 一类）：{}",
+        failed[0]
+    );
+    assert_eq!(
+        original, b"payload-a",
+        "被占用文件内容必须原样——不得二次破坏"
+    );
+    assert!(!root.join("a.txt").exists(), "失败的撤销不得把源名字造出来");
+
+    // 释放句柄后，同一 Journal 应能补完撤销（证明映射没被清）。
+    drop(held);
+    let retry = batchdesk(&[
+        "undo",
+        "--plan",
+        PLAN_ID,
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    assert!(
+        retry.status.success(),
+        "补完撤销失败\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&retry.stdout),
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    let retry_report: serde_json::Value = serde_json::from_slice(&retry.stdout).unwrap();
+    assert_eq!(
+        retry_report["reverted"], 1,
+        "释放占用后应能补完：{retry_report}"
+    );
+    assert!(root.join("a.txt").exists(), "应改回原名字");
+    assert!(!renamed.exists(), "新名字应已移走");
 }

@@ -78,12 +78,21 @@ pub struct EditOutcome {
 }
 
 /// 流式内容重写端口：读取源流、写入目标流；C02/C03/C01 等大文件改写使用。
+///
+/// **取消**（方案 §7.7）：`cancel` 由执行器注入，实现应在**每个读块边界**检查它；
+/// 命中就立即返回 `Err(KernelError::cancelled())`——回调因此以 `Err` 收场，
+/// `rewrite_atomic_with` 丢弃临时文件，源文件保持原样（不会被半截内容覆盖）。
+/// 取消**不是失败**：执行器据此把整单标成 `Cancelled` 并停止派发。
+///
+/// 当前只有 C02（换行转换）是单一均匀的读块循环，故只有它接了检查；
+/// C01／C03 共用本端口但尚未逐块检查（见 ADR-0097 §5）。
 pub trait ContentRewriter: Send + Sync {
     fn rewrite(
         &self,
         entry: &crate::plan::PlanEntry,
         input: &mut dyn Read,
         output: &mut dyn Write,
+        cancel: &dyn CancelToken,
     ) -> Result<EditOutcome, KernelError>;
 }
 
@@ -354,7 +363,10 @@ pub fn apply_generic_plan(
         content_editor: exec.content_editor,
         content_rewriter: exec.content_rewriter,
         directory_lister: exec.directory_lister,
+        cancel: exec.cancel,
         network_retry: exec.network_retry,
+        task_id: exec.task_id,
+        progress: exec.progress,
     };
 
     let (mut reports, applied, failed, cancelled) = if options.entry_concurrency > 1 {
@@ -456,6 +468,24 @@ fn is_cancelled_token(cancel: Option<&dyn CancelToken>) -> bool {
     cancel.map(|token| token.is_cancelled()).unwrap_or(false)
 }
 
+/// 上报**条目内（字节级）**进度（方案 §7.5 双层进度的条目层，ADR-0100）。
+///
+/// 与条目边界事件的区别：`entry_done/entry_total` 为 `Some`，`done/total` 保持 0——
+/// 壳层据此只更新字节字段、不动条目计数（条目计数由派发循环边界事件维护）。
+fn report_entry_progress(view: &WorkerView<'_>, entry_done: u64, entry_total: u64) {
+    if let Some(sink) = view.progress {
+        sink.report(crate::progress::ProgressEvent {
+            task_id: view.task_id.to_string(),
+            phase: ProgressPhase::Executing,
+            done: 0,
+            total: 0,
+            message: None,
+            entry_done: Some(entry_done),
+            entry_total: Some(entry_total),
+        });
+    }
+}
+
 fn report_progress_to(
     progress: Option<&dyn ProgressSink>,
     task_id: &str,
@@ -471,6 +501,8 @@ fn report_progress_to(
             done,
             total,
             message: message.map(str::to_string),
+            entry_done: None,
+            entry_total: None,
         });
     }
 }
@@ -747,6 +779,18 @@ fn perform_with_retry(
                 }
             }
         }
+        // 磁盘满（ADR-0093）：**不学网络断线退避**——磁盘满不会在秒级自愈，
+        // 退避 3 次只是把用户推向"任务失败"。第一次撞上就暂停，等用户清理
+        // 空间后恢复并重试本条目；用户取消则按普通条目失败收尾。
+        if let Some(error) = disk_full_error(&outcome) {
+            if let Some(retry) = view.network_retry {
+                match retry.pause(error) {
+                    crate::retry::PauseAction::Resumed => continue,
+                    crate::retry::PauseAction::Cancel => {}
+                    crate::retry::PauseAction::Abort => return Err(error.clone()),
+                }
+            }
+        }
         if let Ok(Err(error)) = &outcome {
             if error.retryable && skips_permission_failures(plan) {
                 return perform(view, plan, entry, target, overwrite, &mut backup);
@@ -762,6 +806,17 @@ fn network_error(
     match outcome {
         Ok(Err(error)) if error.code == "E2005" => Some(error),
         Err(error) if error.code == "E2005" => Some(error),
+        _ => None,
+    }
+}
+
+/// 磁盘满（ADR-0093）：致命错误，走"暂停等清理"而不是逐条失败。
+fn disk_full_error(
+    outcome: &Result<Result<Performed, KernelError>, KernelError>,
+) -> Option<&KernelError> {
+    match outcome {
+        Ok(Err(error)) if error.code == "E2004" => Some(error),
+        Err(error) if error.code == "E2004" => Some(error),
         _ => None,
     }
 }
@@ -783,6 +838,11 @@ fn settle_entry(
         Ok(Ok(performed)) => performed,
         Ok(Err(error)) => {
             exec.license.release(&plan.kind, 1);
+            if error.is_cancelled() {
+                // 用户取消不是失败（方案 §7.7）：条目如实记 skipped（源文件未被改写），
+                // 不进 failed 计数；整单终态由循环边界上的 `cancelled` 标成 Cancelled。
+                return Ok(skipped_entry(entry.entry_id.clone(), error));
+            }
             if skips_permission_failures(plan) && matches!(error.code.as_str(), "E2002" | "E2003") {
                 // 方案 §5.13／§5.14（OQ-37 裁决①）：只读/占用写不进去＝**跳过并报告**，
                 // 条目不进 failed 计数，任务终态因此不会被判成整体失败。
@@ -907,6 +967,10 @@ fn execute_serial(
                 );
             }
         }
+    }
+    // mid-stream 取消可能落在**最后一条**里——循环已自然结束，边界检查没机会跑。
+    if !cancelled && is_cancelled_token(exec.cancel) {
+        cancelled = true;
     }
     Ok((reports, applied, failed, cancelled))
 }
@@ -1085,6 +1149,10 @@ fn execute_pooled(
         &mut completed,
         total,
     )?;
+    // mid-stream 取消可能落在最后一条里（同串行路径，见上）。
+    if !cancelled && is_cancelled_token(exec.cancel) {
+        cancelled = true;
+    }
     // 取消/中止时未处理条目不产报告（与串行路径一致）。
     let reports = slots.into_iter().flatten().collect();
     Ok((reports, applied, failed, cancelled))
@@ -1200,6 +1268,12 @@ pub(crate) struct WorkerView<'a> {
     content_rewriter: Option<&'a dyn ContentRewriter>,
     directory_lister: Option<&'a dyn DirectoryLister>,
     network_retry: Option<&'a dyn crate::retry::NetworkRetry>,
+    /// 取消端口：流式内容重写在**读块边界**问它（方案 §7.7 的 mid-stream 取消）。
+    cancel: Option<&'a dyn CancelToken>,
+    task_id: &'a str,
+    /// 进度端口：**条目内（字节级）**进度用它上报（方案 §7.5 双层进度的条目层）。
+    /// 与取消端口一样是 `&dyn`（`ProgressSink: Send + Sync`），并发工作线程共享安全。
+    progress: Option<&'a dyn ProgressSink>,
 }
 
 fn perform_listing(
@@ -1584,6 +1658,9 @@ fn perform(
                 };
                 // 逐源流式解码并追加：内存占用与源大小无关（O(块)）。
                 // BOM 只在产物最前面写一次；各输入自身 BOM 由解码器剥离。
+                // 条目内进度的总量＝各源字节数之和（计划期已探明，方案 §9.1 允许预估口径）。
+                let entry_total: u64 = merge.sources.iter().map(|source| source.size).sum();
+                let mut entry_done = 0u64;
                 view.fs.write_atomic_with(target, &mut |writer| {
                     if let Some(prefix) = target_encoding.bom_prefix() {
                         write_stream(writer, prefix)?;
@@ -1607,9 +1684,12 @@ fn perform(
                         let mut seen = 0u64;
                         view.fs.read_stream(&source.path, &mut |chunk| {
                             seen += chunk.len() as u64;
+                            entry_done += chunk.len() as u64;
                             transcoder.push(chunk, &mut buffer)?;
                             write_stream(writer, &buffer)?;
                             buffer.clear();
+                            // 条目内进度：合并是一条 entry，不报字节的话界面长时间停在 0/1。
+                            report_entry_progress(view, entry_done, entry_total);
                             Ok(())
                         })?;
                         if seen != source.size {
@@ -1732,7 +1812,12 @@ fn perform(
                     let mut rewrite_detail = None;
                     view.fs
                         .rewrite_atomic_with(&entry.source, &mut |reader, writer| {
-                            let outcome = rewriter.rewrite(entry, reader, writer)?;
+                            let outcome = rewriter.rewrite(
+                                entry,
+                                reader,
+                                writer,
+                                view.cancel.unwrap_or(&crate::progress::NoCancel),
+                            )?;
                             rewrite_detail = outcome.detail;
                             Ok(())
                         })?;
@@ -2788,7 +2873,10 @@ fn perform_csv_range(
         None
     };
 
-    let mut raw = Vec::new();
+    // 表头仍按需读取（要解析列名与计划期列清单核对），但它是**一行**、不是整个选中区间；
+    // 数据区间改为流式解码＋原子写——内存 O(块)，不随选中区间线性增长
+    // （E5 判据①，TC-F09-EXE-05 的缺口）。表头的转码结果缓存在小 Vec 里复用给写出。
+    let mut header_out = Vec::new();
     if let Some(header) = payload.header_range {
         let header_raw = view.fs.read_ranges(source, &[(header.start, header.end)])?;
         let decoded = transcode(
@@ -2814,14 +2902,38 @@ fn perform_csv_range(
                 true,
             ));
         }
-        raw.extend_from_slice(&header_raw);
-    }
-    if let Some(data) = payload.data_range {
-        raw.extend_from_slice(&view.fs.read_ranges(source, &[(data.start, data.end)])?);
+        // 目标编码的 BOM 由下面的流式写统一加在产物最前面，表头这里用 without_bom。
+        header_out = transcode(
+            &header_raw,
+            encoding,
+            target_encoding.without_bom(),
+            invalid,
+        )?
+        .bytes;
     }
 
-    let transcoded = transcode(&raw, encoding, target_encoding, invalid)?;
-    view.fs.write_atomic(target, &transcoded.bytes)?;
+    view.fs.write_atomic_with(target, &mut |writer| {
+        if let Some(prefix) = target_encoding.bom_prefix() {
+            write_stream(writer, prefix)?;
+        }
+        write_stream(writer, &header_out)?;
+        if let Some(data) = payload.data_range {
+            let mut transcoder =
+                StreamTranscoder::new(encoding, target_encoding.without_bom(), invalid);
+            // 分块解码出的字节先落到小缓冲再交给 writer；缓冲在块之间复用。
+            let mut buffer = Vec::new();
+            view.fs
+                .read_ranges_stream(source, &[(data.start, data.end)], &mut |chunk| {
+                    transcoder.push(chunk, &mut buffer)?;
+                    write_stream(writer, &buffer)?;
+                    buffer.clear();
+                    Ok(())
+                })?;
+            transcoder.finish(&mut buffer)?;
+            write_stream(writer, &buffer)?;
+        }
+        Ok(())
+    })?;
     let final_path = target.to_string();
     let reverse = match backup {
         Some(backup) => FsOp::WriteAtomic {
@@ -3448,6 +3560,8 @@ fn report_progress(
             done,
             total,
             message: message.map(str::to_string),
+            entry_done: None,
+            entry_total: None,
         });
     }
 }
@@ -3492,6 +3606,7 @@ mod tests {
     use crate::progress::{CancelToken, ProgressEvent, ProgressSink};
     use crate::split::{plan_f01, PlanF01File, PlanF01Input, SplitAccumulator};
     use std::collections::{BTreeMap, HashMap};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::Duration;
@@ -3503,6 +3618,9 @@ mod tests {
         files: Mutex<HashMap<String, Vec<u8>>>,
         next: Mutex<u64>,
         read_bytes_calls: AtomicU64,
+        /// 计数：流式区间读被调用了几次——F09 的"内存不随输入线性增长"要数得出
+        /// 走的是流式路径而不是 read_ranges 的整段入内存。
+        read_ranges_stream_calls: AtomicU64,
         /// 模拟跨盘：`true` 时 same_volume 返回 false（走校验复制路径）。
         cross_volume: Mutex<bool>,
         /// 故障注入：`true` 时 copy 落盘损坏内容（校验失败路径测试）。
@@ -3557,6 +3675,10 @@ mod tests {
 
         fn set_copy_corrupts(&self, value: bool) {
             *self.copy_corrupts.lock().unwrap() = value;
+        }
+
+        fn read_ranges_stream_calls(&self) -> u64 {
+            self.read_ranges_stream_calls.load(Ordering::Relaxed)
         }
 
         fn read_bytes_calls(&self) -> u64 {
@@ -3958,6 +4080,32 @@ mod tests {
                 joined.extend_from_slice(&data[*start as usize..*end as usize]);
             }
             Ok(joined)
+        }
+
+        fn read_ranges_stream(
+            &self,
+            source: &str,
+            ranges: &[(u64, u64)],
+            read: &mut dyn FnMut(&[u8]) -> Result<(), KernelError>,
+        ) -> Result<(), KernelError> {
+            self.read_ranges_stream_calls
+                .fetch_add(1, Ordering::Relaxed);
+            let files = self.files.lock().unwrap();
+            let data = files
+                .get(source)
+                .ok_or_else(|| KernelError::new("E2001", "not found", None, false))?;
+            for (start, end) in ranges {
+                if start >= end || *end > data.len() as u64 {
+                    return Err(KernelError::new(
+                        "E2010",
+                        "range is out of bounds",
+                        None,
+                        false,
+                    ));
+                }
+                read(&data[*start as usize..*end as usize])?;
+            }
+            Ok(())
         }
 
         fn copy_ranges_atomic(
@@ -4532,6 +4680,98 @@ mod tests {
         );
     }
 
+    /// ADR-0093：磁盘满（E2004）是致命错误，**第一次撞上就暂停**——不学网络断线
+    /// 退避 3 次（磁盘满不会秒级自愈）。恢复后重试本条目，已完成的不重做。
+    #[test]
+    fn disk_full_pauses_once_without_backoff_then_resumes_and_retries() {
+        let fs = TestFs::with_files(&["/data/a.txt"]);
+        fs.write_file("/data/a.txt", b"abc");
+        // 首枪失败（模拟写盘撞上 ENOSPC），暂停恢复后的第二枪成功。
+        fs.set_permission_failure("/data/b.txt", "E2004", true, 1);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = RecordingRetry::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.network_retry = Some(&retry);
+        let outcome = apply_generic_plan(
+            &plan(vec![action_entry(
+                "e1",
+                "/data/a.txt",
+                Some("/data/b.txt"),
+                PlanAction::Copy,
+            )]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+        assert_eq!(
+            fs.copy_calls(),
+            2,
+            "首枪失败后应只重试一次（暂停恢复后），不得忙重试"
+        );
+        assert_eq!(
+            retry.waits.lock().unwrap().len(),
+            0,
+            "磁盘满不得走 2/4/8 秒退避——那不是等待，是把用户推向任务失败"
+        );
+        assert_eq!(retry.pauses.load(Ordering::SeqCst), 1);
+        assert_eq!(fs.read_file("/data/b.txt"), b"abc");
+    }
+
+    /// ADR-0093：暂停期间用户取消 → 该条目按**普通条目失败**收尾，
+    /// 不阻塞整体（方案 §5.13），也不把任务判成"已暂停"。
+    #[test]
+    fn disk_full_pause_cancel_ends_as_a_normal_entry_failure() {
+        #[derive(Default)]
+        struct CancellingRetry;
+        impl crate::retry::NetworkRetry for CancellingRetry {
+            fn wait(&self, _delay: Duration) -> bool {
+                true
+            }
+            fn pause(&self, _error: &crate::error::KernelError) -> crate::retry::PauseAction {
+                crate::retry::PauseAction::Cancel
+            }
+        }
+
+        let fs = TestFs::with_files(&["/data/a.txt", "/data/ok.txt"]);
+        fs.write_file("/data/a.txt", b"abc");
+        fs.write_file("/data/ok.txt", b"ok");
+        fs.set_permission_failure("/data/b.txt", "E2004", true, u64::MAX);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let retry = CancellingRetry;
+        let mut ctx = context(&fs, &mut journal, &license);
+        ctx.network_retry = Some(&retry);
+        let outcome = apply_generic_plan(
+            &plan(vec![
+                action_entry("e1", "/data/a.txt", Some("/data/b.txt"), PlanAction::Copy),
+                action_entry(
+                    "e2",
+                    "/data/ok.txt",
+                    Some("/data/ok2.txt"),
+                    PlanAction::Copy,
+                ),
+            ]),
+            &ApplyOptions::default(),
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.state,
+            ApplyState::PartialFailed,
+            "一条失败一条成功＝部分失败，不是整体失败"
+        );
+        let entries = &outcome.report.entries;
+        assert_eq!(entries[0].status, ApplyStatus::Failed);
+        assert_eq!(
+            entries[0].error.as_ref().map(|error| error.code.as_str()),
+            Some("E2004")
+        );
+        assert_eq!(entries[1].status, ApplyStatus::Ok, "另一条不该被牵连");
+        assert_eq!(fs.read_file("/data/ok2.txt"), b"ok");
+    }
+
     /// D1 补全：`edit-content` 的网络断线重试复用同一份隔离备份——重试不得
     /// 每枪都 `backup_to_quarantine` 一次（旧口径把它排除在重试族之外）。
     #[test]
@@ -4707,6 +4947,7 @@ mod tests {
                 _entry: &crate::plan::PlanEntry,
                 _input: &mut dyn std::io::Read,
                 _output: &mut dyn std::io::Write,
+                _cancel: &dyn CancelToken,
             ) -> Result<EditOutcome, KernelError> {
                 Ok(EditOutcome { detail: None })
             }
@@ -4898,6 +5139,65 @@ mod tests {
         assert!(!fs.exists("/out/all.txt"));
         assert!(fs.exists("/data/a.txt"));
         assert!(fs.exists("/data/b.txt"));
+    }
+
+    /// 记录式进度端口：把内核上报的 ProgressEvent 全留下来供断言。
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Mutex<Vec<ProgressEvent>>,
+    }
+
+    impl ProgressSink for RecordingSink {
+        fn report(&self, event: ProgressEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    /// F04 合并的**条目内（字节级）进度**（方案 §7.5 双层进度、TC-F04-EXE-05）。
+    ///
+    /// 合并是 N:1——整条任务只有一条 entry，只报条目计数的话界面长时间停在 0/1。
+    /// 本测试钉住：大文件合并必须报字节进度，且条目边界事件不得携带字节字段。
+    #[test]
+    fn merge_reports_byte_level_entry_progress_for_large_inputs() {
+        let fs = TestFs::default();
+        let first: Vec<u8> = vec![b'a'; 200_000];
+        let second: Vec<u8> = vec![b'b'; 100_000];
+        fs.write_file("/d/a.txt", &first);
+        fs.write_file("/d/b.txt", &second);
+        let plan = plan(vec![merge_entry(
+            "e1",
+            "/o/merged.txt",
+            TargetEncoding::Utf8 { bom: false },
+            vec![
+                ("/d/a.txt", SourceEncoding::Utf8, first.len() as u64),
+                ("/d/b.txt", SourceEncoding::Utf8, second.len() as u64),
+            ],
+        )]);
+        let license = crate::license::AlwaysAllowLicense;
+        let mut journal = TestJournal::default();
+        let mut ctx = context(&fs, &mut journal, &license);
+        let sink = RecordingSink::default();
+        ctx.progress = Some(&sink);
+        let outcome = apply_generic_plan(&plan, &ApplyOptions::default(), &mut ctx).unwrap();
+        assert_eq!(outcome.state, ApplyState::Completed);
+
+        let events = sink.events.lock().unwrap().clone();
+        let byte_events: Vec<&ProgressEvent> = events
+            .iter()
+            .filter(|event| event.entry_total.is_some())
+            .collect();
+        assert!(
+            !byte_events.is_empty(),
+            "合并必须报条目内字节进度，否则大文件合并期间界面停在 0/1"
+        );
+        let last = byte_events.last().unwrap();
+        assert_eq!(last.entry_total, Some(300_000), "总量＝各源字节之和");
+        assert_eq!(last.entry_done, Some(300_000), "最后一块应报满");
+        assert_eq!(last.phase, ProgressPhase::Executing);
+        // 条目边界事件不携带字节字段（壳层据此区分两类事件）
+        for event in events.iter().filter(|event| event.entry_total.is_none()) {
+            assert!(event.entry_done.is_none());
+        }
     }
 
     #[test]
@@ -5893,6 +6193,11 @@ mod tests {
             fs.read_bytes_calls(),
             0,
             "range apply must not read the whole file"
+        );
+        assert_eq!(
+            fs.read_ranges_stream_calls(),
+            1,
+            "数据区间必须走流式读取（内存 O(块)，不随选中区间线性增长）"
         );
         assert_eq!(fs.read_file("/out/range.csv"), b"id,name\n2,Bob\n3,Cara\n");
 
@@ -6958,6 +7263,7 @@ mod tests {
             _entry: &crate::plan::PlanEntry,
             input: &mut dyn std::io::Read,
             output: &mut dyn std::io::Write,
+            _cancel: &dyn CancelToken,
         ) -> Result<EditOutcome, KernelError> {
             let mut buffer = Vec::new();
             input
@@ -7265,6 +7571,120 @@ mod tests {
             entry_concurrency: concurrency,
             ..ApplyOptions::default()
         }
+    }
+
+    /// 按 `is_cancelled()` 的**询问次数**翻标志的取消端口。
+    ///
+    /// 条目边界的取消用 `Ports`（按进度事件计数）就够；**单条内部 mid-stream** 的
+    /// 取消窗口只在流式重写器的读块循环里，只能按询问次数定时——询问顺序是
+    /// 「每读一块一次」，因此 `after = N` 表示"第 N 块读完后、第 N+1 块开始前"。
+    /// 若将来重写器改了询问位置，这条断言会立刻失败，不会静默放过。
+    struct ChunkCancel {
+        after: usize,
+        asks: AtomicUsize,
+    }
+
+    impl CancelToken for ChunkCancel {
+        fn is_cancelled(&self) -> bool {
+            self.asks.fetch_add(1, Ordering::SeqCst) >= self.after
+        }
+    }
+
+    /// TC-C02-EXE-04：**单条内部 mid-stream 取消**。
+    ///
+    /// 此前 `ContentRewriter` 不接收 cancel token，取消只能在条目边界生效，
+    /// 因此"大文件重写跑到一半取消"这条路径根本不存在（缺口原文：真要支持需先改 trait）。
+    /// 现在 C02 在读块边界问一次：命中即返回 E3010，回调以 Err 收场、
+    /// `rewrite_atomic_with` 丢弃临时文件，**源文件保持原样**。
+    #[test]
+    fn mid_stream_cancel_aborts_the_rewrite_and_leaves_the_source_untouched() {
+        use crate::line_endings::LineEndingRewriter;
+        use crate::plan::{PlanAction, PlanParamValue};
+        let fs = TestFs::default();
+        // 4 个 64 KiB 块以上：取消落在第 3 次询问时一定在条目**内部**。
+        let original: Vec<u8> = b"line\n".repeat(64 * 1024);
+        fs.write_file("/d/big.txt", &original);
+
+        let mut params = std::collections::BTreeMap::new();
+        params.insert(
+            "target".to_string(),
+            PlanParamValue::String("crlf".to_string()),
+        );
+        params.insert(
+            "structure".to_string(),
+            PlanParamValue::String("text".to_string()),
+        );
+        let mut document = plan(vec![action_entry(
+            "e1",
+            "/d/big.txt",
+            None,
+            PlanAction::EditContent,
+        )]);
+        document.kind = crate::line_endings::C02_KIND.to_string();
+        document.params = params;
+
+        let rewriter = LineEndingRewriter::from_plan(&document).expect("build rewriter");
+        let mut journal = TestJournal::default();
+        let license = crate::license::AlwaysAllowLicense;
+        let mut ctx = context(&fs, &mut journal, &license);
+        let cancel = ChunkCancel {
+            after: 3,
+            asks: AtomicUsize::new(0),
+        };
+        ctx.cancel = Some(&cancel);
+        ctx.content_rewriter = Some(&rewriter);
+
+        let outcome = apply_generic_plan(&document, &ApplyOptions::default(), &mut ctx)
+            .expect("cancelled apply still returns an outcome");
+
+        assert_eq!(
+            outcome.state,
+            ApplyState::Cancelled,
+            "mid-stream 取消必须把整单标成 Cancelled"
+        );
+        assert_eq!(
+            fs.read_file("/d/big.txt"),
+            original.as_slice(),
+            "源文件必须逐字节保持原样——临时文件被丢弃，半截内容不得落盘"
+        );
+        assert_eq!(outcome.report.entries.len(), 1);
+        assert_eq!(
+            outcome.report.entries[0].status,
+            ApplyStatus::Skipped,
+            "被取消的那一条记 skipped（未改动），不是 failed"
+        );
+        assert_eq!(
+            outcome.report.entries[0]
+                .error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("E3010"),
+            "取消走专用码 E3010，与普通写回失败可区分"
+        );
+        assert!(
+            cancel.asks.load(Ordering::SeqCst) >= 3,
+            "取消确实发生在读块循环内（询问过至少 3 次）"
+        );
+
+        // 对照：不取消时同一计划把 LF 全部转成 CRLF（证明上面的"未改动"是取消所致，
+        // 而不是计划本身没效果）。
+        let fs2 = TestFs::default();
+        fs2.write_file("/d/big.txt", &original);
+        let mut journal2 = TestJournal::default();
+        let mut ctx2 = context(&fs2, &mut journal2, &license);
+        let never = ChunkCancel {
+            after: usize::MAX,
+            asks: AtomicUsize::new(0),
+        };
+        ctx2.cancel = Some(&never);
+        ctx2.content_rewriter = Some(&rewriter);
+        let ok = apply_generic_plan(&document, &ApplyOptions::default(), &mut ctx2).unwrap();
+        assert_eq!(ok.state, ApplyState::Completed);
+        assert_eq!(
+            fs2.read_file("/d/big.txt"),
+            b"line\r\n".repeat(64 * 1024).as_slice(),
+            "对照：不取消时重写确实生效"
+        );
     }
 
     #[test]

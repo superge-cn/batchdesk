@@ -85,6 +85,22 @@ pub enum CaseSense {
 pub type RewriteCallback<'a> =
     dyn FnMut(&mut dyn std::io::Read, &mut dyn std::io::Write) -> Result<(), KernelError> + 'a;
 
+/// 卷的介质类型（方案 §5.12「并发的默认值（决策）：按介质自适应」）。
+///
+/// 只用于选并发默认值，不参与正确性判定；判别失败一律 `Unknown`（保守取值），
+/// 不阻断任务。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediumKind {
+    /// SSD/NVMe：随机 I/O 代价低，可高并发（默认 4）。
+    SsdNvme,
+    /// 机械盘：寻道代价高，并发要压低（默认 2）。
+    Hdd,
+    /// 网络盘：链路往返主导，并发要压低（默认 2）。
+    Network,
+    /// 判别不了（非 Windows、无权限、接口失败）：保守取低档。
+    Unknown,
+}
+
 pub trait FsAdapter: Send + Sync {
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError>;
     /// 以流式方式读取整个文件：按适配层自选块大小回调，回调返回错误即中止。
@@ -197,6 +213,14 @@ pub trait FsAdapter: Send + Sync {
     fn is_network_path(&self, path: &str) -> bool {
         crate::retry::is_network_path(path)
     }
+    /// 目标路径所在卷的**介质类型**（方案 §5.12 的并发自适应默认值用）。
+    ///
+    /// 缺省 `Unknown`——kernel 与测试适配层不猜；平台适配层覆写（Windows 经
+    /// `IOCTL_STORAGE_QUERY_PROPERTY` 的 seek-penalty 属性判别 SSD/NVMe 与机械盘）。
+    /// 判不出来时保守取 `Unknown`，由 `apply::adaptive_concurrency` 落到低档。
+    fn medium_kind(&self, _path: &str) -> MediumKind {
+        MediumKind::Unknown
+    }
     /// 把原文件内容备份进隔离目录（复制、不移动），返回备份路径。
     ///
     /// 设计 01 §8：覆盖类动作（overwrite 的 copy/内容写回）在落盘前先备份
@@ -245,6 +269,27 @@ pub trait FsAdapter: Send + Sync {
         Err(KernelError::new(
             "E5001",
             "range reads are not supported by this adapter",
+            None,
+            false,
+        ))
+    }
+
+    /// 按顺序流式读取源文件的多个字节区间（F09 位置行抽取专用，ADR-0099）。
+    ///
+    /// 与 [`read_ranges`](Self::read_ranges) 的差别只在**内存**：本方法按适配层自选块
+    /// 大小边读边回调，调用方据此把内存压到 O(块)，不随选中区间大小线性增长
+    /// （E5 判据①）。只读取给定区间，不整文件读入；区间必须非空且落在源文件范围内。
+    /// 适配层不支持时返回 E5001，调用方按契约拒绝该动作，**不静默降级为 read_ranges**
+    /// （否则"流式"只是名义上的——这正是 TC-F09-EXE-05 的缺口）。
+    fn read_ranges_stream(
+        &self,
+        _source: &str,
+        _ranges: &[(u64, u64)],
+        _read: &mut dyn FnMut(&[u8]) -> Result<(), KernelError>,
+    ) -> Result<(), KernelError> {
+        Err(KernelError::new(
+            "E5001",
+            "streaming range reads are not supported by this adapter",
             None,
             false,
         ))

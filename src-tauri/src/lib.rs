@@ -454,15 +454,8 @@ fn applyPlan(
             .ok_or_else(|| IpcError::new("E1001", "plan not found; generate a fresh preview"))?
     };
     // S02：配置来源的保护名单在 plan→apply 间变化 → 旧预览失效，必须重新预览。
-    if stored.protected_source == ProtectedSource::Config {
-        let (current_list, _, _) = security_settings(&state);
-        let current = protected_dirs_from_strings(&current_list).map_err(IpcError::from)?;
-        if !same_protected_dirs(&stored.protected_dirs, &current) {
-            return Err(IpcError::new(
-                "E1002",
-                "protectedDirs changed after preview; regenerate preview",
-            ));
-        }
+    if let Some(error) = protected_list_staleness(&stored, &security_settings(&state).0)? {
+        return Err(error);
     }
     // S01：执行前预检；磁盘空间不足整任务阻断，零副作用，且不提供跳过入口。
     let report = preflight_stored_plan(&state, &stored).map_err(IpcError::from)?;
@@ -713,6 +706,29 @@ fn same_protected_dirs(left: &[ProtectedDir], right: &[ProtectedDir]) -> bool {
     left.dedup();
     right.dedup();
     left == right
+}
+
+/// S02 预览失效守卫（方案 §3.3/§9.2、11.6-9）：配置来源的保护名单在 plan→apply 之间
+/// 发生变化时，旧预览必须失效（E1002，提示重新预览）。
+///
+/// 名单来自 `Params`（调用方当次显式传入）时**不判**：那不是"旧预览"，而是当前请求的一部分。
+/// 抽成独立函数是为了让这条守卫可以被端到端地测（既有两条只断言 [`same_protected_dirs`]
+/// 的比较逻辑，走不到"配置真的变了"这一步）。
+fn protected_list_staleness(
+    stored: &StoredPlan,
+    current_list: &[String],
+) -> Result<Option<IpcError>, IpcError> {
+    if stored.protected_source != ProtectedSource::Config {
+        return Ok(None);
+    }
+    let current = protected_dirs_from_strings(current_list)?;
+    if same_protected_dirs(&stored.protected_dirs, &current) {
+        return Ok(None);
+    }
+    Ok(Some(IpcError::new(
+        "E1002",
+        "protectedDirs changed after preview; regenerate preview",
+    )))
 }
 
 /// S01：采集事实并交给 kernel 纯函数判定；不产生任何写操作。
@@ -2334,6 +2350,104 @@ mod tests {
         let left = vec![ProtectedDir::with_canonical("/a", Some("/real/a".into()))];
         let right = vec![ProtectedDir::with_canonical("/a", Some("/real/b".into()))];
         assert!(!same_protected_dirs(&left, &right));
+    }
+
+    /// TC-S02-PRE-04：名单变更 → 旧预览失效（E1002）的**端到端**链路。
+    ///
+    /// 既有两条只断言 [`same_protected_dirs`] 的比较逻辑，走不到"配置真的变了"这一步；
+    /// 本条走**真实配置库**：写配置 → 读名单 → 建配置来源的预览 → 改配置 → 再读名单 → 守卫判失效，
+    /// 并对照「Params 来源的预览不因名单变化而失效」。
+    #[test]
+    fn config_sourced_preview_is_invalidated_when_protected_list_changes() {
+        use kernel::config::ConfigDocument;
+        use kernel::fs::CaseSense;
+        use serde_json::{json, Map};
+
+        // 临时配置目录（与其他壳层测试同卷，避开小容量 tmpfs）。
+        use std::sync::atomic::AtomicU64;
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp");
+        std::fs::create_dir_all(&base).unwrap();
+        let root = base.join(format!(
+            "batchdesk-protected-stale-{}-{seq}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let store = ConfigStore::new(root.clone());
+
+        // ① 配置名单 = ["/a"]，据此建一张**配置来源**的预览。
+        let mut document = ConfigDocument::defaults();
+        let mut patch = Map::new();
+        patch.insert("protectedDirs".to_string(), json!(["/a"]));
+        document.apply_patch("security", &patch).unwrap();
+        store.save_config(&mut document).unwrap();
+        let list: Vec<String> = store
+            .load_config()
+            .unwrap()
+            .document
+            .scopes
+            .security
+            .unwrap()
+            .protected_dirs
+            .unwrap_or_default();
+        assert_eq!(list, vec!["/a".to_string()]);
+
+        let stored = StoredPlan {
+            plan: PlanDocument {
+                plan_id: "01PROTECTEDSTALE0000000000".to_string(),
+                kind: "c09".to_string(),
+                params: std::collections::BTreeMap::new(),
+                entries: Vec::new(),
+                stats: kernel::plan::PlanStats::default(),
+                warnings: Vec::new(),
+            },
+            protected_dirs: protected_dirs_from_strings(&list).unwrap(),
+            case_sense: CaseSense::Sensitive,
+            protected_source: ProtectedSource::Config,
+        };
+        assert!(
+            protected_list_staleness(&stored, &list).unwrap().is_none(),
+            "名单未变时不得判失效"
+        );
+
+        // ② 改配置名单 = ["/b"]（真实写盘 → 重新读出）。
+        let mut patch = Map::new();
+        patch.insert("protectedDirs".to_string(), json!(["/b"]));
+        document.apply_patch("security", &patch).unwrap();
+        store.save_config(&mut document).unwrap();
+        let changed: Vec<String> = store
+            .load_config()
+            .unwrap()
+            .document
+            .scopes
+            .security
+            .unwrap()
+            .protected_dirs
+            .unwrap_or_default();
+        assert_eq!(changed, vec!["/b".to_string()]);
+
+        let error = protected_list_staleness(&stored, &changed)
+            .unwrap()
+            .expect("配置名单变化必须让旧预览失效");
+        assert_eq!(error.code, "E1002");
+
+        // ③ 对照：Params 来源的预览不因名单变化而失效（那不是"旧预览"）。
+        let params_sourced = StoredPlan {
+            protected_source: ProtectedSource::Params,
+            ..stored.clone()
+        };
+        assert!(
+            protected_list_staleness(&params_sourced, &changed)
+                .unwrap()
+                .is_none(),
+            "Params 来源的名单是当前请求的一部分，不判失效"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

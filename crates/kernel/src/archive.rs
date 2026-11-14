@@ -91,6 +91,51 @@ pub struct ArchiveInspect {
 }
 
 /// 解压端口：平台实现 ZIP 读取，kernel 负责路径/限额/Journal。
+/// 逐文件清单项（方案 §5.11「压缩完成后自动生成文件清单（可含哈希）」）。
+///
+/// 只记名称与**未压缩**体积；哈希是「可含」的可选项，本次不默认计算
+/// （对每个源文件额外一遍全量读，代价与压缩本身同量级，须由调用方显式要求）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchiveManifestItem {
+    /// ZIP 内的条目名（`/` 分隔，与 ZIP 规范一致）。
+    pub name: String,
+    /// 未压缩字节数。
+    pub size: u64,
+}
+
+/// 压缩产物＋逐文件清单。
+#[derive(Clone, Debug)]
+pub struct CompressedArchive {
+    pub bytes: Vec<u8>,
+    /// 按写入顺序的逐文件清单（不含目录条目）。
+    pub manifest: Vec<ArchiveManifestItem>,
+}
+
+/// 把逐文件清单格式化成 `ApplyEntryReport.detail` 的可读文本。
+///
+/// 超过 `limit` 项时截断并注明剩余条数——`detail` 是**展示用**字段，
+/// 完整清单以 ZIP 本体为准（可用任意解压工具列出）。
+/// `detail` 里逐文件清单的展示条数上限（超出则截断并注明剩余条数）。
+/// 完整清单以 ZIP 本体为准——这里是展示字段，不是数据面。
+const MANIFEST_DETAIL_LIMIT: usize = 200;
+
+pub fn format_archive_manifest(items: &[ArchiveManifestItem], limit: usize) -> String {
+    use std::fmt::Write as _;
+    let total: u64 = items.iter().map(|item| item.size).sum();
+    let mut out = format!("{} 个文件，共 {} 字节", items.len(), total);
+    if items.is_empty() {
+        return out;
+    }
+    for item in items.iter().take(limit) {
+        let _ = write!(out, "\n{} {}", item.name, item.size);
+    }
+    if items.len() > limit {
+        let _ = write!(out, "\n… 其余 {} 项略", items.len() - limit);
+        return out;
+    }
+    out.trim_end().to_string()
+}
+
 pub trait ArchiveService: Send + Sync {
     /// 只读中央目录元数据：**不需要密码**，加密包也能列出条目（ADR-0074 §3.1）。
     fn inspect(&self, archive: &str) -> Result<ArchiveInspect, KernelError>;
@@ -103,12 +148,12 @@ pub trait ArchiveService: Send + Sync {
         password: Option<&str>,
         writer: &mut dyn Write,
     ) -> Result<(), KernelError>;
-    /// 将输入的源文件/目录打包为 ZIP 字节（UTF-8 文件名）。
+    /// 将输入的源文件/目录打包为 ZIP 字节（UTF-8 文件名），并返回逐文件清单。
     fn compress(
         &self,
         sources: &[String],
         compression: ArchiveCompression,
-    ) -> Result<Vec<u8>, KernelError>;
+    ) -> Result<CompressedArchive, KernelError>;
 }
 
 #[derive(Clone, Debug)]
@@ -906,10 +951,10 @@ pub fn apply_archive_plan(
                     continue;
                 }
             };
-            let bytes = match retry_archive_io(context, network, || {
+            let compressed = match retry_archive_io(context, network, || {
                 context.archive.compress(&sources, compression)
             }) {
-                Ok(Ok(bytes)) => bytes,
+                Ok(Ok(compressed)) => compressed,
                 Ok(Err(error)) => {
                     context.license.release(&plan.kind, 1);
                     failed += 1;
@@ -924,7 +969,7 @@ pub fn apply_archive_plan(
                 Err(error) => return Err(error),
             };
             match retry_archive_io(context, network, || {
-                context.fs.write_atomic(&target, &bytes)
+                context.fs.write_atomic(&target, &compressed.bytes)
             }) {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
@@ -977,11 +1022,16 @@ pub fn apply_archive_plan(
                 continue;
             }
             ok += 1;
+            // 方案 §5.11「压缩完成后自动生成文件清单」：逐文件清单进条目明细，
+            // 报告因此能直接回答"这个包里有哪些文件、各多大"（ADR-0030 的已知缺口）。
             reports.push(ApplyEntryReport {
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Ok,
                 error: None,
-                detail: None,
+                detail: Some(format_archive_manifest(
+                    &compressed.manifest,
+                    MANIFEST_DETAIL_LIMIT,
+                )),
             });
             continue;
         }
@@ -1115,6 +1165,8 @@ pub fn apply_archive_plan(
         }
         let mut first_error = None;
         let mut failures = 0usize;
+        // 逐文件清单（方案 §5.11）：只记真正写出的文件，目录条目不算。
+        let mut written: Vec<ArchiveManifestItem> = Vec::new();
         for item in &selection.selected {
             if is_cancelled(context) {
                 cancelled = true;
@@ -1212,6 +1264,10 @@ pub fn apply_archive_plan(
                 }
                 Err(error) => return Err(error),
             }
+            written.push(ArchiveManifestItem {
+                name: item.name.clone(),
+                size: item.size,
+            });
             let forward = FsOp::WriteAtomic {
                 path: target.clone(),
                 data_ref: None,
@@ -1248,11 +1304,13 @@ pub fn apply_archive_plan(
             });
         } else {
             ok += 1;
+            // 方案 §5.11「压缩完成后自动生成文件清单」——解压侧同口径：
+            // 报告逐文件列出写出了哪些文件、各多大（ADR-0029 的"不逐文件报告"缺口）。
             reports.push(ApplyEntryReport {
                 entry_id: entry.entry_id.clone(),
                 status: ApplyStatus::Ok,
                 error: None,
-                detail: None,
+                detail: Some(format_archive_manifest(&written, MANIFEST_DETAIL_LIMIT)),
             });
         }
     }
@@ -1338,6 +1396,8 @@ fn report_progress(context: &ArchiveApplyContext<'_>, done: u64, total: u64) {
             done,
             total,
             message: None,
+            entry_done: None,
+            entry_total: None,
         });
     }
 }
@@ -1458,10 +1518,18 @@ mod tests {
             plan.params.get("passwordProvided"),
             Some(&PlanParamValue::Bool(true))
         );
-        assert!(plan
+        let warning = plan
             .warnings
             .iter()
-            .any(|warning| warning.kind == "encrypted-archive"));
+            .find(|warning| warning.kind == "encrypted-archive")
+            .expect("加密包必须出 encrypted-archive 告警");
+        assert_eq!(warning.risk_level, RiskLevel::Caution);
+        // ADR-0074 §5.2：预览验不了密码，文案必须如实说——不能让用户以为已经验过。
+        let suggestion = warning.suggestion.clone().unwrap_or_default();
+        assert!(
+            suggestion.contains("preview cannot tell"),
+            "告警必须写明「预览判不出密码对错」，实际 {suggestion}"
+        );
         assert!(plan.entries[0]
             .reason
             .contains("decrypted with the password"));
@@ -1501,6 +1569,47 @@ mod tests {
         assert!(plan.entries[0]
             .reason
             .contains("skipped unsafe=0 existing=1 protected=1"));
+    }
+
+    /// 方案 §5.11 的逐文件清单格式化：空包、正常、超限截断三种形态。
+    #[test]
+    fn archive_manifest_formatting_handles_empty_and_overflow() {
+        use super::{format_archive_manifest, ArchiveManifestItem};
+
+        assert_eq!(format_archive_manifest(&[], 200), "0 个文件，共 0 字节");
+
+        let items = vec![
+            ArchiveManifestItem {
+                name: "a.txt".to_string(),
+                size: 6,
+            },
+            ArchiveManifestItem {
+                name: "sub/b.txt".to_string(),
+                size: 5,
+            },
+        ];
+        let formatted = format_archive_manifest(&items, 200);
+        assert!(formatted.contains("2 个文件，共 11 字节"), "{formatted}");
+        assert!(formatted.contains("a.txt 6"), "{formatted}");
+        assert!(formatted.contains("sub/b.txt 5"), "{formatted}");
+        assert_eq!(formatted.lines().count(), 3, "表头＋两行明细：{formatted}");
+
+        // 超限时截断并注明剩余条数——展示字段不假装是完整数据面。
+        let many: Vec<ArchiveManifestItem> = (0..5)
+            .map(|index| ArchiveManifestItem {
+                name: format!("f{index}.txt"),
+                size: 1,
+            })
+            .collect();
+        let truncated = format_archive_manifest(&many, 2);
+        assert!(truncated.contains("5 个文件，共 5 字节"), "{truncated}");
+        assert!(truncated.contains("f0.txt 1"), "{truncated}");
+        assert!(truncated.contains("f1.txt 1"), "{truncated}");
+        assert!(truncated.contains("… 其余 3 项略"), "{truncated}");
+        assert!(
+            !truncated.contains("f2.txt"),
+            "截断后不得再列第 3 项：{truncated}"
+        );
     }
 
     fn compress_input(sources: Vec<&str>, output: &str) -> PlanC10CompressInput {

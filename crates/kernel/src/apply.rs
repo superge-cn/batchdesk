@@ -64,6 +64,85 @@ fn default_entry_concurrency() -> usize {
     1
 }
 
+/// 方案 §5.12 的工作类别：决定并发默认值走哪一档。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkClass {
+    /// I/O 密集（复制／移动／解压）：SSD/NVMe 取 4，机械盘与网络盘取 2。
+    IoBound,
+    /// CPU 密集（哈希／编码检测／压缩）：核数减一，上限 8。
+    CpuBound,
+}
+
+/// 方案 §5.12「并发的默认值（决策）：按介质自适应」的纯函数实现。
+///
+/// - I/O 密集：SSD/NVMe → 4；机械盘／网络盘／判别不了 → 2（保守）。
+/// - CPU 密集：`cpus - 1`，夹在 1–8。
+/// - 结果统一夹进 `MAX_ENTRY_CONCURRENCY`（1–16）。
+pub fn adaptive_concurrency(medium: crate::fs::MediumKind, class: WorkClass, cpus: usize) -> usize {
+    let base = match class {
+        WorkClass::IoBound => match medium {
+            crate::fs::MediumKind::SsdNvme => 4,
+            crate::fs::MediumKind::Hdd
+            | crate::fs::MediumKind::Network
+            | crate::fs::MediumKind::Unknown => 2,
+        },
+        WorkClass::CpuBound => cpus.saturating_sub(1).clamp(1, 8),
+    };
+    base.clamp(1, MAX_ENTRY_CONCURRENCY)
+}
+
+/// 方案 §5.12 的「超大文件（>2 GB）自动把并发降为 1–2」。
+pub const HUGE_FILE_ENTRY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// 计划里是否存在超大条目（体积取自 `PlanExpected.size`）。
+pub fn plan_has_huge_entry(plan: &PlanDocument) -> bool {
+    plan.entries.iter().any(|entry| {
+        entry
+            .expected
+            .as_ref()
+            .is_some_and(|expected| expected.size > HUGE_FILE_ENTRY_BYTES)
+    })
+}
+
+/// 超大文件降并发的上限：SSD/NVMe 取 2，其余（机械盘／网络盘／判别不了）取 1。
+///
+/// 方案 §5.12 给的是区间「1–2」，此处按既有的介质分档把它落成确定值——
+/// 与 I/O 密集档「SSD 4／其余 2」同一套判别，保持单调（SSD: 4→2，其余: 2→1）。
+pub fn huge_entry_cap(medium: crate::fs::MediumKind) -> usize {
+    match medium {
+        crate::fs::MediumKind::SsdNvme => 2,
+        _ => 1,
+    }
+}
+
+/// 计划的工作类别（方案 §5.12 的两档）。
+///
+/// CPU 密集＝哈希／编码检测／压缩：转码（C01）、换行与替换重写（C02/C03）、
+/// 哈希去重（C09/C11）。c10 按动作分：压缩＝CPU、解压＝I/O。
+/// 其余（复制／移动／改名／分片／合并／CSV 抽取／目录清单）都是 I/O 主导。
+pub fn plan_work_class(plan: &PlanDocument) -> WorkClass {
+    use crate::plan::PlanAction;
+    match plan.kind.as_str() {
+        crate::plan::C01_KIND
+        | crate::line_endings::C02_KIND
+        | crate::replace_content::C03_KIND
+        | crate::plan::C09_KIND
+        | crate::csv_dedup::C11_KIND => WorkClass::CpuBound,
+        crate::archive::C10_KIND => {
+            if plan
+                .entries
+                .iter()
+                .any(|entry| entry.action == PlanAction::Archive)
+            {
+                WorkClass::CpuBound
+            } else {
+                WorkClass::IoBound
+            }
+        }
+        _ => WorkClass::IoBound,
+    }
+}
+
 /// 方案 §5.12 的执行期限额：单任务条目上限与条目级并发可调范围。
 /// 计划生成不设上限，执行层统一复核（不信任壳层/入口门禁）。
 pub fn validate_apply_limits(
@@ -649,6 +728,8 @@ fn report_progress(
             done,
             total,
             message: message.map(str::to_string),
+            entry_done: None,
+            entry_total: None,
         });
     }
 }
@@ -1012,12 +1093,204 @@ fn report_undo_progress(ports: &UndoPorts<'_>, phase: ProgressPhase, done: u64, 
             done,
             total,
             message: None,
+            entry_done: None,
+            entry_total: None,
         });
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// 方案 §5.12「超大文件（>2 GB）自动把并发降为 1–2」——判定与上限。
+    #[test]
+    fn huge_entries_are_detected_and_capped() {
+        use crate::apply::{
+            adaptive_concurrency, huge_entry_cap, plan_has_huge_entry, WorkClass,
+            HUGE_FILE_ENTRY_BYTES,
+        };
+        use crate::fs::MediumKind;
+        use crate::plan::{PlanAction, PlanEntry, PlanExpected};
+
+        fn transcode_entry() -> PlanEntry {
+            PlanEntry {
+                entry_id: "e1".to_string(),
+                source: "/s/a".to_string(),
+                target: None,
+                action: PlanAction::Transcode,
+                relation: None,
+                reason: String::new(),
+                conflict: None,
+                resolution: None,
+                blocked: None,
+                expected: None,
+                range: None,
+                merge: None,
+                csv: None,
+                csv_merge: None,
+                csv_extract: None,
+                csv_rows: None,
+                csv_dedup: None,
+                csv_filter: None,
+                csv_columns: None,
+                csv_sort: None,
+            }
+        }
+
+        fn entry_with_size(size: u64) -> PlanEntry {
+            let mut entry = transcode_entry();
+            entry.expected = Some(PlanExpected {
+                size,
+                algorithm: "sha256".to_string(),
+                hash: None,
+            });
+            entry
+        }
+
+        let mut document = plan(vec![entry_with_size(HUGE_FILE_ENTRY_BYTES)]);
+        assert!(
+            !plan_has_huge_entry(&document),
+            "恰好 2 GiB 不算「>2 GB」——边界是严格大于"
+        );
+        document.entries[0].expected.as_mut().unwrap().size = HUGE_FILE_ENTRY_BYTES + 1;
+        assert!(plan_has_huge_entry(&document));
+        document.entries.push(entry_with_size(1024));
+        assert!(
+            plan_has_huge_entry(&document),
+            "只要有一条超大就降并发，不因其他条目小就放行"
+        );
+
+        // 上限按介质分档，且必须真的把自适应值压下来
+        assert_eq!(huge_entry_cap(MediumKind::SsdNvme), 2);
+        assert_eq!(huge_entry_cap(MediumKind::Hdd), 1);
+        assert_eq!(huge_entry_cap(MediumKind::Network), 1);
+        assert_eq!(huge_entry_cap(MediumKind::Unknown), 1);
+        let normal = adaptive_concurrency(MediumKind::SsdNvme, WorkClass::IoBound, 8);
+        assert_eq!(normal, 4);
+        assert_eq!(normal.min(huge_entry_cap(MediumKind::SsdNvme)), 2);
+        let normal = adaptive_concurrency(MediumKind::Hdd, WorkClass::IoBound, 8);
+        assert_eq!(normal, 2);
+        assert_eq!(normal.min(huge_entry_cap(MediumKind::Hdd)), 1);
+    }
+
+    /// 方案 §5.12「并发的默认值（决策）：按介质自适应」——纯函数全档断言。
+    #[test]
+    fn adaptive_concurrency_follows_medium_and_work_class() {
+        use crate::apply::{adaptive_concurrency, WorkClass};
+        use crate::fs::MediumKind;
+
+        // I/O 密集：SSD/NVMe 4，机械盘／网络盘／判别不了 2
+        assert_eq!(
+            adaptive_concurrency(MediumKind::SsdNvme, WorkClass::IoBound, 8),
+            4
+        );
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Hdd, WorkClass::IoBound, 8),
+            2
+        );
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Network, WorkClass::IoBound, 8),
+            2
+        );
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Unknown, WorkClass::IoBound, 8),
+            2,
+            "判别不了必须保守取低档，不得按 SSD 放行"
+        );
+
+        // CPU 密集：核数减一，夹在 1–8
+        assert_eq!(
+            adaptive_concurrency(MediumKind::SsdNvme, WorkClass::CpuBound, 8),
+            7
+        );
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Hdd, WorkClass::CpuBound, 2),
+            1
+        );
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Hdd, WorkClass::CpuBound, 1),
+            1
+        );
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Hdd, WorkClass::CpuBound, 64),
+            8,
+            "CPU 密集上限 8，不随核数无限涨"
+        );
+        // 介质对 CPU 密集不产生影响
+        assert_eq!(
+            adaptive_concurrency(MediumKind::Network, WorkClass::CpuBound, 8),
+            7
+        );
+    }
+
+    /// 工作类别判定：哈希／编码检测／压缩归 CPU，复制／移动／解压归 I/O。
+    #[test]
+    fn plan_work_class_separates_cpu_from_io() {
+        use crate::apply::{plan_work_class, WorkClass};
+        use crate::plan::{PlanAction, PlanEntry};
+
+        fn entry(action: PlanAction) -> PlanEntry {
+            PlanEntry {
+                entry_id: "e1".to_string(),
+                source: "/s/a".to_string(),
+                target: None,
+                action,
+                relation: None,
+                reason: String::new(),
+                conflict: None,
+                resolution: None,
+                blocked: None,
+                expected: None,
+                range: None,
+                merge: None,
+                csv: None,
+                csv_merge: None,
+                csv_extract: None,
+                csv_rows: None,
+                csv_dedup: None,
+                csv_filter: None,
+                csv_columns: None,
+                csv_sort: None,
+            }
+        }
+
+        for (kind, expected) in [
+            (crate::plan::C01_KIND, WorkClass::CpuBound),
+            (crate::line_endings::C02_KIND, WorkClass::CpuBound),
+            (crate::replace_content::C03_KIND, WorkClass::CpuBound),
+            (crate::plan::C09_KIND, WorkClass::CpuBound),
+            (crate::csv_dedup::C11_KIND, WorkClass::CpuBound),
+        ] {
+            let mut document = plan(vec![entry(PlanAction::Transcode)]);
+            document.kind = kind.to_string();
+            assert_eq!(plan_work_class(&document), expected, "{kind}");
+        }
+
+        // c10：压缩＝CPU，解压＝I/O
+        let mut compress = plan(vec![entry(PlanAction::Archive)]);
+        compress.kind = crate::archive::C10_KIND.to_string();
+        assert_eq!(plan_work_class(&compress), WorkClass::CpuBound);
+        let mut extract = plan(vec![entry(PlanAction::Extract)]);
+        extract.kind = crate::archive::C10_KIND.to_string();
+        assert_eq!(plan_work_class(&extract), WorkClass::IoBound);
+
+        // 复制／移动／改名／分片／合并／清单都是 I/O 主导
+        for (kind, action) in [
+            (crate::c07::C07_KIND, PlanAction::Move),
+            (crate::name_replace::C04_KIND, PlanAction::Rename),
+        ] {
+            let mut document = plan(vec![entry(action)]);
+            document.kind = kind.to_string();
+            assert_eq!(plan_work_class(&document), WorkClass::IoBound, "{kind}");
+        }
+        let mut split = plan(vec![entry(PlanAction::Split)]);
+        split.kind = crate::split::F01_KIND.to_string();
+        assert_eq!(plan_work_class(&split), WorkClass::IoBound);
+        let mut merge = plan(vec![entry(PlanAction::Merge)]);
+        merge.kind = crate::merge::F04_KIND.to_string();
+        assert_eq!(plan_work_class(&merge), WorkClass::IoBound);
+    }
+
     use super::*;
     use crate::fs::{CaseSense, ConflictPolicy, DirEntryInfo, EntryAttrs, ScanFilter, StatInfo};
     use crate::journal::{FsOp, JournalEntry, JournalSink, JournalStatus, JournalStore};

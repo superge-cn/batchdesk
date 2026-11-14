@@ -856,6 +856,14 @@ button {
   font-family: var(--font-mono);
 }
 
+/* 逐文件清单等"条目级明细"（设计 06 §3：ApplyEntryReport.detail 不含绝对路径、界面在显示）。
+   明细本身是多行文本（名称＋体积逐行），故保留换行。 */
+.manifest {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-line;
+}
+
 @media (max-width: 1100px) {
   .content-grid {
     grid-template-columns: minmax(0, 1fr);

@@ -2,7 +2,7 @@
 
 > 状态：v0.2（2026-11-07 排期版）｜用途：把「待人工执行」的用例拆成可排期的动作，并给出**当天怎么跑**（§9 议程 B0…B6）
 > 相对 v0.1 的变化：① 同步 OQ-42 关闭后的正式档口径——C-2 编码两变体（T v1.13 附录 C）与吞吐双分母（方案 v1.20 §9.1），W5 的 Windows 重测按正式档执行；② W4 收编——`C10-EXE-04` 已随 ADR-0074 转 ◐（CI 载体），W4 只剩 `C15-PRE-04` 且属开发线、不占实机日；③ v0.1 §9 里「不在范围」的 S03 崩溃演练、C09 T 全量 UI 验收、UNC/长路径抽样、CSP 真 WebView 核对本版排入议程 B6；④ 新增 B0 物料/机器清单与分块时长估算。
-> 权威：判定点只在 T v1.13 与产品方案 v1.22；本文件不复制判定文本，只规定**在哪台机器上、按什么顺序、用什么手段**制造条件。
+> 权威：判定点只在 T v1.13 与产品方案 v1.24；本文件不复制判定文本，只规定**在哪台机器上、按什么顺序、用什么手段**制造条件。
 > 数据源：`docs/testing/用例覆盖映射表-v0.2.csv`（状态与缺口）、`docs/testing/用例执行台账-v0.1.csv`（判定）、`fixtures/corpus/manual-only.txt`（人工语料）。条数以两份 CSV 为准（2026-11-07 重跑：实测通过 264／待人工执行 32）。
 > 上一版：[v0.1](./Windows实机日检查清单-v0.1.md)（2026-11-05 起草、11-06 更新）。
 
@@ -19,7 +19,7 @@
 
 | 组 | 性质 | 条数 | 实例 | 实机日之外能推进到哪 |
 |---|---|---|---|---|
-| W1 | 撤销时目标被占用（Windows 共享冲突） | 17 | F01/F02/F03/F04/F05/F06/F07/F08/F09/F10/F11/F13/C01/C02/C03/C07/C10 的 `RBK-03` | 不能：POSIX 允许删除/改名打开中的文件，测不到共享冲突；只读半边已由语料 E03 覆盖（Linux，asserted） |
+| W1 | 撤销时目标被占用（Windows 共享冲突） | 17 | F01/F02/F03/F04/F05/F06/F07/F08/F09/F10/F11/F13/C01/C02/C03/C07/C10 的 `RBK-03` | **已完成**：①② 于 2026-11-07 B2 实机通过（`E:/batchdesk-shijiri/B2-records.md`）；③「提示满足三层结构」于 2026-11-13 补齐（撤销失败清单＋Vitest＋实机 CLI 错误数据；全链路 GUI 走查受鼠标注入限制，待驱动） |
 | W2 | Windows 特色环境 | 5 | `F10-EXE-02`／`C09-EXE-03`（OneDrive 占位）、`F11-EXE-02`（E04 配额）、`C07-EXE-04`（E01 目标占用）、`C07-EXE-05`（R05 UNC 断线） | 不能：占位文件、配额卷、SMB 断线都是 Windows/网络侧事实 |
 | W3 | 文件系统大小写折叠 | 1 | `C06-EXE-02`（@R02 折叠恢复） | 不能：本机 ext4 大小写敏感；计划层折叠判定已由语料 R02 断言，缺的是真实不敏感卷上的撤销 |
 | W4 | 实现缺口（功能未做） | 1 | `C15-PRE-04`（改并发后旧预览失效） | 属**开发线**（OQ-35 改判 ⛔：运行中调参与面板重算 UI 未实现），不占实机日；做完后仍需实机走一遍交互 |
@@ -63,6 +63,7 @@ python fixtures\bench\measure.py c2rw --case c02 --rss-limit-mib 1024
 python fixtures\bench\measure.py c2rw --case c03-plain  --rss-limit-mib 1024
 python fixtures\bench\measure.py c2rw --case c03-regex  --rss-limit-mib 1024
 python fixtures\bench\measure.py c2rw --case c03-cell   --rss-limit-mib 1024
+python fixtures\bench\measure.py c2merge --size-mib 2048 --sources 4 --rss-limit-mib 1024
 :: GB18030 正式变体：先固化数据集，再与 c01 ASCII 臂背靠背同窗口
 python fixtures\bench\C-2-超大单文件\gen_c2.py --encoding gb18030
 python fixtures\bench\measure.py c2rw --case c01 --gb-multibyte --size-mib 2048 --rss-limit-mib 1024
@@ -130,9 +131,13 @@ R3 判定点（TC §2 R3）：撤销时目标被占用／只读／已被第三�
 
 顺序：`F10-EXE-02`＋`C09-EXE-03`（OneDrive 占位，**落 E02 语料记录**）→ `F11-EXE-02`（配额卷，**落 E04 语料记录**）→ `C07-EXE-04`（Excel 真占用，**落 E01 语料记录**）→ `C07-EXE-05`（UNC 断线，**落 R05 语料记录**）。每条注意 §7 表的"常见假象"列。
 
-### B2｜W1 占用批量 17 条（约 2–3 小时）
+### B2｜W1 占用批量 17 条 —— **已完成（①② 2026-11-07；③ 2026-11-13）**
 
-PowerShell `FileShare.None` 持句柄法（§5），逐功能的 apply→undo 走 `RBK-03`；一次准备环境，逐条只换目标文件与功能命令。逐条核对三点：明确失败原因呈现、映射表不清空、无二次破坏；条目文案按三层结构核对（判据回 T，不在本清单复述）。
+PS `FileShare.None` 持句柄法（§5），逐功能的 apply→undo 走 `RBK-03`；一次准备环境，逐条只换目标文件与功能命令。逐条核对三点：明确失败原因呈现、映射表不清空、无二次破坏；条目文案按三层结构核对（判据回 T，不在本清单复述）。
+
+**①② 结果**（`E:/batchdesk-shijiri/B2-records.md`）：17 条 undo1 对被锁条目一律报 E2008（os error 32／级联 os error 145），被锁对象 sha256 原样，解锁后 undo2 补完，终态全 PASS。
+
+**③ 结果**（2026-11-13）：撤销失败提示补齐三层结构——`web/src/App.tsx` 撤销结果区新增逐条失败清单（码位 · 人话摘要 ＋ 建议动作，技术 detail 不渲染）。证据：`App.undo-failure.test.tsx` 两项；实机 CLI 复现（`f01` 分割→apply→锁 `parts/src.2.txt`→undo → `reverted=7 failed=1`，`detail` 含绝对路径，界面只显示本地化 summary＋action）；实机 debug 桌面壳＋Vite 键盘触发「生成计划预览」成功。**限制**：`SendInput` 的 LEFTDOWN/UP 被桌面壳忽略（click/drag 无效，WHEEL 与键盘有效），「undo 失败→清单展示」的全链路 GUI 走查未完成，待 WebDriver/tauri-driver 就绪后补。证据与截图：`E:/batchdesk-shijiri/b2/ui-walkthrough/`。
 
 ### B3｜W3 大小写折叠 1 条（约 15 分钟）
 
@@ -154,6 +159,7 @@ PowerShell `FileShare.None` 持句柄法（§5），逐功能的 apply→undo �
 | S03 实机崩溃演练 | 执行中强杀进程（任务管理器或 `taskkill /F`）→ 重启 → 验证中断任务 `interrupted` 提示与 resume/rollback/discard 三条路 | 壳层恢复切片已有单测（Linux）；实机已执行（2026-11-08 第二/三轮）：回滚 71/71 全 reverted 且零 Journal 孤儿、续跑 1131/1131 幂等跳过、断线自动暂停显示原因后继续 5135/5135；**放弃路已于 2026-11-09 补验**（横幅「放弃」→ 提示「已执行条目仍可通过 Journal 撤销」、`tasks.json` 终态剪枝、Journal 保留 51 applied／0 reverted，见 `s03-cleanup/`）；证据 `E:/batchdesk-shijiri/s03/`，台账见 DEVELOPMENT-PLAN §6.1 |
 | 崩溃临时文件启动清理（ADR-0084 §7） | release 壳执行中强杀，隔离目录留下 `.batchdesk-copy-<pid>-*`；重启后死 PID 残留应被删，存活 PID 临时文件与普通文件保留；步骤见 ADR-0084 §7「实机走查计划」 | 实机已执行（2026-11-09）：残留制造成功（`.batchdesk-copy-30464-103`，8 MiB）；**首轮查实 D8**（已退出但仍被句柄保持的 PID 被误判存活→残留未删，先红后绿修复为 `GetExitCodeProcess == STILL_ACTIVE`）；修复版重启后残留已删、存活 PID 与普通文件保留；放弃路同轮补验通过。证据 `E:/batchdesk-shijiri/s03-cleanup/`，回填 ADR-0084 §7「实机走查结果」与 DEVELOPMENT-PLAN §6.1 清理行 |
 | UNC/长路径矩阵抽样 | >260 字符深树的扫描/改名/撤销、`\\?\` 前缀显示值、UNC 共享上的 canonicalize 行为 | 长路径计划级断言 R01/R06 已 asserted；实机抽样结论记台账＋映射表缺口栏 |
+| S01-PRE-05 UNC 三态（**已完成 2026-11-13**） | 管理员建本机 SMB 共享：`New-SmbShare -Name BatchDeskS01 -Path E:\tmp\s01share -FullAccess Everyone`；跑 `BATCHDESK_UNC_SHARE='//localhost/BatchDeskS01' BATCHDESK_UNC_SLOW_HOST='//10.255.255.1/share' cargo test -p batchdesk-platform --test unc_real_probe -- --nocapture`；验完 `Remove-SmbShare -Name BatchDeskS01 -Force` | **已完成**：可达 `Some(true)` 3 ms（主机名形 1258 ms）／不可达 `Some(false)` 64 ms／超时 `None` 2001 ms（＝`UNC_PROBE_TIMEOUT`）；两态 Warn 带 E2005、不整任务阻断（方案 §4.9）。先红后绿通过（指向不存在的共享→断言转红）。**观察**：主机名形首探 1258 ms，距 2 s 超时仅约 0.74 s 余量——慢链路下真实可达共享也可能被降级为提示，属设计口径、非缺陷。证据 `E:/batchdesk-shijiri/2026-11-13-s01-unc-three-states/`。**仍未做**：R05（`C07-EXE-05`）要的是**异机** SMB 链路断线，本机回环替代不了，仍归实机日 |
 | CSP 真 WebView 核对 | release 构建加载，确认控制台无 CSP 违规报告；装了 tauri-driver 则跑 `node scripts/e2e-tauri.mjs` 的真 WebView 链路 | `scripts/e2e-tauri.mjs` 手动项清账；装不上驱动则手动核对留截图 |
 
 ## 10. 不在本清单范围内

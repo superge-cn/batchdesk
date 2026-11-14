@@ -129,9 +129,14 @@ export interface TaskHandle {
 export interface ProgressEvent {
   taskId: string;
   phase: ProgressPhase;
+  /** 任务级进度：条目数（已完成的条目／总条目）。 */
   done: number;
   total: number;
   message?: string;
+  /** 条目内进度（字节，ADR-0100）：当前条目已处理／总字节。
+   * 存在即表示这是**条目内**事件，此时 done/total 无意义（内核填 0）。 */
+  entryDone?: number;
+  entryTotal?: number;
 }
 
 export interface TaskStateEvent {
@@ -157,6 +162,9 @@ export interface TaskSummary {
   startedAt?: string;
   finishedAt?: string;
   message?: string;
+  /** 条目内进度（字节，ADR-0100）。旧快照可能没有。 */
+  entryDone?: number;
+  entryTotal?: number;
 }
 
 export interface TaskDetail {

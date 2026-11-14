@@ -751,6 +751,8 @@ impl crate::generic_apply::ContentRewriter for TranscodeRewriter {
         _entry: &crate::plan::PlanEntry,
         input: &mut dyn std::io::Read,
         output: &mut dyn std::io::Write,
+        // C01 尚未逐块检查取消（ADR-0097 §5）；取消仍会在条目边界生效。
+        _cancel: &dyn crate::progress::CancelToken,
     ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
         if let Some(source) = self.source {
             if let Some(prefix) = self.target.bom_prefix() {

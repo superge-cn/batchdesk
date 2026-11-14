@@ -117,6 +117,9 @@ interface TaskView {
   done: number;
   total: number;
   message?: string;
+  /** 条目内进度（字节，ADR-0100）：仅条目内事件携带；条目边界事件清空。 */
+  entryDone?: number;
+  entryTotal?: number;
   report?: ApplyReport;
 }
 
@@ -194,6 +197,24 @@ function planSortKey(entry: PlanEntry, column: string): string | undefined {
   return entry.blocked ? `blocked:${entry.blocked.code}` : "pending";
 }
 
+/** 字节数的人类可读形式（条目内进度用，ADR-0100）。单位符号按 IEC 口径。 */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = "B";
+  for (const candidate of units) {
+    value /= 1024;
+    unit = candidate;
+    if (value < 1024) {
+      break;
+    }
+  }
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${unit}`;
+}
+
 function resultSortKey(entry: ApplyEntryReport, column: string): string | undefined {
   if (column === "entry") return entry.entryId;
   if (column === "error") return entry.error?.code;
@@ -255,6 +276,9 @@ function TaskPanel({
       </div>
       <div className="hint">
         {phaseLabel(t, task.phase)} · {task.done}/{task.total}
+        {task.entryTotal !== undefined && task.entryDone !== undefined
+          ? ` · ${formatBytes(task.entryDone)}/${formatBytes(task.entryTotal)}`
+          : ""}
         {task.message ? ` · ${task.message}` : ""}
       </div>
       {active && (
@@ -499,15 +523,20 @@ function AppShell() {
 
     track(
       listenTaskProgress((event) => {
+        // 条目内（字节级）事件（ADR-0100）：只更新字节字段，条目计数由条目边界事件维护；
+        // 反之条目边界事件要清掉上一段的字节进度，避免张冠李戴。
+        const entryLevel = event.entryTotal === undefined;
         const entryProgress =
-          event.phase === "queued" || event.phase === "executing"
+          entryLevel && (event.phase === "queued" || event.phase === "executing")
             ? { done: event.done, total: event.total }
             : {};
         patchTask(event.taskId, (current) => ({
           ...current,
           phase: event.phase,
           ...entryProgress,
-          message: event.message
+          message: event.message,
+          entryDone: entryLevel ? undefined : event.entryDone,
+          entryTotal: entryLevel ? undefined : event.entryTotal
         }));
       })
     );
@@ -1538,6 +1567,55 @@ function AppShell() {
                             : ""
                         })}
                       </span>
+                    </div>
+                  )}
+
+                  {/* 撤销失败清单（R3 判定点③「提示满足三层结构」）：横幅只报计数，
+                      用户看不到哪几条失败、为什么、该怎么办。此处逐条给出
+                      「码位 · 人话摘要」＋「建议动作」——技术 detail（路径/堆栈）
+                      按设计 06 §3 只进诊断日志，界面上不渲染。 */}
+                  {undoFailures > 0 && undoTask?.report && (
+                    <div
+                      className="table"
+                      style={
+                        {
+                          marginTop: "var(--space-3)",
+                          "--col-1": "minmax(0, 1.2fr)",
+                          "--col-2": "minmax(0, 1.5fr)",
+                          "--col-3": "minmax(0, 1.8fr)"
+                        } as CSSProperties
+                      }
+                    >
+                      <div className="row row-head">
+                        <span className="path">{t("c09.result.failureEntry")}</span>
+                        <span className="reason">{t("c09.result.failureReason")}</span>
+                        <span>{t("c09.result.failureAction")}</span>
+                      </div>
+                      <VirtualList
+                        label={t("c09.result.failureEntry")}
+                        items={undoTask.report.entries.filter(
+                          (entry) => entry.status === "failed"
+                        )}
+                        getKey={(entry) => entry.entryId}
+                        renderRow={(entry) => {
+                          const failure = entry.error
+                            ? describeError(t, entry.error)
+                            : null;
+                          return (
+                            <div className="row">
+                              <span className="path" title={entry.entryId}>
+                                {entry.entryId}
+                              </span>
+                              <span className="reason" title={failure?.title}>
+                                {entry.error && failure
+                                  ? `${entry.error.code} · ${failure.title}`
+                                  : "—"}
+                              </span>
+                              <span className="hint">{failure?.action ?? "—"}</span>
+                            </div>
+                          );
+                        }}
+                      />
                     </div>
                   )}
 

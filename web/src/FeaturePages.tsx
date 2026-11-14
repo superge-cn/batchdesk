@@ -25,6 +25,7 @@ import { useI18n, type MessageKey } from "./i18n";
 import type { Translate } from "./labels";
 import { dryRunStatusLabel, phaseLabel, stateBadge } from "./labels";
 import type {
+  ApplyReport,
   IpcError,
   PlanDocument,
   PlanEntry,
@@ -51,6 +52,9 @@ interface TaskView {
   done: number;
   total: number;
   message?: string;
+  /** 终态报告：条目级明细（设计 06 §3 的 `ApplyEntryReport.detail`）走这里上界面，
+   *  C10 的逐文件清单即其一。与 App 侧的 `TaskView` 同名字段对齐。 */
+  report?: ApplyReport;
 }
 
 function planOperationFor(
@@ -850,6 +854,9 @@ export function FeaturePages({
     track(listenTaskState((event) => patch(event.taskId, { state: event.state })));
     track(
       listenTaskDone((event) => {
+        // 报告随 done 事件到达（`event.summary` 就是 ApplyReport）——条目级明细
+        // （C10 的逐文件清单）据此上界面，不必等 getTask 回读。
+        patch(event.taskId, { report: event.summary });
         getTask(event.taskId)
           .then((detail) =>
             patch(event.taskId, {
@@ -1469,6 +1476,15 @@ export function FeaturePages({
             {terminalOk && (
               <div className="banner banner-info" role="status">
                 <div>{t("feature.execute.done")}</div>
+                {/* 条目级明细（设计 06 §3 的 ApplyEntryReport.detail：执行计数类技术行、
+                    不含绝对路径、界面在显示）——C10 的逐文件清单走这里。 */}
+                {task?.report?.entries
+                  .filter((entry) => entry.detail)
+                  .map((entry) => (
+                    <div key={entry.entryId} className="manifest">
+                      {entry.detail}
+                    </div>
+                  ))}
               </div>
             )}
           </section>

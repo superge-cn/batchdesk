@@ -104,7 +104,8 @@ fn fixture(name: &str) -> Fixture {
             &[first.display().to_string(), second.display().to_string()],
             ArchiveCompression::Store,
         )
-        .expect("compress fixture");
+        .expect("compress fixture")
+        .bytes;
     let archive = root.join("bundle.zip");
     fs::write(&archive, &bytes).expect("write archive");
 

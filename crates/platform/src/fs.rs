@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use kernel::error::KernelError;
 use kernel::fs::{
-    CaseSense, ConflictPolicy, DirEntryInfo, EntryAttrs, EntryKind, FsAdapter, PathOutcome,
-    PathOutcomeKind, RewriteCallback, ScanFilter, StatInfo,
+    CaseSense, ConflictPolicy, DirEntryInfo, EntryAttrs, EntryKind, FsAdapter, MediumKind,
+    PathOutcome, PathOutcomeKind, RewriteCallback, ScanFilter, StatInfo,
 };
 
 pub struct CliFsAdapter {
@@ -169,6 +169,13 @@ pub fn case_sensitivity() -> CaseSense {
 impl FsAdapter for CliFsAdapter {
     fn is_network_path(&self, path: &str) -> bool {
         kernel::retry::is_network_path(path) || mapped_drive_is_remote(path)
+    }
+
+    fn medium_kind(&self, path: &str) -> MediumKind {
+        if self.is_network_path(path) {
+            return MediumKind::Network;
+        }
+        volume_seek_penalty(path)
     }
 
     fn read_bytes(&self, path: &str) -> Result<Vec<u8>, KernelError> {
@@ -521,6 +528,73 @@ impl FsAdapter for CliFsAdapter {
             }
         }
         Ok(out)
+    }
+
+    fn read_ranges_stream(
+        &self,
+        source: &str,
+        ranges: &[(u64, u64)],
+        read: &mut dyn FnMut(&[u8]) -> Result<(), KernelError>,
+    ) -> Result<(), KernelError> {
+        // 与 read_ranges 同一套边界校验，只是把「追加到 Vec」换成「边读边回调」，
+        // 内存因此是 O(块) 而不是 O(选中区间)（E5 判据①）。
+        if ranges.is_empty() {
+            return Err(KernelError::new(
+                "E1002",
+                "range reads require at least one byte range",
+                None,
+                false,
+            ));
+        }
+        let from = fs_path(Path::new(source));
+        let allocated = fs::metadata(&from)
+            .map_err(|error| io_error(&error, Path::new(source)))?
+            .len();
+        let mut file =
+            fs::File::open(&from).map_err(|error| io_error(&error, Path::new(source)))?;
+        const READ_CHUNK: usize = 64 * 1024;
+        let mut buffer = vec![0u8; READ_CHUNK];
+        for (start, end) in ranges {
+            if start >= end {
+                return Err(KernelError::new(
+                    "E1002",
+                    "range read must be non-empty",
+                    None,
+                    false,
+                ));
+            }
+            if *end > allocated {
+                return Err(KernelError::new(
+                    "E2010",
+                    "source file shrank since planning; re-plan before applying",
+                    Some(format!(
+                        "{} has {allocated} bytes, range needs up to {end}",
+                        source
+                    )),
+                    true,
+                ));
+            }
+            file.seek(SeekFrom::Start(*start))
+                .map_err(|error| io_error(&error, Path::new(source)))?;
+            let mut remaining = end - start;
+            while remaining > 0 {
+                let want = (buffer.len() as u64).min(remaining) as usize;
+                let read_now = file
+                    .read(&mut buffer[..want])
+                    .map_err(|error| io_error(&error, Path::new(source)))?;
+                if read_now == 0 {
+                    return Err(KernelError::new(
+                        "E2010",
+                        "source file shrank while reading the planned range",
+                        None,
+                        true,
+                    ));
+                }
+                read(&buffer[..read_now])?;
+                remaining -= read_now as u64;
+            }
+        }
+        Ok(())
     }
 
     fn copy_ranges_atomic(
@@ -1142,6 +1216,95 @@ fn mapped_drive_is_remote(path: &str) -> bool {
 #[cfg(not(windows))]
 fn mapped_drive_is_remote(_path: &str) -> bool {
     false
+}
+
+/// 方案 §5.12 的介质判别：经 `IOCTL_STORAGE_QUERY_PROPERTY` 问
+/// `StorageDeviceSeekPenaltyProperty`——`IncursSeekPenalty == false` 即 SSD/NVMe。
+///
+/// **必须开卷句柄**（`\.\X:`）而不是文件句柄：实测（2026-11-13 本机 NVMe）
+/// 文件句柄一律 `ERROR_INVALID_PARAMETER(87)`，卷句柄才返回描述符。卷句柄
+/// 不需要管理员权限，`dwDesiredAccess` 传 0 即可。
+/// 任何一步失败都返回 `Unknown`（保守取低档），不影响任务正确性。
+#[cfg(windows)]
+fn volume_seek_penalty(path: &str) -> MediumKind {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Ioctl::{
+        PropertyStandardQuery, StorageDeviceSeekPenaltyProperty, DEVICE_SEEK_PENALTY_DESCRIPTOR,
+        IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    /// `DEV_PROP_V1`：seek-penalty 描述符的版本号。
+    const DEV_PROP_V1: u32 = 1;
+
+    // 卷句柄路径：只认「盘符:」开头；UNC 与映射网络盘已在上一层判为 Network，
+    // 相对路径没有盘符可问。
+    let bytes = path.trim_start().as_bytes();
+    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return MediumKind::Unknown;
+    }
+    let root = format!("{}{}", (bytes[0] as char).to_ascii_uppercase(), ":");
+    let mut device: Vec<u16> = format!(r"\\.\{}", root).encode_utf16().collect();
+    device.push(0);
+    // SAFETY: `device` 以 NUL 结尾；CreateFileW 只读该缓冲区，随后关闭句柄。
+    let handle = unsafe {
+        CreateFileW(
+            device.as_ptr(),
+            0,
+            FILE_SHARE_NONE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return MediumKind::Unknown;
+    }
+    let medium = {
+        let query = STORAGE_PROPERTY_QUERY {
+            PropertyId: StorageDeviceSeekPenaltyProperty,
+            QueryType: PropertyStandardQuery,
+            ..Default::default()
+        };
+        let mut descriptor = DEVICE_SEEK_PENALTY_DESCRIPTOR {
+            Version: DEV_PROP_V1,
+            Size: std::mem::size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32,
+            IncursSeekPenalty: false,
+        };
+        let mut returned = 0u32;
+        // SAFETY: `handle` 由上面的 CreateFileW 取得；输入/输出缓冲区长度与结构体
+        // 大小一致；`returned` 是可写对齐的 u32。
+        let ok = unsafe {
+            DeviceIoControl(
+                handle,
+                IOCTL_STORAGE_QUERY_PROPERTY,
+                std::ptr::addr_of!(query).cast(),
+                std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+                std::ptr::addr_of_mut!(descriptor).cast(),
+                std::mem::size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32,
+                std::ptr::addr_of_mut!(returned),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 || returned < std::mem::size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32 {
+            MediumKind::Unknown
+        } else if descriptor.IncursSeekPenalty {
+            MediumKind::Hdd
+        } else {
+            MediumKind::SsdNvme
+        }
+    };
+    // SAFETY: `handle` 由上面的 CreateFileW 取得，且没有泄漏。
+    unsafe { CloseHandle(handle) };
+    medium
+}
+
+#[cfg(not(windows))]
+fn volume_seek_penalty(_path: &str) -> MediumKind {
+    MediumKind::Unknown
 }
 
 /// 崩溃残留清理：隔离目录里的 `.batchdesk-copy-<pid>-<n>` 是 `copy_file_atomic`
@@ -1919,6 +2082,74 @@ mod tests {
         );
     }
 
+    /// 流式区间读（ADR-0099）：字节内容与 `read_ranges` 完全一致，但边读边回调，
+    /// 内存 O(块)；回调错误必须向上传播（不得吞掉后继续读）。
+    #[test]
+    fn read_ranges_stream_delivers_the_same_bytes_in_order_and_propagates_callback_error() {
+        let dir = TempDir::new();
+        let source = dir.0.join("source.csv");
+        fs::write(
+            &source,
+            b"header
+row1
+row2
+",
+        )
+        .unwrap();
+        let adapter = CliFsAdapter::new(Some(dir.0.join("quarantine")));
+        let source_text = source.to_string_lossy();
+
+        let mut joined = Vec::new();
+        adapter
+            .read_ranges_stream(source_text.as_ref(), &[(0, 7), (7, 12)], &mut |chunk| {
+                joined.extend_from_slice(chunk);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            joined,
+            b"header
+row1
+"
+        );
+
+        // 边界校验与 read_ranges 同口径
+        assert_eq!(
+            adapter
+                .read_ranges_stream(source_text.as_ref(), &[(0, 999)], &mut |_| Ok(()))
+                .unwrap_err()
+                .code,
+            "E2010"
+        );
+        assert_eq!(
+            adapter
+                .read_ranges_stream(source_text.as_ref(), &[(3, 3)], &mut |_| Ok(()))
+                .unwrap_err()
+                .code,
+            "E1002"
+        );
+
+        // 回调错误向上传播，且不再继续读。
+        // 用大于单个读取块（64 KiB）的区间，确保会走到第二块。
+        let big = dir.0.join("big.bin");
+        fs::write(&big, vec![b'x'; 200_000]).unwrap();
+        let big_text = big.to_string_lossy();
+        let mut calls = 0u32;
+        let error = adapter
+            .read_ranges_stream(big_text.as_ref(), &[(0, 200_000)], &mut |chunk| {
+                calls += 1;
+                let _ = chunk;
+                if calls == 1 {
+                    Ok(())
+                } else {
+                    Err(KernelError::new("E5001", "injected", None, true))
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "E5001");
+        assert_eq!(calls, 2, "第二块触发注入错误后应中止");
+    }
+
     #[cfg(windows)]
     #[test]
     fn extended_path_normalizes_before_prefixing_and_keeps_relative_paths() {
@@ -1970,5 +2201,41 @@ mod tests {
         };
         assert_eq!(case_sensitivity(), expected);
         assert_eq!(CliFsAdapter::new(None).case_sensitivity(), expected);
+    }
+}
+
+/// 方案 §5.12 的介质判别实机用例（仅 Windows）。
+///
+/// 断言只取**确定性**的三条：本地卷不得判成网络盘、UNC 必须判成网络盘、
+/// 无盘符路径问不出介质。至于是 SSD 还是机械盘取决于具体存储栈（本机 NVMe），
+/// 不写死——判别失败时实现会保守返回 `Unknown` 并落到低档，那是设计好的降级。
+#[cfg(all(test, windows))]
+mod medium_tests {
+    use kernel::fs::{FsAdapter, MediumKind};
+
+    #[test]
+    fn local_volume_is_not_network() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("batchdesk-medium-probe.txt");
+        std::fs::write(&path, b"x").unwrap();
+        let medium = super::CliFsAdapter::new(None).medium_kind(&path.to_string_lossy());
+        eprintln!("local volume reported as {medium:?}");
+        assert_ne!(medium, MediumKind::Network, "本地卷不该判成网络盘");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unc_is_network_and_relative_path_is_unknown() {
+        let fs = super::CliFsAdapter::new(None);
+        assert_eq!(
+            fs.medium_kind(r"\\server\\share\a.txt"),
+            MediumKind::Network,
+            "UNC 必须在问 IOCTL 之前就判成网络盘"
+        );
+        assert_eq!(
+            fs.medium_kind(r"relative\path.txt"),
+            MediumKind::Unknown,
+            "没有盘符就没有卷句柄可开，应如实返回 Unknown"
+        );
     }
 }

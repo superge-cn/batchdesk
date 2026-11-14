@@ -587,4 +587,64 @@ mod tests {
         assert_eq!(list.recipes.len(), 1);
         assert_eq!(list.warnings.len(), 1);
     }
+
+    #[test]
+    fn valid_config_read_writes_nothing() {
+        // S01-EXE-02：预检会读安全 scope（protectedDirs／余量），
+        // 读取路径不得顺手写盘。
+        let (dir, store) = store();
+        let mut document = ConfigDocument::defaults();
+        document.scopes.security = Some(kernel::config::SecurityScope {
+            protected_dirs: Some(vec!["D:/protected".to_string()]),
+            ..Default::default()
+        });
+        store.save_config(&mut document).unwrap();
+
+        let before = fs::read_dir(&dir.0)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let load = store.load_config().unwrap();
+        assert!(load.warning.is_none());
+        assert!(!load.read_only);
+        let security = load.document.scopes.security.unwrap_or_default();
+        assert_eq!(
+            security.protected_dirs.unwrap_or_default(),
+            vec!["D:/protected".to_string()]
+        );
+
+        let after = fs::read_dir(&dir.0)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(before, after, "读配置不得新增/修改任何文件");
+    }
+
+    #[test]
+    fn corrupt_config_backup_is_the_only_write() {
+        // 有意例外：配置损坏时 load_config 会留一份备份（E5009），
+        // 这是安全兜底而非预检派发。断言它**只**多这一个文件，
+        // 避免"零写入"被误解为"永不写"。
+        let (dir, store) = store();
+        fs::write(store.config_path(), b"{ not json").unwrap();
+
+        let load = store.load_config().unwrap();
+        assert_eq!(load.warning.unwrap().code, "E5009");
+
+        // 备份是**改名**（config.json → config.corrupt.<stamp>.json），
+        // 所以目录里仍只有一个文件，且原文件被移走而不是被覆写。
+        let names: Vec<String> = fs::read_dir(&dir.0)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 1, "只应留下一个备份文件：{names:?}");
+        assert!(
+            names[0].starts_with("config.corrupt.") && names[0].ends_with(".json"),
+            "留下应是损坏备份：{names:?}"
+        );
+    }
 }

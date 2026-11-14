@@ -772,9 +772,82 @@ def summarise(rows: list[dict]) -> dict:
     return summary
 
 
+def measure_c2merge(tag: str, a) -> dict:
+    """F04 合并整档吞吐（C-2 前缀切片均分成 N 份源再合并）。
+
+    合并是 N:1 **单条目**：内存应 O(块)（ADR-0053），产物应等于各源顺序拼接。
+    与 c2rw 的“就地改写”不同，这里源与产物是不同文件，校验口径是“拼接恒等”。
+    """
+    d = workdir(f"c2merge-{tag}")
+    limit = c2rw_limit(a.size_mib)
+    total = limit if limit else C2_SRC.stat().st_size
+    parts = a.sources
+    per = total // parts
+    sources: list[Path] = []
+    with C2_SRC.open("rb") as src:
+        for index in range(parts):
+            want_bytes = per if index < parts - 1 else total - per * (parts - 1)
+            path = d / ("src%d.txt" % index)
+            written = 0
+            with path.open("wb") as sink:
+                while written < want_bytes:
+                    block = src.read(min(BLOCK, want_bytes - written))
+                    if not block:
+                        break
+                    sink.write(block)
+                    written += len(block)
+            sources.append(path)
+    src_bytes = sum(p.stat().st_size for p in sources)
+    target = d / "merged.txt"
+    args = [str(BIN), "f04"]
+    for p in sources:
+        args += ["--file", str(p)]
+    args += ["--output", str(target), "--target", "utf-8",
+             "--sample-window", str(a.sample_window), "--sample-blocks", str(a.sample_blocks),
+             "--json"]
+    plan_path = d / "plan.json"
+    plan = run(args, plan_path, a.rss_limit_mib, allow_breach=True)
+    if plan.get("breached"):
+        # 越限本身是结论（哪一段、多大体积、RSS 到没到上限），如实带出而不是当成脚本崩溃。
+        if not a.keep_workdir:
+            shutil.rmtree(d, ignore_errors=True)
+        return {"case": "c2merge", "tag": tag, "sources": parts,
+                "src_bytes": src_bytes, "breached": "plan", "plan": plan,
+                "total_wall_s": plan["wall_s"]}
+    apply_ = run([str(BIN), "apply", "--plan", str(plan_path), "--quarantine-dir", str(d / "q"),
+                  "--journal", str(d / "j.json"), "--json"], d / "apply.out", a.rss_limit_mib)
+    report = only_applied_report(d / "apply.out")
+    if report.get("status") not in ("ok", "overwritten"):
+        raise SystemExit("c2merge 执行结果不是写成功：%s" % report)
+    # 期望校验（计时区外）：产物 == 各源顺序拼接
+    want = hashlib.sha256()
+    for p in sources:
+        with p.open("rb") as fh:
+            for block in iter(lambda: fh.read(BLOCK), b""):
+                want.update(block)
+    got = hashlib.sha256(target.read_bytes()).hexdigest()
+    if got != want.hexdigest():
+        raise SystemExit("c2merge 产物与源拼接不一致：%s != %s" % (got, want.hexdigest()))
+    out_bytes = target.stat().st_size
+    row = {
+        "case": "c2merge", "tag": tag, "sources": parts,
+        "src_bytes": src_bytes, "out_bytes": out_bytes,
+        "mbps_apply": round(src_bytes / apply_["wall_s"] / 1e6, 1),
+        "wall_apply_s": apply_["wall_s"],
+        "peak_rss_kib": apply_["peak_rss_kib"], "median_rss_kib": apply_["median_rss_kib"],
+        "rss_samples": apply_["rss_samples"],
+        "digest": got, "digest_ok": True,
+        "plan": plan, "apply": apply_,
+        "total_wall_s": round(plan["wall_s"] + apply_["wall_s"], 3),
+    }
+    if not a.keep_workdir:
+        shutil.rmtree(d, ignore_errors=True)
+    return row
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="C-1／C-2 基准测量（预热 1＋正式 3）")
-    p.add_argument("scenario", choices=["c1", "c2", "c2rw"])
+    p.add_argument("scenario", choices=["c1", "c2", "c2rw", "c2merge"])
     p.add_argument("--split", choices=["bytes", "lines", "parts"], default="bytes",
                    help="C-2 的分片策略：bytes=F01、lines=F02（行数预扫描）、parts=F03（双遍读盘）")
     p.add_argument("--case", choices=sorted(C2RW_CASES),
@@ -799,6 +872,8 @@ def main() -> None:
                    help="c2rw 测后不清工作目录（默认逐轮删除，避免 GiB 级副本堆积）")
     p.add_argument("--plan-only", action="store_true",
                    help="c2rw 只跑到计划段（用来量化计划段的体积-内存关系，不做改写与校验）")
+    p.add_argument("--sources", type=int, default=4,
+                   help="c2merge：把 C-2 前缀切片均分成几份源（默认 4）")
     p.add_argument("--gb-multibyte", action="store_true",
                    help="c2rw --case c01：现生成 GB18030 多字节数据集（60 字节一行、每 50 行含一条"
                         "四字节序列）代替 C-2 的 ASCII 切片。它不属于 T 附录 C 的 C-2 构造，"
@@ -814,6 +889,8 @@ def main() -> None:
     elif a.scenario == "c2":
         measure = lambda t: measure_c2(t, a.split, a.target_bytes, a.lines, a.parts,  # noqa: E731
                                        a.rss_limit_mib)
+    elif a.scenario == "c2merge":
+        measure = lambda t: measure_c2merge(t, a)  # noqa: E731
     else:
         measure = lambda t: measure_c2rw(a.case, t, a)  # noqa: E731
     rows = [measure("warm")]
@@ -825,6 +902,11 @@ def main() -> None:
     for r in rows:
         print(json.dumps(r, ensure_ascii=False), flush=True)
     summary = {"scenario": a.scenario, "split": a.split, **summarise(rows[1:])}
+    if a.scenario == "c2merge":
+        summary["sources"] = a.sources
+        summary["size_mib"] = a.size_mib
+        summary["median_mbps_apply"] = round(
+            statistics.median([r["mbps_apply"] for r in rows[1:]]), 1)
     if a.scenario == "c2rw":
         summary["case"] = a.case
         summary["size_mib"] = a.size_mib

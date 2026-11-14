@@ -32,6 +32,10 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    # 介质自适应并发（方案 §5.12）：经 IOCTL_STORAGE_QUERY_PROPERTY 的
+    # StorageDeviceSeekPenaltyProperty 判别 SSD/NVMe 与机械盘。
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_Registry",
     # 崩溃临时文件清理：OpenProcess 判定隔离目录里 `.batchdesk-copy-<pid>-*` 的
     # 写入进程是否仍存活（只扩同一依赖的 feature，不新增 crate）。

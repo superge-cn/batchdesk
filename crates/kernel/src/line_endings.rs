@@ -332,11 +332,17 @@ impl crate::generic_apply::ContentRewriter for LineEndingRewriter {
         entry: &PlanEntry,
         input: &mut dyn Read,
         output: &mut dyn Write,
+        cancel: &dyn crate::progress::CancelToken,
     ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
         let structure = self.structure.resolve(&entry.source);
         let mut processor = LineEndingProcessor::new(structure, Some(self.target));
         let mut buffer = [0u8; 64 * 1024];
         loop {
+            // mid-stream 取消（方案 §7.7）：在**读块边界**问一次。命中即返回 E3010，
+            // 回调以 Err 收场 → `rewrite_atomic_with` 丢弃临时文件，源文件保持原样。
+            if cancel.is_cancelled() {
+                return Err(KernelError::cancelled());
+            }
             let read = input.read(&mut buffer).map_err(|error| {
                 KernelError::new(
                     "E3005",

@@ -36,6 +36,22 @@ MAP_CSV = ROOT / "docs" / "testing" / "用例覆盖映射表-v0.2.csv"
 LEDGER_CSV = ROOT / "docs" / "testing" / "用例执行台账-v0.1.csv"
 RECORD_DIR = ROOT / "docs" / "testing" / "执行记录"
 
+
+def baseline_version(title: str) -> str:
+    """从 docs/baseline/README.md 的版本表读基线版本（单一来源）。
+
+    为什么不写死：基线升版后，生成器里硬编码的版本号会把台账的「权威」行
+    回写成旧版，check_docs 的基线版本锚点门禁随即报「未锚定当前产品基线」。
+    """
+    text = (ROOT / "docs" / "baseline" / "README.md").read_text(encoding="utf-8")
+    match = re.search(rf"《{re.escape(title)}》\s*\|\s*(?:T\s*)?(v[\d.]+)", text)
+    return match.group(1) if match else "?"
+
+
+PLAN_VERSION = baseline_version("办公辅助工具产品方案")
+# T 的索引行写作「T v1.13」，门禁按同一字面核对，故补回前缀。
+T_VERSION = "T " + baseline_version("功能测试方案与验收标准")
+
 CARGO_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored)")
 # cargo 的 Running 行有两种形态："Running unittests src/lib.rs (…)" 与
 # "Running tests/corpus.rs (…)"，所以只取括号里的制品路径，不猜前面的段数。
@@ -451,8 +467,10 @@ def write_summary(ledger_rows: list[list[str]], counts: dict[str, int], tiers: d
         "",
         f"> 状态：启用｜本轮实测：{started}｜提交 `{head}`｜实测清单：[`执行记录/{inventory_name}`](执行记录/{inventory_name})",
         ">",
-        "> 权威：实例矩阵取 TC v0.4 §3；阶段归属与阶段 0 出口口径取 **T v1.13** §2.2／§4；"
-        "预览与执行两段式、强制力位置取 **产品方案 v1.22** §7.1／§8.5。本文件不自立任何判定标准。",
+        "> 权威：实例矩阵取 TC v0.4 §3；阶段归属与阶段 0 出口口径取 "
+        f"**{T_VERSION}** §2.2／§4；"
+        "预览与执行两段式、强制力位置取 "
+        f"**产品方案 {PLAN_VERSION}** §7.1／§8.5。本文件不自立任何判定标准。",
         ">",
         "",
         "**这份台账回答一个问题**：映射表里每条实例写的自动化锚点，**这次真的跑过吗、名字还在吗**。",
@@ -539,7 +557,7 @@ def write_summary(ledger_rows: list[list[str]], counts: dict[str, int], tiers: d
         "锚点需精确化／不可机器定位／锚点缺失三类**不阻断 CI**，但必须在 §3 逐条列出、不得静默。",
         "",
     ]
-    LEDGER_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    LEDGER_MD.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     print(f"摘要落盘：{LEDGER_MD}")
 
 
@@ -565,7 +583,7 @@ def main() -> None:
 
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     inventory = RECORD_DIR / f"{time.strftime('%Y-%m-%d')}-inventory.tsv"
-    with inventory.open("w", encoding="utf-8") as sink:
+    with inventory.open("w", encoding="utf-8", newline="\n") as sink:
         for key, status in sorted(rust.items()):
             sink.write(f"{key}\t{status}\n")
         for row in vitest:
@@ -625,7 +643,7 @@ def main() -> None:
     json.dump(
         {"started": started, "head": head, "rust": len(rust), "vitest": len(vitest),
          "playwright": len(playwright), "verdicts": stats},
-        open(ledger_tmp("meta.json"), "w", encoding="utf-8"),
+        open(ledger_tmp("meta.json"), "w", encoding="utf-8", newline="\n"),
         ensure_ascii=False,
     )
 

@@ -1364,27 +1364,35 @@ impl ReplaceRewriter {
             })?,
         };
         let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter.as_byte());
-        let mut write_records = |records: Vec<Vec<String>>| -> Result<(), KernelError> {
-            for record in records {
-                let replaced: Vec<String> = record
-                    .iter()
-                    .map(|field| matcher.replace(field, &self.replacement))
-                    .collect();
-                let mut line = String::new();
-                write_record(&replaced, delimiter.as_byte(), &mut line);
-                output
-                    .write_all(line.as_bytes())
-                    .map_err(rewrite_io_error)?;
-            }
-            Ok(())
-        };
-        write_records(feeder.push(&chunk[..first]))?;
+        // TC-C03-EXE-04：终止符在**读到 EOF 之前**未知（流式），故先按多数派缺省 LF 写，
+        // 推断出结果后统一改写——绝大多数文件首块即可定档，这里只多一次线性扫描。
+        let mut terminator_state = crate::csv_merge::TerminatorState::default();
+        crate::csv_merge::RecordTerminator::infer(&chunk[..first], &mut terminator_state);
+        let mut first_records = feeder.push(&chunk[..first]);
+        let write_records =
+            |records: Vec<Vec<String>>, out: &mut Vec<u8>| -> Result<(), KernelError> {
+                for record in records {
+                    let replaced: Vec<String> = record
+                        .iter()
+                        .map(|field| matcher.replace(field, &self.replacement))
+                        .collect();
+                    let mut line = String::new();
+                    write_record(&replaced, delimiter.as_byte(), &mut line);
+                    out.extend_from_slice(line.as_bytes());
+                }
+                Ok(())
+            };
+        // 末条记录原本可能没有终止符；写的时候不能替它补一个（源结构保护）。
+        // `feeder.drain_finish()` 冲出的就是这一条，单独按"无终止符"处理。
+        let mut body = Vec::new();
+        write_records(std::mem::take(&mut first_records), &mut body)?;
         loop {
             let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
             if read == 0 {
                 break;
             }
-            write_records(feeder.push(&chunk[..read]))?;
+            crate::csv_merge::RecordTerminator::infer(&chunk[..read], &mut terminator_state);
+            write_records(feeder.push(&chunk[..read]), &mut body)?;
         }
         if feeder.unclosed_quote() {
             return Err(KernelError::new(
@@ -1394,9 +1402,135 @@ impl ReplaceRewriter {
                 false,
             ));
         }
-        write_records(feeder.drain_finish())?;
+        // 末条：feeder 的 finish 会给出完整记录，写它时**不带终止符**
+        // （源文件末尾原本没有换行，产物也不该凭空多出一条空记录）。
+        let tail = feeder.drain_finish();
+        if !tail.is_empty() {
+            let mut line = String::new();
+            let replaced: Vec<String> = tail[0]
+                .iter()
+                .map(|field| matcher.replace(field, &self.replacement))
+                .collect();
+            write_record_body(&replaced, delimiter.as_byte(), &mut line);
+            body.extend_from_slice(line.as_bytes());
+        }
+
+        // 定档：把按 LF 写出的**记录终止符**统一替换为源的终止符。
+        // 只扫引号外——引号内的换行是字段数据（T01 已钉住必须保留）。
+        let terminator = crate::csv_merge::RecordTerminator::finalize(&terminator_state);
+        rewrite_terminators(&body, terminator.bytes(), output)?;
         Ok(())
     }
+}
+
+/// 把缓冲里所有**引号外**的 LF 换成 `terminator`（TC-C03-EXE-04）。
+///
+/// 扫描与 [`RecordFeeder`] 同一套引号规则，因此引号内的 CRLF/LF 一律不动；
+/// CR 不动（LF-only 源里没有 CR；CRLF 源里 CR 只会紧跟在刚被替换掉的 LF 前面，
+/// 而那种形态在扫描中属于"已处理的终止符"、不会再匹配到裸 LF）。
+/// 把缓冲里所有**引号外**的 LF 换成 `terminator`（TC-C03-EXE-04）。
+///
+/// 两趟法：先按同一套引号规则把每条记录切成片段，再逐片写出并把片末的 LF 换掉。
+/// 边扫边写会错位（改写后长度变化），所以必须先切后拼。
+/// 写出记录本体（不含终止符）：供末条记录使用——源末尾无换行时不凭空补。
+/// 写出记录本体（不含终止符）：供末条记录使用——源末尾无换行时不凭空补一个。
+fn write_record_body(fields: &[String], delimiter: u8, out: &mut String) {
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            out.push(delimiter as char);
+        }
+        let needs_quote = field
+            .bytes()
+            .any(|byte| byte == delimiter || byte == b'"' || byte == b'\n' || byte == b'\r');
+        if needs_quote {
+            out.push('"');
+            for character in field.chars() {
+                if character == '"' {
+                    out.push('"');
+                }
+                out.push(character);
+            }
+            out.push('"');
+        } else {
+            out.push_str(field);
+        }
+    }
+}
+
+/// 把缓冲里所有**引号外**的 LF 换成 `terminator`（TC-C03-EXE-04）。
+///
+/// 两趟法：先按同一套引号规则把每条记录切成片段，再逐片写出并把片末的 LF 换掉。
+/// 边扫边写会错位（改写后长度变化），所以必须先切后拼。
+/// 把缓冲里所有**引号外**的 LF 换成 `terminator`（TC-C03-EXE-04）。
+///
+/// 扫描规则与 [`RecordFeeder::push`]／[`RecordTerminator::infer`] 完全一致，
+/// **包括"引号结束后紧跟的那一字节"也按引号外处理**——少算这一字节会让扫描状态
+/// 与实际字节错位，把后面某条记录的终止符漏换。
+fn rewrite_terminators(
+    data: &[u8],
+    terminator: &[u8],
+    output: &mut dyn Write,
+) -> Result<(), KernelError> {
+    if terminator == b"\n" {
+        return output.write_all(data).map_err(rewrite_io_error);
+    }
+    // 第一趟：扫出所有引号外的 LF 下标（扫描规则与 infer/RecordFeeder 一致）。
+    let mut hits: Vec<usize> = Vec::new();
+    let mut in_quotes = false;
+    let mut after_quote = false;
+    let mut at_field_start = true;
+    let mut index = 0usize;
+    while index < data.len() {
+        let byte = data[index];
+        if in_quotes {
+            if after_quote {
+                if byte == b'"' {
+                    after_quote = false;
+                    index += 1;
+                    continue;
+                }
+                in_quotes = false;
+                after_quote = false;
+            } else if byte == b'"' {
+                after_quote = true;
+                index += 1;
+                continue;
+            } else {
+                index += 1;
+                continue;
+            }
+        }
+        if at_field_start && byte == b'"' {
+            in_quotes = true;
+            at_field_start = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'\n' {
+            hits.push(index);
+            at_field_start = true;
+            index += 1;
+            continue;
+        }
+        if byte != b'\r' {
+            at_field_start = false;
+        }
+        index += 1;
+    }
+
+    // 第二趟：按片段写，片段末尾的 LF 换成目标终止符。
+    let mut record_start = 0usize;
+    for hit in hits {
+        output
+            .write_all(&data[record_start..hit])
+            .map_err(rewrite_io_error)?;
+        output.write_all(terminator).map_err(rewrite_io_error)?;
+        record_start = hit + 1;
+    }
+    output
+        .write_all(&data[record_start..])
+        .map_err(rewrite_io_error)?;
+    Ok(())
 }
 
 impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
@@ -1405,6 +1539,8 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
         entry: &PlanEntry,
         input: &mut dyn Read,
         output: &mut dyn Write,
+        // C03 尚未逐块检查取消（ADR-0097 §5）：它有四条重写路径，逐块接线另属一切片。
+        _cancel: &dyn crate::progress::CancelToken,
     ) -> Result<crate::generic_apply::EditOutcome, KernelError> {
         let structure = ContentStructure::resolve(&entry.source);
         if structure == ContentStructure::Csv && self.csv_mode == CsvMode::Cell {
@@ -2250,7 +2386,13 @@ mod tests {
             pos: 0,
         };
         let mut output = Vec::new();
-        crate::generic_apply::ContentRewriter::rewrite(rewriter, entry, &mut input, &mut output)?;
+        crate::generic_apply::ContentRewriter::rewrite(
+            rewriter,
+            entry,
+            &mut input,
+            &mut output,
+            &crate::progress::NoCancel,
+        )?;
         Ok(output)
     }
 
