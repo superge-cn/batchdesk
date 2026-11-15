@@ -22,8 +22,14 @@
 #    "语料回归零失败"；T v1.12 §1.3 的"语料回归零失败"由自动化与人工两栏共同构成。
 #
 # ── 数值单源 ────────────────────────────────────────────────────
-# 本文件不写死任何性能阈值。漂移阈值集中在仓库变量（Settings → Variables）中管理，
+# 本文件不写死任何性能阈值。漂移相关取值集中在仓库变量（Settings → Variables）中管理：
+#   BENCH_DRIFT_PCT     漂移阈值（百分比），只用于打印与判定；缺省时只打印漂移表。
+#   BENCH_DRIFT_ENFORCE ＝"1" 时「超阈值即失败」才生效；缺省/其他值＝**仅报告**。
 # 口径以基线《办公辅助工具产品方案》§9.1 为准。
+# 为什么把「阈值」与「是否强制」拆开：run 43589166685 实测 5 个 bench 跨 run 同向漂移
+# 25%～43%（runner 机器差异，非代码回归），±10% 跨 run 阈值会持续误报（见 OQ-46）。
+# 因此跨 run 对比先降级为仅报告；同 run 噪声带由「同 run 重复测量」步产出，
+# 作为后续定阈值的依据。
 
 name: ci
 
@@ -295,8 +301,21 @@ jobs:
           # bench job 只在主分支跑；C-1 首建涉及 10 万次小文件写入，建议后续改用预置缓存按需提供。
           python "fixtures/bench/C-3-大CSV/gen_c3.py"
           echo "C-1 体积与耗时较大，CI 内暂不生成，由本地脚本产出（fixtures/bench/C-1-目录树10万/gen_c1.py）。"
-      - name: 跑基准（内核热路径 microbench）
-        run: cargo bench --workspace
+      - name: 跑基准（内核热路径 microbench；第一遍存为同 run 基线）
+        run: cargo bench --workspace -- --save-baseline noise1
+      - name: 同 run 重复测量（噪声标定：第二遍与第一遍比）
+        # 用途：同一二进制、同一台 runner、同一次运行内跑两遍，两遍之差＝该环境的噪声底，
+        # 作为跨 run 阈值定标的依据（跨 run 直接比会混入 runner 机器差异，见 OQ-46）。
+        run: |
+          set -o pipefail
+          cargo bench --workspace -- --baseline noise1 2>&1 | tee bench-noise.txt
+          {
+            echo "## bench 同 run 噪声标定（同一二进制两遍之差）"
+            echo '```'
+            grep -iE "change:|performance has|regressed|improved" bench-noise.txt || echo "（未解析到 change 行，见该步完整日志）"
+            echo '```'
+            echo "跨 run 漂移（与上次成功运行的 artifact 比）见下一步；噪声带是后续定阈值的依据。"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: 取上一次主分支 bench 产物作基线
         id: baseline
         env:
@@ -323,19 +342,23 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: baseline-criterion
         continue-on-error: true
-      - name: 与基线对比（漂移超阈值即失败）
+      - name: 与基线对比（默认仅报告；BENCH_DRIFT_ENFORCE=1 时超阈值即失败）
         env:
           BENCH_DRIFT_PCT: ${{ vars.BENCH_DRIFT_PCT }}
+          BENCH_DRIFT_ENFORCE: ${{ vars.BENCH_DRIFT_ENFORCE }}
         run: |
           # 口径（承接「数值单源」段）：
-          #   1) 基线优先取上一次主分支成功运行的 criterion 产物（上两步下载到 baseline-criterion/
-          #      ——与当前产物同布局时逐 bench 比 median 点估计）；下载失败或首跑无历史时回退
+          #   1) 基线优先取上一次主分支成功运行的 criterion 产物（下载到 baseline-criterion/），
+          #      与当前产物同布局时逐 bench 比 median 点估计；下载失败或首跑无历史时回退
           #      仓库种子 fixtures/bench/criterion-baseline.json；
-          #   2) 漂移阈值只从仓库变量 BENCH_DRIFT_PCT 注入，**不在此处写死数值**；
-          #   3) §9.1 未定义微基准漂移阈值，阈值待产品所有者裁决——未设时脚本仅报告不判失败。
+          #   2) 阈值只从 BENCH_DRIFT_PCT 注入、是否判失败只由 BENCH_DRIFT_ENFORCE 决定，
+          #      两者都不在此写死（见脚本 compare_criterion.py 的 --enforce）；
+          #   3) 跨 run 噪声未标定前保持「仅报告」，避免 runner 机器差异误报（OQ-46）。
           base_flag=""
           if [ -d baseline-criterion ]; then base_flag="--baseline baseline-criterion"; fi
-          python3 scripts/compare_criterion.py --current target/criterion $base_flag
+          enforce_flag=""
+          if [ "$BENCH_DRIFT_ENFORCE" = "1" ]; then enforce_flag="--enforce"; fi
+          python3 scripts/compare_criterion.py --current target/criterion $base_flag $enforce_flag
       - name: 上传基准结果
         uses: actions/upload-artifact@v4
         with:

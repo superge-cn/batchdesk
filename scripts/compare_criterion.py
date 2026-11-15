@@ -10,10 +10,14 @@
   供本地与「尚无更早成功运行」时兜底。种子是快照、会过期，正式口径以 artifact 链为准。
 
 阈值口径：漂移阈值只从 `--threshold-pct` 或环境变量 `BENCH_DRIFT_PCT` 取（CI 注入仓库
-变量），**脚本不内置默认值**；两者都未给时进入「仅报告」模式——退出码 0，漂移表照常
-打印，步骤名中的「超阈值即失败」暂不生效，直到阈值经产品所有者裁决落进仓库变量。
+变量），**脚本不内置默认值**；两者都未给时漂移表照常打印、但不判失败。
 
-失败判据（与阈值是否设置无关）：
+**强制开关与阈值分离**：`--enforce` 决定是否「超阈值即失败」；未传时一律**仅报告**
+（退出码 0）。CI 里该开关由仓库变量 `BENCH_DRIFT_ENFORCE=1` 控制（见 ci.yml）——
+这样跨 run 噪声未标定前不会误报（run `43589166685` 实测 5 个 bench 全部同向漂移
+25%～43%，见 OQ-46），阈值数值与「是否判失败」可独立调整。
+
+失败判据（与阈值、`--enforce` 都无关，属结构缺陷）：
 - 当前产物缺某基准的 `new/estimates.json` 或其中无 `median.point_estimate`（结构损坏）；
 - 基线里有而当前产物里没有的基准（基准静默消失）。
 新基准（基线里没有）只报告、不判失败。
@@ -73,6 +77,11 @@ def main() -> int:
         help="基线：criterion 产物目录或种子 JSON；缺省用 fixtures/bench/criterion-baseline.json",
     )
     parser.add_argument("--threshold-pct", type=float, default=None, help="漂移阈值（百分比），优先于环境变量")
+    parser.add_argument(
+        "--enforce",
+        action="store_true",
+        help="超阈值即判失败（退出码 1）；未传时仅报告。CI 由 BENCH_DRIFT_ENFORCE=1 控制",
+    )
     args = parser.parse_args()
 
     threshold = args.threshold_pct
@@ -101,9 +110,10 @@ def main() -> int:
 
     print(f"基线来源：{baseline_source}")
     if threshold is None:
-        print("阈值：未设（BENCH_DRIFT_PCT 为空）——仅报告模式，漂移不判失败")
+        print("阈值：未设（BENCH_DRIFT_PCT 为空）")
     else:
         print(f"阈值：±{threshold:g}%（来自 {'--threshold-pct' if args.threshold_pct is not None else 'BENCH_DRIFT_PCT'}）")
+    print(f"强制：{'开（超阈值即失败）' if args.enforce else '关（仅报告，超阈值不判失败）'}")
     print()
 
     failed = False
@@ -118,7 +128,8 @@ def main() -> int:
         verdict = "OK"
         if threshold is not None and abs(drift) > threshold:
             verdict = "FAIL"
-            failed = True
+            if args.enforce:
+                failed = True
         print(f"{verdict:<4} {bench:<{width}} 基线 {base:>14.1f} ns  当前 {cur:>14.1f} ns  漂移 {drift:+7.2f}%")
 
     return 1 if failed else 0
