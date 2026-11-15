@@ -1364,35 +1364,46 @@ impl ReplaceRewriter {
             })?,
         };
         let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter.as_byte());
-        // TC-C03-EXE-04：终止符在**读到 EOF 之前**未知（流式），故先按多数派缺省 LF 写，
-        // 推断出结果后统一改写——绝大多数文件首块即可定档，这里只多一次线性扫描。
+        // TC-C03-EXE-04：终止符在**读到 EOF 之前**未知（流式），故先按缺省 LF 写、
+        // 边读边累计计数；定档后把**本段**（＝一条记录）里的终止符统一改写。
+        //
+        // 内存口径：段缓冲＝一个读块内产出的记录（64 KiB 量级），O(块)。**不得改为整文件累积**
+        // （`Vec<u8>` 收全量再改）——那会把内存变成 O(输出体积)，整档 2 GiB 实测把 RSS
+        // 顶到 >1 GiB（本轮实测回归，见 fixtures/bench/results.md 轮次 10）。
         let mut terminator_state = crate::csv_merge::TerminatorState::default();
+        // 段缓冲：每次 flush 前持有一批刚写出的记录，改写后写出，内存 O(本批最大记录)。
+        let mut segment: Vec<u8> = Vec::new();
         crate::csv_merge::RecordTerminator::infer(&chunk[..first], &mut terminator_state);
-        let mut first_records = feeder.push(&chunk[..first]);
-        let write_records =
-            |records: Vec<Vec<String>>, out: &mut Vec<u8>| -> Result<(), KernelError> {
-                for record in records {
-                    let replaced: Vec<String> = record
-                        .iter()
-                        .map(|field| matcher.replace(field, &self.replacement))
-                        .collect();
-                    let mut line = String::new();
-                    write_record(&replaced, delimiter.as_byte(), &mut line);
-                    out.extend_from_slice(line.as_bytes());
-                }
-                Ok(())
-            };
-        // 末条记录原本可能没有终止符；写的时候不能替它补一个（源结构保护）。
-        // `feeder.drain_finish()` 冲出的就是这一条，单独按"无终止符"处理。
-        let mut body = Vec::new();
-        write_records(std::mem::take(&mut first_records), &mut body)?;
+        // 段缓冲＝**一个读块内产出的记录**（64 KiB 量级），定档后立刻改写写出，
+        // 内存 O(块)。绝不能把 flush 放到循环外——那会退化成 O(输出体积)。
+        let push_records = |records: Vec<Vec<String>>, segment: &mut Vec<u8>| {
+            for record in records {
+                let replaced: Vec<String> = record
+                    .iter()
+                    .map(|field| matcher.replace(field, &self.replacement))
+                    .collect();
+                let mut line = String::new();
+                write_record(&replaced, delimiter.as_byte(), &mut line);
+                segment.extend_from_slice(line.as_bytes());
+            }
+        };
+        let flush_segment = |segment: &mut Vec<u8>,
+                             state: &crate::csv_merge::TerminatorState,
+                             output: &mut dyn Write|
+         -> Result<(), KernelError> {
+            let terminator = crate::csv_merge::RecordTerminator::finalize(state);
+            rewrite_terminators(&std::mem::take(segment), terminator.bytes(), output)
+        };
+        push_records(feeder.push(&chunk[..first]), &mut segment);
+        flush_segment(&mut segment, &terminator_state, output)?;
         loop {
             let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
             if read == 0 {
                 break;
             }
             crate::csv_merge::RecordTerminator::infer(&chunk[..read], &mut terminator_state);
-            write_records(feeder.push(&chunk[..read]), &mut body)?;
+            push_records(feeder.push(&chunk[..read]), &mut segment);
+            flush_segment(&mut segment, &terminator_state, output)?;
         }
         if feeder.unclosed_quote() {
             return Err(KernelError::new(
@@ -1406,19 +1417,16 @@ impl ReplaceRewriter {
         // （源文件末尾原本没有换行，产物也不该凭空多出一条空记录）。
         let tail = feeder.drain_finish();
         if !tail.is_empty() {
-            let mut line = String::new();
             let replaced: Vec<String> = tail[0]
                 .iter()
                 .map(|field| matcher.replace(field, &self.replacement))
                 .collect();
+            let mut line = String::new();
             write_record_body(&replaced, delimiter.as_byte(), &mut line);
-            body.extend_from_slice(line.as_bytes());
+            output
+                .write_all(line.as_bytes())
+                .map_err(rewrite_io_error)?;
         }
-
-        // 定档：把按 LF 写出的**记录终止符**统一替换为源的终止符。
-        // 只扫引号外——引号内的换行是字段数据（T01 已钉住必须保留）。
-        let terminator = crate::csv_merge::RecordTerminator::finalize(&terminator_state);
-        rewrite_terminators(&body, terminator.bytes(), output)?;
         Ok(())
     }
 }
