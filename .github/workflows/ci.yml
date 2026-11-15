@@ -302,13 +302,17 @@ jobs:
           python "fixtures/bench/C-3-大CSV/gen_c3.py"
           echo "C-1 体积与耗时较大，CI 内暂不生成，由本地脚本产出（fixtures/bench/C-1-目录树10万/gen_c1.py）。"
       - name: 跑基准（内核热路径 microbench；第一遍存为同 run 基线）
-        run: cargo bench --workspace -- --save-baseline noise1
+        # 只跑 kernel 的 criterion bench：`--workspace` 会把 `--save-baseline` 透传给
+        # 各 crate 的 unittest 二进制（libtest），报 `Unrecognized option` 而失败。
+        run: |
+          rm -rf target/criterion
+          cargo bench -p batchdesk-kernel --bench core_hot_paths -- --save-baseline noise1
       - name: 同 run 重复测量（噪声标定：第二遍与第一遍比）
         # 用途：同一二进制、同一台 runner、同一次运行内跑两遍，两遍之差＝该环境的噪声底，
         # 作为跨 run 阈值定标的依据（跨 run 直接比会混入 runner 机器差异，见 OQ-46）。
         run: |
           set -o pipefail
-          cargo bench --workspace -- --baseline noise1 2>&1 | tee bench-noise.txt
+          cargo bench -p batchdesk-kernel --bench core_hot_paths -- --baseline noise1 2>&1 | tee bench-noise.txt
           {
             echo "## bench 同 run 噪声标定（同一二进制两遍之差）"
             echo '```'
