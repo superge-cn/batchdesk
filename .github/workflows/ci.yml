@@ -359,12 +359,15 @@ jobs:
           #      两者都不在此写死（见脚本 compare_criterion.py 的 --enforce）；
           #   3) 跨 run 噪声未标定前保持「仅报告」，避免 runner 机器差异误报（OQ-46）。
           #   4) 输出同时写进 Step Summary——日志需登录且按需加载，summary 可直接读。
-          set -o pipefail
+          # GitHub 的 shell 默认 bash -e：对比失败会中止脚本，故关掉 errexit 手动接管退出码，
+          # 保证「失败也要把对比表写进 summary」。
+          set +e
           base_flag=""
           if [ -d baseline-criterion ]; then base_flag="--baseline baseline-criterion"; fi
           enforce_flag=""
           if [ "$BENCH_DRIFT_ENFORCE" = "1" ]; then enforce_flag="--enforce"; fi
           python3 scripts/compare_criterion.py --current target/criterion $base_flag $enforce_flag 2>&1 | tee bench-compare.txt
+          rc=${PIPESTATUS[0]}
           {
             echo "## bench 与基线对比（跨 run）"
             echo '```'
@@ -373,6 +376,7 @@ jobs:
             echo "基线来源：${base_flag:+baseline-criterion（上一次成功主分支产物）}${base_flag:-仓库种子}；"
             echo "阈值/强制来自仓库变量 BENCH_DRIFT_PCT / BENCH_DRIFT_ENFORCE。"
           } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
       - name: 上传基准结果
         uses: actions/upload-artifact@v4
         with:
