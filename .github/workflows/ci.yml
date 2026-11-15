@@ -23,13 +23,13 @@
 #
 # ── 数值单源 ────────────────────────────────────────────────────
 # 本文件不写死任何性能阈值。漂移相关取值集中在仓库变量（Settings → Variables）中管理：
-#   BENCH_DRIFT_PCT     漂移阈值（百分比），只用于打印与判定；缺省时只打印漂移表。
+#   BENCH_DRIFT_PCT     漂移阈值（百分比），用于「同机对比」的判定；缺省时只打印漂移表。
 #   BENCH_DRIFT_ENFORCE ＝"1" 时「超阈值即失败」才生效；缺省/其他值＝**仅报告**。
 # 口径以基线《办公辅助工具产品方案》§9.1 为准。
-# 为什么把「阈值」与「是否强制」拆开：run 43589166685 实测 5 个 bench 跨 run 同向漂移
-# 25%～43%（runner 机器差异，非代码回归），±10% 跨 run 阈值会持续误报（见 OQ-46）。
-# 因此跨 run 对比先降级为仅报告；同 run 噪声带由「同 run 重复测量」步产出，
-# 作为后续定阈值的依据。
+# 对比方式＝**同机双版本**：同一次运行内 checkout「上一次主分支成功 commit」与当前 commit，
+# 在同一台 runner 上各跑一遍；阈值参考同 run 噪声（实测 ±1.3%），可设 ±10%。
+# 为什么不用跨 run：托管 runner 的机器差异实测 +17%～+90%（OQ-46），跨 run 绝对阈值不可靠；
+# 同 run 重复测量只能标定噪声底、抓不到回归（两遍同一份代码，差≈0）。
 
 name: ci
 
@@ -301,26 +301,7 @@ jobs:
           # bench job 只在主分支跑；C-1 首建涉及 10 万次小文件写入，建议后续改用预置缓存按需提供。
           python "fixtures/bench/C-3-大CSV/gen_c3.py"
           echo "C-1 体积与耗时较大，CI 内暂不生成，由本地脚本产出（fixtures/bench/C-1-目录树10万/gen_c1.py）。"
-      - name: 跑基准（内核热路径 microbench；第一遍存为同 run 基线）
-        # 只跑 kernel 的 criterion bench：`--workspace` 会把 `--save-baseline` 透传给
-        # 各 crate 的 unittest 二进制（libtest），报 `Unrecognized option` 而失败。
-        run: |
-          rm -rf target/criterion
-          cargo bench -p batchdesk-kernel --bench core_hot_paths -- --save-baseline noise1
-      - name: 同 run 重复测量（噪声标定：第二遍与第一遍比）
-        # 用途：同一二进制、同一台 runner、同一次运行内跑两遍，两遍之差＝该环境的噪声底，
-        # 作为跨 run 阈值定标的依据（跨 run 直接比会混入 runner 机器差异，见 OQ-46）。
-        run: |
-          set -o pipefail
-          cargo bench -p batchdesk-kernel --bench core_hot_paths -- --baseline noise1 2>&1 | tee bench-noise.txt
-          {
-            echo "## bench 同 run 噪声标定（同一二进制两遍之差）"
-            echo '```'
-            grep -iE "change:|performance has|regressed|improved" bench-noise.txt || echo "（未解析到 change 行，见该步完整日志）"
-            echo '```'
-            echo "跨 run 漂移（与上次成功运行的 artifact 比）见下一步；噪声带是后续定阈值的依据。"
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: 取上一次主分支 bench 产物作基线
+      - name: 取基线 commit（上一次主分支成功 run 的 sha）
         id: baseline
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -333,47 +314,71 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=5" \
             | python3 -c "import sys,json,os; runs=json.load(sys.stdin)['workflow_runs']; cur=int(os.environ['GH_RUN_ID']); pick=[r['id'] for r in runs if r['id']!=cur]; print(pick[0] if pick else '')")
           if [ -z "$rid" ]; then
-            echo "无更早的成功主分支运行，回退仓库种子基线（fixtures/bench/criterion-baseline.json）"
+            echo "无更早的成功主分支运行 → 本次跳过同机双版本对比（只报告）"
           else
+            sha=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/$rid" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['head_sha'])")
             echo "baseline-run-id=$rid" >> "$GITHUB_OUTPUT"
+            echo "baseline-sha=$sha" >> "$GITHUB_OUTPUT"
           fi
-      - name: 下载基线产物
-        if: steps.baseline.outputs.baseline-run-id != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: bench-results
-          run-id: ${{ steps.baseline.outputs.baseline-run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: baseline-criterion
-        continue-on-error: true
-      - name: 与基线对比（默认仅报告；BENCH_DRIFT_ENFORCE=1 时超阈值即失败）
+      - name: 跑基线版本的 bench（同一台 runner，消除机器差异）
+        # 同机对比是本方案的核心：托管 runner 跨 run 的机器差异实测 +17%～+90%（OQ-46），
+        # 只有让「基线 commit」与「当前 commit」在同一台机器上各跑一遍，才谈得上抓回归。
+        if: steps.baseline.outputs.baseline-sha != ''
+        run: |
+          set -euo pipefail
+          rm -rf target/criterion baseline-local
+          git fetch --depth 1 origin "${{ steps.baseline.outputs.baseline-sha }}"
+          git checkout --detach "${{ steps.baseline.outputs.baseline-sha }}"
+          cargo bench -p batchdesk-kernel --bench core_hot_paths
+          mv target/criterion baseline-local
+      - name: 跑当前版本的 bench（第一遍存为同 run 基线）
+        # 只跑 kernel 的 criterion bench：`--workspace` 会把 `--save-baseline` 透传给
+        # 各 crate 的 unittest 二进制（libtest），报 `Unrecognized option` 而失败。
+        run: |
+          set -euo pipefail
+          git checkout --detach "${{ github.sha }}"
+          rm -rf target/criterion
+          cargo bench -p batchdesk-kernel --bench core_hot_paths -- --save-baseline noise1
+      - name: 同 run 重复测量（噪声标定：当前版本第二遍与第一遍比）
+        # 用途：同一二进制、同一台 runner、同一次运行内跑两遍，两遍之差＝该环境的噪声底。
+        run: |
+          set -o pipefail
+          cargo bench -p batchdesk-kernel --bench core_hot_paths -- --baseline noise1 2>&1 | tee bench-noise.txt
+          {
+            echo "## bench 同 run 噪声标定（同一二进制两遍之差）"
+            echo '```'
+            grep -iE "change:|performance has|regressed|improved" bench-noise.txt || echo "（未解析到 change 行，见该步完整日志）"
+            echo '```'
+            echo "同机双版本对比见下一步。"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 同机对比（基线 commit vs 当前 commit；BENCH_DRIFT_ENFORCE=1 时超阈值即失败）
         env:
           BENCH_DRIFT_PCT: ${{ vars.BENCH_DRIFT_PCT }}
           BENCH_DRIFT_ENFORCE: ${{ vars.BENCH_DRIFT_ENFORCE }}
         run: |
           # 口径（承接「数值单源」段）：
-          #   1) 基线优先取上一次主分支成功运行的 criterion 产物（下载到 baseline-criterion/），
-          #      与当前产物同布局时逐 bench 比 median 点估计；下载失败或首跑无历史时回退
-          #      仓库种子 fixtures/bench/criterion-baseline.json；
+          #   1) 基线＝同一次运行内 checkout 的「上一次主分支成功 commit」，与当前 commit 在同一台
+          #      runner 上各跑一遍（消除托管 runner 的机器差异）；无基线时只报告；
           #   2) 阈值只从 BENCH_DRIFT_PCT 注入、是否判失败只由 BENCH_DRIFT_ENFORCE 决定，
           #      两者都不在此写死（见脚本 compare_criterion.py 的 --enforce）；
-          #   3) 跨 run 噪声未标定前保持「仅报告」，避免 runner 机器差异误报（OQ-46）。
-          #   4) 输出同时写进 Step Summary——日志需登录且按需加载，summary 可直接读。
+          #   3) 输出写进 Step Summary——日志需登录且按需加载，summary 可直接读。
           # GitHub 的 shell 默认 bash -e：对比失败会中止脚本，故关掉 errexit 手动接管退出码，
           # 保证「失败也要把对比表写进 summary」。
           set +e
           base_flag=""
-          if [ -d baseline-criterion ]; then base_flag="--baseline baseline-criterion"; fi
+          if [ -d baseline-local ]; then base_flag="--baseline baseline-local"; fi
           enforce_flag=""
           if [ "$BENCH_DRIFT_ENFORCE" = "1" ]; then enforce_flag="--enforce"; fi
           python3 scripts/compare_criterion.py --current target/criterion $base_flag $enforce_flag 2>&1 | tee bench-compare.txt
           rc=${PIPESTATUS[0]}
           {
-            echo "## bench 与基线对比（跨 run）"
+            echo "## bench 同机对比（基线 commit vs 当前 commit）"
             echo '```'
             cat bench-compare.txt
             echo '```'
-            echo "基线来源：${base_flag:+baseline-criterion（上一次成功主分支产物）}${base_flag:-仓库种子}；"
+            echo "基线：${base_flag:+baseline-local（同一次运行内 checkout 的上一次成功 commit）}${base_flag:-无（跳过）}；"
             echo "阈值/强制来自仓库变量 BENCH_DRIFT_PCT / BENCH_DRIFT_ENFORCE。"
           } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
