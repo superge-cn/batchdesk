@@ -12,6 +12,9 @@
      缺省**仅报告**（退出码 0）；结构缺陷仍恒判失败。
   ② bench job 第一遍 `--save-baseline noise1`，新增「同 run 重复测量」步产出噪声底（写 step summary）；**实测**：CI runner 同 run 噪声仅 **±1.3%**，而跨 run 漂移 25%～43%——后者是**不同 runner 机器差异**，非测量噪声；两步只跑 kernel 的 criterion bench——`--workspace` 会把参数透传给 unittest 二进制而报错；
   ③ 「与基线对比」改为默认仅报告，`BENCH_DRIFT_ENFORCE=1` 才判失败。先红后绿验证通过。
+- **阈值定为 ±50% 并启用强制（2026-11-15）**：同 run 噪声实测仅 ±1.3%，跨 run 漂移 25%～43%
+  系**不同 runner 机器差异**（非测量噪声）→ 仓库变量 `BENCH_DRIFT_PCT=50`、
+  `BENCH_DRIFT_ENFORCE=1` 已设置；若后续固定硬件（self-hosted）可收紧到 ±5%。
 - **三项裁决落地（2026-11-14）**：
   ① criterion 微基准漂移阈值裁决为「百分比漂移 ±10%」（OQ-46 关闭，需设仓库变量 `BENCH_DRIFT_PCT=10`）；
   ② 日志加密**默认不加密**（设计 10 §7 第 4 项关闭，升 v0.7）；
