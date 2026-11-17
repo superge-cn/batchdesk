@@ -158,10 +158,33 @@ impl Matcher {
         }
     }
 
-    fn replace(&self, text: &str, replacement: &str) -> String {
+    /// 替换并返回 `Cow`：**无匹配时零分配**（cell 臂每行 3 个字段，多数不含匹配）。
+    /// Plain 分支单次扫描构造（`str::replace` 无匹配时也会白分配一个 String）。
+    fn replace<'a>(&self, text: &'a str, replacement: &str) -> std::borrow::Cow<'a, str> {
         match self {
-            Self::Plain(find) => text.replace(find, replacement),
-            Self::Regex(regex) => regex.replace_all(text, replacement).into_owned(),
+            Self::Plain(find) => match text.find(find) {
+                None => std::borrow::Cow::Borrowed(text),
+                Some(first) => {
+                    let mut out = String::with_capacity(text.len());
+                    let mut rest = text;
+                    let mut at = first;
+                    loop {
+                        out.push_str(&rest[..at]);
+                        out.push_str(replacement);
+                        rest = &rest[at + find.len()..];
+                        match rest.find(find) {
+                            Some(next) => at = next,
+                            None => {
+                                out.push_str(rest);
+                                break;
+                            }
+                        }
+                    }
+                    std::borrow::Cow::Owned(out)
+                }
+            },
+            // regex::replace_all 本身返回 Cow
+            Self::Regex(regex) => regex.replace_all(text, replacement),
         }
     }
 }
@@ -650,7 +673,7 @@ pub fn replace_bytes(
         for record in &records {
             let replaced: Vec<String> = record
                 .iter()
-                .map(|field| matcher.replace(field, replacement))
+                .map(|field| matcher.replace(field, replacement).into_owned())
                 .collect();
             write_record(&replaced, delimiter.as_byte(), &mut output);
         }
@@ -664,7 +687,7 @@ pub fn replace_bytes(
             false,
         )
     })?;
-    Ok(matcher.replace(text, replacement).into_bytes())
+    Ok(matcher.replace(text, replacement).into_owned().into_bytes())
 }
 
 #[derive(Clone, Debug)]
@@ -1398,6 +1421,9 @@ impl ReplaceRewriter {
             safe = safe.min(valid);
             safe = char_boundary_floor(&buffer[..valid], safe);
             let text = std::str::from_utf8(&buffer[..valid]).expect("just validated");
+            // 本块输出先攒进 `out`，最后**一次**写出：逐匹配两次 write_all 在匹配密集时
+            // 调用次数过多（轮次 14 剖析：regex 变换 32.9 s，是 plain 的 2.7 倍）。
+            let mut out: Vec<u8> = Vec::with_capacity(safe.min(valid));
             let mut cursor = 0usize;
             let mut search = 0usize;
             while search <= valid {
@@ -1411,26 +1437,19 @@ impl ReplaceRewriter {
                     break;
                 }
                 if start > cursor {
-                    output
-                        .write_all(&buffer[cursor..start])
-                        .map_err(rewrite_io_error)?;
+                    out.extend_from_slice(&buffer[cursor..start]);
                 }
                 let replaced = regex.replace(&text[start..end], self.replacement.as_str());
-                output
-                    .write_all(replaced.as_bytes())
-                    .map_err(rewrite_io_error)?;
+                out.extend_from_slice(replaced.as_bytes());
                 cursor = end;
                 search = end;
             }
-            let consumed = if cursor >= safe {
-                cursor
-            } else {
-                output
-                    .write_all(&buffer[cursor..safe])
-                    .map_err(rewrite_io_error)?;
-                safe
-            };
-            buffer.drain(..consumed);
+            if cursor < safe {
+                out.extend_from_slice(&buffer[cursor..safe]);
+            }
+            output.write_all(&out).map_err(rewrite_io_error)?;
+            // 匹配可能延伸到 safe 之外（起点 < safe 即可提交），故消费 cursor 与 safe 的较大者。
+            buffer.drain(..cursor.max(safe));
             if eof {
                 return Ok(());
             }
@@ -1440,6 +1459,46 @@ impl ReplaceRewriter {
     /// CSV 单元格模式的流式替换（ADR-0057）：`RecordFeeder` 增量产记录 → 逐字段
     /// 替换 → `write_record` 逐条写出。单元格替换是记录内局部操作，逐条序列化与
     /// 整段序列化逐字节一致；内存 O(单条记录 + 块)。
+    /// 快路径的一行（**无引号**）：不含 `find` 时**整行直传**；含匹配则按分隔符切字段替换后重建。
+    ///
+    /// 与状态机口径一致：字段切分＝按分隔符切；行尾 CR 已在调用处剥离；
+    /// `terminator` 为 `None` 表示末行（源末尾无换行，不补终止符）。
+    fn write_plain_record(
+        &self,
+        line: &[u8],
+        delimiter: u8,
+        terminator: Option<&[u8]>,
+        matcher: &Matcher,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError> {
+        let text = std::str::from_utf8(line).map_err(|error| {
+            KernelError::new(
+                "E3001",
+                "source is not valid UTF-8; convert it via C01 first",
+                Some(error.to_string()),
+                false,
+            )
+        })?;
+        let mut out = Vec::with_capacity(line.len() + 8);
+        if text.contains(self.find.as_str()) {
+            let mut first = true;
+            for field in text.split(delimiter as char) {
+                if !first {
+                    out.push(delimiter);
+                }
+                first = false;
+                out.extend_from_slice(matcher.replace(field, &self.replacement).as_bytes());
+            }
+        } else {
+            out.extend_from_slice(line);
+        }
+        if let Some(terminator) = terminator {
+            out.extend_from_slice(terminator);
+        }
+        output.write_all(&out).map_err(rewrite_io_error)?;
+        Ok(())
+    }
+
     fn rewrite_cells(
         &self,
         input: &mut dyn crate::fs::ReadSeek,
@@ -1460,19 +1519,69 @@ impl ReplaceRewriter {
         // 内存 O(块)，与文件体积无关（整档 2 GiB 实测峰值个位数 MiB）。
         let mut terminator_state = crate::csv_merge::TerminatorState::default();
         crate::csv_merge::RecordTerminator::infer(&chunk[..first], &mut terminator_state);
+        // 顺带记录「全文是否含引号」：无引号则可走**行级快路径**（绕开逐字节状态机）。
+        let mut has_quote = chunk[..first].contains(&b'"');
         loop {
             let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
             if read == 0 {
                 break;
             }
             crate::csv_merge::RecordTerminator::infer(&chunk[..read], &mut terminator_state);
+            if !has_quote && chunk[..read].contains(&b'"') {
+                has_quote = true;
+            }
         }
         let terminator = crate::csv_merge::RecordTerminator::finalize(&terminator_state);
         // 重绕到文件头，按定档终止符流式改写。
         input
             .seek(std::io::SeekFrom::Start(0))
             .map_err(rewrite_io_error)?;
-        let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter.as_byte());
+        let delimiter_byte = delimiter.as_byte();
+        let terminator_bytes = terminator.bytes();
+        if !has_quote {
+            // ── 快路径：全文无引号。按 LF 切行，未改动的行**整行直传**。
+            // 逐字节状态机是 cell 变换的主要成本（轮次 14 剖析：变换 63.4～102 s）。
+            let mut line_buf: Vec<u8> = Vec::new();
+            loop {
+                let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
+                if read == 0 {
+                    break;
+                }
+                line_buf.extend_from_slice(&chunk[..read]);
+                // 用**偏移**而非逐行 drain：后者是 O(块内²) 的字节移动。
+                let mut offset = 0usize;
+                while let Some(rel) = line_buf[offset..].iter().position(|&byte| byte == b'\n') {
+                    let lf = offset + rel;
+                    let mut line = &line_buf[offset..lf];
+                    // 引号外裸 CR 忽略（与状态机口径一致）：行尾 CR 属 CRLF 的一部分。
+                    if line.last() == Some(&b'\r') {
+                        line = &line[..line.len() - 1];
+                    }
+                    self.write_plain_record(
+                        line,
+                        delimiter_byte,
+                        Some(terminator_bytes),
+                        &matcher,
+                        output,
+                    )?;
+                    offset = lf + 1;
+                }
+                if offset > 0 {
+                    line_buf.drain(..offset);
+                }
+            }
+            // 末行（源末尾无换行）：不补终止符（源结构保护）。
+            if !line_buf.is_empty() {
+                let mut line: &[u8] = &line_buf;
+                if line.last() == Some(&b'\r') {
+                    line = &line[..line.len() - 1];
+                }
+                self.write_plain_record(line, delimiter_byte, None, &matcher, output)?;
+            }
+            return Ok(());
+        }
+        // ── 慢路径：含引号，走状态机（语义与既有实现一致）。
+        let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter_byte);
         loop {
             let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
             if read == 0 {
@@ -1481,13 +1590,13 @@ impl ReplaceRewriter {
             for record in feeder.push(&chunk[..read]) {
                 let replaced: Vec<String> = record
                     .iter()
-                    .map(|field| matcher.replace(field, &self.replacement))
+                    .map(|field| matcher.replace(field, &self.replacement).into_owned())
                     .collect();
                 let mut line = String::new();
                 crate::csv_merge::write_record_with_terminator(
                     &replaced,
-                    delimiter.as_byte(),
-                    terminator.bytes(),
+                    delimiter_byte,
+                    terminator_bytes,
                     &mut line,
                 );
                 output
@@ -1508,7 +1617,7 @@ impl ReplaceRewriter {
         if !tail.is_empty() {
             let replaced: Vec<String> = tail[0]
                 .iter()
-                .map(|field| matcher.replace(field, &self.replacement))
+                .map(|field| matcher.replace(field, &self.replacement).into_owned())
                 .collect();
             let mut line = String::new();
             write_record_body(&replaced, delimiter.as_byte(), &mut line);
