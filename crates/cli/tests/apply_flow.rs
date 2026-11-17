@@ -7892,3 +7892,96 @@ fn c19_f12_rename_conflict_skip_and_sequence() {
         fs::read_dir(&root).unwrap().collect::<Vec<_>>()
     );
 }
+
+/// F02 按行数分片：撞名目标时三策略逐一生效（与 F01 同引擎，此处钉住第二入口）。
+#[test]
+fn c19_f02_split_lines_conflict_three_policies() {
+    let dir = TempDir::new();
+    let root = dir.0.join("f02");
+    let parts = root.join("parts");
+    fs::create_dir_all(&parts).unwrap();
+    let source = root.join("big.txt");
+    fs::write(&source, b"aaa\nbbb\nccc\nddd\n").unwrap();
+    fs::write(parts.join("big.1.txt"), b"OLD").unwrap();
+
+    let make_plan = || {
+        let plan = batchdesk(&[
+            "f02",
+            "--file",
+            path_text(&source),
+            "--lines",
+            "2",
+            "--output-dir",
+            path_text(&parts),
+            "--plan-id",
+            PLAN_ID,
+            "--json",
+        ]);
+        assert!(
+            plan.status.success(),
+            "{}",
+            String::from_utf8_lossy(&plan.stderr)
+        );
+        let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+        let plan_path = root.join("plan.json");
+        fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        plan_path
+    };
+    let apply_with = |plan_path: &std::path::Path, extra: &[&str]| {
+        let quarantine_dir = dir.0.join("q");
+        let journal_file = dir.0.join("j.json");
+        let quarantine = path_text(&quarantine_dir);
+        let journal = path_text(&journal_file);
+        let plan = path_text(plan_path);
+        let mut cmd: Vec<&str> = vec![
+            "apply",
+            "--plan",
+            &plan,
+            "--quarantine-dir",
+            &quarantine,
+            "--journal",
+            &journal,
+            "--json",
+        ];
+        cmd.extend_from_slice(extra);
+        batchdesk(&cmd)
+    };
+
+    // skip（缺省）
+    let plan_path = make_plan();
+    let apply = apply_with(&plan_path, &[]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(parts.join("big.1.txt")).unwrap(), b"OLD");
+
+    // sequence：顺延命名，原占位保留
+    let apply = apply_with(&plan_path, &["--on-conflict", "sequence"]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(parts.join("big.1.txt")).unwrap(), b"OLD");
+    // sequence 命名＝在扩展名前插入序号（`big.1.txt` → `big.1 (1).txt`）
+    let sequenced = parts.join("big.1 (1).txt").exists();
+    assert!(
+        sequenced,
+        "sequence 应产出顺延名，目录：{:?}",
+        fs::read_dir(&parts).unwrap().collect::<Vec<_>>()
+    );
+
+    // overwrite（已确认）
+    let apply = apply_with(
+        &plan_path,
+        &["--on-conflict", "overwrite", "--overwrite-confirmed"],
+    );
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(parts.join("big.1.txt")).unwrap(), b"aaa\nbbb\n");
+}
