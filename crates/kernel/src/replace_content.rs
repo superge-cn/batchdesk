@@ -1481,13 +1481,18 @@ impl ReplaceRewriter {
             )
         })?;
         if text.contains(self.find.as_str()) {
-            let mut first = true;
-            for field in text.split(delimiter as char) {
-                if !first {
-                    sink.push(delimiter);
+            // 手写单遍切分（`str::split` 的迭代器在短字段上反而更贵）：
+            // 逐字段找分隔符，无匹配的字段经 `Cow` 零分配直接追加。
+            let delimiter_char = delimiter as char;
+            let mut rest = text;
+            loop {
+                let end = rest.find(delimiter_char).unwrap_or(rest.len());
+                sink.extend_from_slice(matcher.replace(&rest[..end], &self.replacement).as_bytes());
+                if end == rest.len() {
+                    break;
                 }
-                first = false;
-                sink.extend_from_slice(matcher.replace(field, &self.replacement).as_bytes());
+                sink.push(delimiter);
+                rest = &rest[end + delimiter_char.len_utf8()..];
             }
         } else {
             sink.extend_from_slice(line);
