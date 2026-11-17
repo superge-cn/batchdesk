@@ -1808,23 +1808,28 @@ fn perform(
                 // 就地改写：备份 →（流式重写或整段变换）→ 原子写回。
                 // `transcode` 是与 `edit-content` 同一执行路径的旧动作名（C01），
                 // 变换由壳层按计划 kind 注入的编辑器/重写器完成；两者共用备份复用。
-                let backup = backup_once(view.fs, &entry.source, backup)?;
+                let backup_path: String;
                 let detail = if let Some(rewriter) = view.content_rewriter {
-                    // 明细经闭包局部变量带出（rewrite_atomic_with 的回调签名固定为 ()）。
+                    // 备份与改写并行（都读源文件，都成功才提交）；明细经闭包局部变量带出。
                     let mut rewrite_detail = None;
-                    view.fs
-                        .rewrite_atomic_with(&entry.source, &mut |reader, writer| {
-                            let outcome = rewriter.rewrite(
-                                entry,
-                                reader,
-                                writer,
-                                view.cancel.unwrap_or(&crate::progress::NoCancel),
-                            )?;
-                            rewrite_detail = outcome.detail;
-                            Ok(())
-                        })?;
+                    backup_path =
+                        view.fs
+                            .rewrite_with_backup(&entry.source, &mut |reader, writer| {
+                                let outcome = rewriter.rewrite(
+                                    entry,
+                                    reader,
+                                    writer,
+                                    view.cancel.unwrap_or(&crate::progress::NoCancel),
+                                )?;
+                                rewrite_detail = outcome.detail;
+                                Ok(())
+                            })?;
+                    if let Some(slot) = backup.as_mut() {
+                        *slot = backup_path.clone();
+                    }
                     rewrite_detail
                 } else {
+                    backup_path = backup_once(view.fs, &entry.source, backup)?;
                     let data = view.fs.read_bytes(&entry.source)?;
                     let editor = view
                         .content_editor
@@ -1836,7 +1841,7 @@ fn perform(
                 };
                 let forward = FsOp::WriteAtomic {
                     path: entry.source.clone(),
-                    data_ref: Some(backup),
+                    data_ref: Some(backup_path),
                 };
                 let reverse = forward.inverse().ok_or_else(|| {
                     KernelError::internal(

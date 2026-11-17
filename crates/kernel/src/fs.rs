@@ -91,7 +91,7 @@ impl<T: std::io::Read + std::io::Seek + Send> ReadSeek for T {}
 
 /// 流式改写的读写回调（C02 专用）；适配层提供源/目标文件句柄。
 pub type RewriteCallback<'a> =
-    dyn FnMut(&mut dyn ReadSeek, &mut dyn std::io::Write) -> Result<(), KernelError> + 'a;
+    dyn FnMut(&mut dyn ReadSeek, &mut dyn std::io::Write) -> Result<(), KernelError> + Send + 'a;
 
 /// 卷的介质类型（方案 §5.12「并发的默认值（决策）：按介质自适应」）。
 ///
@@ -182,6 +182,22 @@ pub trait FsAdapter: Send + Sync {
     /// 适配层负责打开源文件与临时文件、调用回调、flush 后原子改名；回调返回
     /// 错误时清理临时文件并原样返回。源文件在改名成功前保持不变。
     /// 适配层不支持时返回 E5001。
+    /// 备份 ＋ 就地改写，返回**备份路径**（供 Journal 的 reverse 用）。
+    ///
+    /// 默认实现是**串行**（先备份、再改写）。适配层可以覆盖成**并行**版
+    /// （备份与改写都是读源文件，天然可重叠），但**必须保持语义**：
+    /// 备份与改写**都成功**才提交（原子改名）；任一失败则源文件保持原样、
+    /// 临时文件被清理——绝不出现「已提交但没有备份」的状态（设计 01 §8 dataRef）。
+    fn rewrite_with_backup(
+        &self,
+        path: &str,
+        rewrite: &mut RewriteCallback<'_>,
+    ) -> Result<String, KernelError> {
+        let backup = self.backup_to_quarantine(path)?;
+        self.rewrite_atomic_with(path, rewrite)?;
+        Ok(backup)
+    }
+
     fn rewrite_atomic_with(
         &self,
         _path: &str,

@@ -309,106 +309,66 @@ impl FsAdapter for CliFsAdapter {
         path: &str,
         rewrite: &mut RewriteCallback<'_>,
     ) -> Result<(), KernelError> {
-        let target = fs_path(Path::new(path));
-        let parent = target
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| {
-                KernelError::new("E1003", "target has no parent directory", None, false)
-            })?;
-        fs::create_dir_all(parent).map_err(|error| io_error(&error, parent))?;
-        let temp = parent.join(format!(
-            ".batchdesk-rewrite-{}-{}",
-            std::process::id(),
-            self.next_id()
-        ));
-        let mut reader = fs::File::open(fs_path(Path::new(path)))
-            .map_err(|error| io_error(&error, Path::new(path)))?;
-        let file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
-        // 同 write_atomic_with：重写器按行／按匹配写出，裸 File 会让每次写都成一次系统调用。
-        let file = io::BufWriter::with_capacity(STREAM_CHUNK_BYTES, file);
-        // 剖析输出去向：`BATCHDESK_REWRITE_PROF=<path>` 追加到该文件（默认关闭）。
-        // 不能走 stderr——夹具常把 stderr 合并进 stdout，会污染 JSON 报告。
-        let prof_path = std::env::var_os("BATCHDESK_REWRITE_PROF").map(std::path::PathBuf::from);
-        let prof = prof_path.is_some();
-        if prof {
-            let mut reader = ProfReader {
-                inner: reader,
-                read: Duration::ZERO,
-                bytes: 0,
-            };
-            let mut file = ProfWriter {
-                inner: file,
-                write: Duration::ZERO,
-                bytes: 0,
-            };
-            let started = Instant::now();
-            let outcome = rewrite(&mut reader, &mut file);
-            let flush_started = Instant::now();
-            let flush_outcome = file.inner.flush();
-            let flush_elapsed = flush_started.elapsed();
-            let total = started.elapsed();
-            let line = format!(
-                "[rewrite-prof] {} total={:.3}s read={:.3}s/{}B write={:.3}s/{}B flush={:.3}s transform≈{:.3}s
-",
-                path,
-                total.as_secs_f64(),
-                reader.read.as_secs_f64(),
-                reader.bytes,
-                file.write.as_secs_f64(),
-                file.bytes,
-                flush_elapsed.as_secs_f64(),
-                total.as_secs_f64()
-                    - reader.read.as_secs_f64()
-                    - file.write.as_secs_f64()
-                    - flush_elapsed.as_secs_f64(),
-            );
-            if let Some(prof_path) = prof_path.as_ref() {
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(prof_path)
-                    .and_then(|mut sink| {
-                        use std::io::Write as _;
-                        sink.write_all(line.as_bytes())
-                    });
-            }
-            drop(file);
-            drop(reader);
-            if let Err(error) = outcome {
-                let _ = fs::remove_file(&temp);
-                return Err(error);
-            }
-            if let Err(error) = flush_outcome {
-                let _ = fs::remove_file(&temp);
-                return Err(io_error(&error, &temp));
-            }
-        } else {
-            let mut file = file;
-            let mut reader = reader;
-            if let Err(error) = rewrite(&mut reader, &mut file) {
-                drop(file);
-                drop(reader);
-                let _ = fs::remove_file(&temp);
-                return Err(error);
-            }
-            if let Err(error) = file.flush() {
-                drop(file);
-                drop(reader);
-                let _ = fs::remove_file(&temp);
-                return Err(io_error(&error, &temp));
-            }
-            drop(file);
-            drop(reader);
-        }
-        #[cfg(windows)]
-        if target.exists() {
-            fs::remove_file(&target).map_err(|error| io_error(&error, &target))?;
-        }
-        fs::rename(&temp, &target).map_err(|error| {
-            let _ = fs::remove_file(&temp);
-            io_error(&error, &target)
-        })
+        let temp = self.rewrite_into_temp(path, rewrite)?;
+        self.commit_temp(&temp, path)
+    }
+
+    /// **并行**版：备份与改写同时跑（都读源文件），**都成功才提交**。
+    ///
+    /// 语义保持：任一失败 → 临时文件被清理、源文件原样、不提交
+    /// （绝不出现「已提交但没有备份」）。返回备份路径。
+    fn rewrite_with_backup(
+        &self,
+        path: &str,
+        rewrite: &mut RewriteCallback<'_>,
+    ) -> Result<String, KernelError> {
+        let outcome: Result<(std::path::PathBuf, String), KernelError> =
+            std::thread::scope(|scope| {
+                let backup_thread = scope.spawn(|| self.backup_to_quarantine(path));
+                let rewrite_thread = scope.spawn(|| self.rewrite_into_temp(path, rewrite));
+                // 无论如何都等两个线程收尾，并**在失败时清理已写出的临时文件**
+                // （改写线程可能已经写了临时文件，只是还没提交）。
+                let rewrite_join = rewrite_thread.join();
+                let backup_join = backup_thread.join();
+                let temp = match rewrite_join {
+                    Ok(Ok(temp)) => Some(temp),
+                    Ok(Err(error)) => return Err(error),
+                    Err(_) => None,
+                };
+                let backup = match backup_join {
+                    Ok(Ok(backup)) => backup,
+                    Ok(Err(error)) => {
+                        if let Some(temp) = temp.as_deref() {
+                            let _ = fs::remove_file(temp);
+                        }
+                        return Err(error);
+                    }
+                    Err(_) => {
+                        if let Some(temp) = temp.as_deref() {
+                            let _ = fs::remove_file(temp);
+                        }
+                        return Err(KernelError::new(
+                            "E9002",
+                            "backup thread panicked",
+                            None,
+                            true,
+                        ));
+                    }
+                };
+                match temp {
+                    Some(temp) => Ok((temp, backup)),
+                    None => Err(KernelError::new(
+                        "E9002",
+                        "rewrite thread panicked",
+                        None,
+                        true,
+                    )),
+                }
+            });
+        let (temp_path, backup_path) = outcome?;
+        // 两者都成功才提交。
+        self.commit_temp(&temp_path, path)?;
+        Ok(backup_path)
     }
 
     fn create_dir(&self, path: &str) -> Result<(), KernelError> {
@@ -1004,6 +964,115 @@ impl FsAdapter for CliFsAdapter {
     }
 }
 
+impl CliFsAdapter {
+    /// 把源文件按回调重写进**临时文件**（不提交）。返回临时文件路径。
+    ///
+    /// 与 `rewrite_atomic_with` 的唯一区别是**不做原子改名**——供并行版
+    /// 「备份与改写同时跑、都成功才提交」使用。
+    fn rewrite_into_temp(
+        &self,
+        path: &str,
+        rewrite: &mut RewriteCallback<'_>,
+    ) -> Result<std::path::PathBuf, KernelError> {
+        let target = fs_path(Path::new(path));
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| {
+                KernelError::new("E1003", "target has no parent directory", None, false)
+            })?;
+        fs::create_dir_all(parent).map_err(|error| io_error(&error, parent))?;
+        let temp = parent.join(format!(
+            ".batchdesk-rewrite-{}-{}",
+            std::process::id(),
+            self.next_id()
+        ));
+        let mut reader = fs::File::open(fs_path(Path::new(path)))
+            .map_err(|error| io_error(&error, Path::new(path)))?;
+        let file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
+        // 同 write_atomic_with：重写器按行／按匹配写出，裸 File 会让每次写都成一次系统调用。
+        let file = io::BufWriter::with_capacity(STREAM_CHUNK_BYTES, file);
+        // 剖析输出去向：`BATCHDESK_REWRITE_PROF=<path>` 追加到该文件（默认关闭）。
+        // 不能走 stderr——夹具常把 stderr 合并进 stdout，会污染 JSON 报告。
+        let prof_path = std::env::var_os("BATCHDESK_REWRITE_PROF").map(std::path::PathBuf::from);
+        if prof_path.is_some() {
+            let mut reader = ProfReader {
+                inner: reader,
+                read: Duration::ZERO,
+                bytes: 0,
+            };
+            let mut file = ProfWriter {
+                inner: file,
+                write: Duration::ZERO,
+                bytes: 0,
+            };
+            let started = Instant::now();
+            let outcome = rewrite(&mut reader, &mut file);
+            let flush_started = Instant::now();
+            let flush_outcome = file.inner.flush();
+            let flush_elapsed = flush_started.elapsed();
+            let total = started.elapsed();
+            let line = format!(
+                "[rewrite-prof] {} total={:.3}s read={:.3}s/{}B write={:.3}s/{}B flush={:.3}s transform\u{2248}{:.3}s\n",
+                path,
+                total.as_secs_f64(),
+                reader.read.as_secs_f64(),
+                reader.bytes,
+                file.write.as_secs_f64(),
+                file.bytes,
+                flush_elapsed.as_secs_f64(),
+                total.as_secs_f64()
+                    - reader.read.as_secs_f64()
+                    - file.write.as_secs_f64()
+                    - flush_elapsed.as_secs_f64(),
+            );
+            if let Some(prof_path) = prof_path.as_ref() {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(prof_path)
+                    .and_then(|mut sink| {
+                        use std::io::Write as _;
+                        sink.write_all(line.as_bytes())
+                    });
+            }
+            drop(file);
+            drop(reader);
+            outcome?;
+            flush_outcome.map_err(|error| io_error(&error, &temp))?;
+        } else {
+            let mut file = file;
+            let mut reader = reader;
+            if let Err(error) = rewrite(&mut reader, &mut file) {
+                drop(file);
+                drop(reader);
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+            file.flush().map_err(|error| io_error(&error, &temp))?;
+            drop(file);
+            drop(reader);
+        }
+        Ok(temp)
+    }
+
+    /// 把临时文件原子提交到目标（删旧目标 → 改名）。
+    fn commit_temp(&self, temp: &std::path::Path, target: &str) -> Result<(), KernelError> {
+        let target = fs_path(Path::new(target));
+        #[cfg(windows)]
+        if target.exists() {
+            fs::remove_file(&target).map_err(|error| io_error(&error, &target))?;
+        }
+        fs::rename(temp, &target).map_err(|error| {
+            let _ = fs::remove_file(temp);
+            io_error(&error, &target)
+        })?;
+        // 改名成功后临时路径已不存在；失败时上面的闭包已清理。
+        let _ = temp;
+        Ok(())
+    }
+}
+
 /// D3 的原子复制内核：先写到 `temp`，校验写入字节数，再改名到 `target`。
 ///
 /// `copy` 是注入点：生产路径用 `fs::copy`，测试用可控的失败/短写闭包证明
@@ -1532,6 +1601,112 @@ mod tests {
     use super::*;
 
     struct TempDir(PathBuf);
+
+    #[test]
+    fn rewrite_with_backup_commits_only_when_both_succeed() {
+        let dir = TempDir::new();
+        let quarantine = TempDir::new();
+        let path = dir.0.join("src.txt");
+        fs::write(&path, b"hello world\n").unwrap();
+        let adapter = CliFsAdapter::new(Some(quarantine.0.clone()));
+
+        let backup = adapter
+            .rewrite_with_backup(path.to_str().unwrap(), &mut |reader, writer| {
+                let mut data = Vec::new();
+                reader
+                    .read_to_end(&mut data)
+                    .map_err(|error| KernelError::new("E1004", error.to_string(), None, false))?;
+                writer
+                    .write_all(&data)
+                    .map_err(|error| KernelError::new("E3005", error.to_string(), None, false))?;
+                writer
+                    .write_all(
+                        b"extra
+",
+                    )
+                    .map_err(|error| KernelError::new("E3005", error.to_string(), None, false))?;
+                Ok(())
+            })
+            .unwrap();
+
+        // 提交生效：产物含新内容
+        assert_eq!(fs::read(&path).unwrap(), b"hello world\nextra\n");
+        // 备份存在且是原始内容（撤销可回滚）
+        assert_eq!(fs::read(&backup).unwrap(), b"hello world\n");
+        // 临时文件不残留
+        let leftovers: Vec<_> = fs::read_dir(&dir.0)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".batchdesk-rewrite-"))
+            .collect();
+        assert!(leftovers.is_empty(), "临时文件应已提交/清理：{leftovers:?}");
+    }
+
+    #[test]
+    fn rewrite_with_backup_leaves_source_untouched_when_rewrite_fails() {
+        let dir = TempDir::new();
+        let quarantine = TempDir::new();
+        let path = dir.0.join("src.txt");
+        let original = b"original content\n";
+        fs::write(&path, original).unwrap();
+        let adapter = CliFsAdapter::new(Some(quarantine.0.clone()));
+
+        let error = adapter
+            .rewrite_with_backup(path.to_str().unwrap(), &mut |_reader, _writer| {
+                Err(KernelError::new("E3005", "boom", None, false))
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "E3005");
+
+        // 源文件原样（不得提交半成品）
+        assert_eq!(fs::read(&path).unwrap(), original);
+        // 无临时文件残留
+        let leftovers: Vec<_> = fs::read_dir(&dir.0)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".batchdesk-rewrite-"))
+            .collect();
+        assert!(leftovers.is_empty(), "失败应清理临时文件：{leftovers:?}");
+    }
+
+    #[test]
+    fn rewrite_with_backup_leaves_source_untouched_when_backup_fails() {
+        let dir = TempDir::new();
+        let path = dir.0.join("src.txt");
+        let original = b"keep me\n";
+        fs::write(&path, original).unwrap();
+        // quarantine 指向一个**普通文件** → create_dir_all 失败 → 备份失败
+        let blocker = dir.0.join("not-a-dir");
+        fs::write(&blocker, b"x").unwrap();
+        let adapter = CliFsAdapter::new(Some(blocker));
+
+        let error = adapter
+            .rewrite_with_backup(path.to_str().unwrap(), &mut |reader, writer| {
+                let mut data = Vec::new();
+                reader
+                    .read_to_end(&mut data)
+                    .map_err(|error| KernelError::new("E1004", error.to_string(), None, false))?;
+                writer
+                    .write_all(&data)
+                    .map_err(|error| KernelError::new("E3005", error.to_string(), None, false))?;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "E2008", "备份失败应如实上报：{}", error.code);
+
+        // 源文件原样
+        assert_eq!(fs::read(&path).unwrap(), original);
+        // 改写线程可能已写出临时文件，但**不得提交**
+        let leftovers: Vec<_> = fs::read_dir(&dir.0)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".batchdesk-rewrite-"))
+            .collect();
+        assert!(leftovers.is_empty(), "未提交则不留临时文件：{leftovers:?}");
+    }
 
     impl TempDir {
         fn new() -> Self {
