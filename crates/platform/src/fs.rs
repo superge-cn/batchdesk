@@ -210,7 +210,6 @@ impl Write for ProfWriter {
     }
 }
 
-
 impl FsAdapter for CliFsAdapter {
     fn is_network_path(&self, path: &str) -> bool {
         kernel::retry::is_network_path(path) || mapped_drive_is_remote(path)
@@ -333,8 +332,16 @@ impl FsAdapter for CliFsAdapter {
         let prof_path = std::env::var_os("BATCHDESK_REWRITE_PROF").map(std::path::PathBuf::from);
         let prof = prof_path.is_some();
         if prof {
-            let mut reader = ProfReader { inner: reader, read: Duration::ZERO, bytes: 0 };
-            let mut file = ProfWriter { inner: file, write: Duration::ZERO, bytes: 0 };
+            let mut reader = ProfReader {
+                inner: reader,
+                read: Duration::ZERO,
+                bytes: 0,
+            };
+            let mut file = ProfWriter {
+                inner: file,
+                write: Duration::ZERO,
+                bytes: 0,
+            };
             let started = Instant::now();
             let outcome = rewrite(&mut reader, &mut file);
             let flush_started = Instant::now();
