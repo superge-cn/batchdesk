@@ -12,7 +12,7 @@
 |---|---|---|
 | crates/kernel | 领域引擎（纯函数变换器层在此） | 方案 4.2/4.3 |
 | crates/platform | 共享壳层适配：扫描/哈希、原生 FsAdapter、FileJournal、保留期清理 | 设计 01/04、方案 4.7 |
-| src-tauri | 桌面壳：C09 任务队列/`task://*` 事件、S03 任务快照持久化与 `recoverTask`、S01 `preflightPlan`、IPC 命令、应用数据路径、计划暂存；授权注入待补 | 方案 4.4、设计 01 §4.3–§6、设计 12 |
+| src-tauri | 桌面壳：C09 任务队列/`task://*` 事件、S03 任务快照持久化与 `recoverTask`、S01 `preflightPlan`、IPC 命令、应用数据路径、计划暂存；**授权装配点已建**（`TaskQueue::with_license` 注入 `AlwaysAllowLicense`＝单机版；商业版/QuotaBased 仅替换该实现，随 §13.8 定稿） | 方案 4.4、设计 01 §4.3–§6、设计 12 |
 | web/ | 表现层：C09 参数/预览/执行/撤销/保留期 UI；事件驱动进度/暂停/取消；无业务与授权逻辑 | 方案 4.2、U v1.3、设计 12 |
 | fixtures/corpus | 28 条异常语料（24 条自动化脚本已就绪；断言 harness 已覆盖全部 24 条自动化语料（24 asserted／0 partial／0 pending），状态以 `crates/kernel/tests/assertions.tsv` 为准） | T 3.2 |
 | fixtures/bench | 性能基准数据集 C-1…C-8 | T 附录 C |
