@@ -7693,3 +7693,202 @@ fn c19_overwrite_requires_confirmation_and_then_replaces() {
         "确认后应覆盖"
     );
 }
+
+/// F06 合并到单输出：撞名目标时三策略逐一生效（TC-F06-EXE-04 执行侧）。
+#[test]
+fn c19_f06_merge_target_conflict_three_policies() {
+    let dir = TempDir::new();
+    let root = dir.0.join("f06");
+    fs::create_dir_all(&root).unwrap();
+    let a = root.join("a.csv");
+    let b = root.join("b.csv");
+    fs::write(&a, "name,n\nx,1\n").unwrap();
+    fs::write(&b, "name,n\ny,2\n").unwrap();
+    let out = root.join("out.csv");
+    fs::write(&out, b"OLD").unwrap();
+
+    let make_plan = || {
+        let plan = batchdesk(&[
+            "f06",
+            "--file",
+            path_text(&a),
+            "--file",
+            path_text(&b),
+            "--output",
+            path_text(&out),
+            "--target",
+            "utf-8",
+            "--sample-bytes",
+            "4096",
+            "--plan-id",
+            PLAN_ID,
+            "--json",
+        ]);
+        assert!(
+            plan.status.success(),
+            "{}",
+            String::from_utf8_lossy(&plan.stderr)
+        );
+        let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+        let plan_path = root.join("plan.json");
+        fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        plan_path
+    };
+    let apply_with = |plan_path: &std::path::Path, extra: &[&str]| {
+        let quarantine_dir = dir.0.join("q");
+        let journal_file = dir.0.join("j.json");
+        let quarantine = path_text(&quarantine_dir);
+        let journal = path_text(&journal_file);
+        let plan = path_text(plan_path);
+        let mut cmd: Vec<&str> = vec![
+            "apply",
+            "--plan",
+            &plan,
+            "--quarantine-dir",
+            &quarantine,
+            "--journal",
+            &journal,
+            "--json",
+        ];
+        cmd.extend_from_slice(extra);
+        batchdesk(&cmd)
+    };
+
+    // 默认 skip：目标保持原样
+    let plan_path = make_plan();
+    let apply = apply_with(&plan_path, &[]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(&out).unwrap(), b"OLD", "skip 不得覆盖");
+
+    // sequence：原目标保留，产物顺延
+    let apply = apply_with(&plan_path, &["--on-conflict", "sequence"]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(&out).unwrap(), b"OLD", "sequence 不得覆盖原目标");
+    let sequenced = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("out (1)"));
+    assert!(
+        sequenced,
+        "sequence 应产出顺延名，目录：{:?}",
+        fs::read_dir(&root).unwrap().collect::<Vec<_>>()
+    );
+
+    // overwrite（未确认）：报 E1002，不覆盖
+    let apply = apply_with(&plan_path, &["--on-conflict", "overwrite"]);
+    assert!(!apply.status.success(), "未确认的 overwrite 应失败");
+    assert_eq!(fs::read(&out).unwrap(), b"OLD", "未确认不得覆盖");
+
+    // overwrite（已确认）：覆盖生效
+    let apply = apply_with(
+        &plan_path,
+        &["--on-conflict", "overwrite", "--overwrite-confirmed"],
+    );
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let replaced = fs::read(&out).unwrap();
+    assert!(
+        replaced.starts_with(b"name,"),
+        "确认后应写入合并结果，实际：{:?}",
+        replaced
+    );
+}
+
+/// F12 改名的既有冲突：策略逐一（执行侧，与 kernel::conflict 的枚举测试互补）。
+#[test]
+fn c19_f12_rename_conflict_skip_and_sequence() {
+    let dir = TempDir::new();
+    let root = dir.0.join("f12");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("x.txt"), b"x").unwrap();
+
+    let make_plan = || {
+        let plan = batchdesk(&[
+            "f12",
+            "--dir",
+            path_text(&root),
+            "--find",
+            "a",
+            "--replace",
+            "x",
+            "--scope",
+            "full",
+            "--plan-id",
+            PLAN_ID,
+            "--json",
+        ]);
+        assert!(
+            plan.status.success(),
+            "{}",
+            String::from_utf8_lossy(&plan.stderr)
+        );
+        let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+        let plan_path = root.join("plan.json");
+        fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+        plan_path
+    };
+    let apply_with = |plan_path: &std::path::Path, extra: &[&str]| {
+        let quarantine_dir = dir.0.join("q");
+        let journal_file = dir.0.join("j.json");
+        let quarantine = path_text(&quarantine_dir);
+        let journal = path_text(&journal_file);
+        let plan = path_text(plan_path);
+        let mut cmd: Vec<&str> = vec![
+            "apply",
+            "--plan",
+            &plan,
+            "--quarantine-dir",
+            &quarantine,
+            "--journal",
+            &journal,
+            "--json",
+        ];
+        cmd.extend_from_slice(extra);
+        batchdesk(&cmd)
+    };
+
+    // skip（缺省）：撞名条目跳过，x.txt 原样
+    let plan_path = make_plan();
+    let apply = apply_with(&plan_path, &[]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(fs::read(root.join("x.txt")).unwrap(), b"x");
+    assert!(root.join("a.txt").exists(), "skip 时原名应保留");
+
+    // sequence：a.txt 顺延改名，x.txt 原样
+    let apply = apply_with(&plan_path, &["--on-conflict", "sequence"]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        fs::read(root.join("x.txt")).unwrap(),
+        b"x",
+        "sequence 不得覆盖"
+    );
+    let sequenced = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("x (1)"));
+    assert!(
+        sequenced,
+        "sequence 应产出顺延名，目录：{:?}",
+        fs::read_dir(&root).unwrap().collect::<Vec<_>>()
+    );
+}

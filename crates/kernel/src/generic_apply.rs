@@ -568,7 +568,8 @@ fn precheck_entry(
             ),
         ));
     }
-    if entry.resolution == Some(PlanResolution::Skip) {
+    // 调用方显式给出冲突策略时，计划期的 skip 建议不再短路（设计 13 apply 契约）。
+    if entry.resolution == Some(PlanResolution::Skip) && !options.on_conflict_explicit {
         return Prechecked::Skipped(ApplyEntryReport {
             entry_id: entry.entry_id.clone(),
             status: ApplyStatus::Skipped,
