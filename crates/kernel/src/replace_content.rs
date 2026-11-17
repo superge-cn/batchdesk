@@ -1205,62 +1205,153 @@ impl ReplaceRewriter {
         input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
     ) -> Result<(), KernelError> {
+        // 桌面/CLI 走「读+变换」与「写盘」重叠的流水线（WASM 无线程，走单线程）。
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return self.rewrite_plain_pipelined(input, output);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.rewrite_plain_single(input, output);
+        }
+    }
+
+    /// plain 替换的**一步**：`buffer`（含上一块剩余）＋本块读入 → 本步应写出的字节。
+    /// 未闭合的重叠窗口留在 `buffer`，等下一块补齐。单线程与流水线共用，避免两套逻辑漂移。
+    fn plain_step(
+        &self,
+        buffer: &mut Vec<u8>,
+        chunk: &[u8],
+        eof: bool,
+    ) -> Result<Vec<u8>, KernelError> {
         let find = self.find.as_bytes();
         let replacement = self.replacement.as_bytes();
         let overlap = find.len().saturating_sub(1);
+        buffer.extend_from_slice(chunk);
+        // 跨块被切开的多字节字符不算错：尾部不完整留到下一块再判，EOF 才算错。
+        let valid = match std::str::from_utf8(buffer) {
+            Ok(_) => buffer.len(),
+            Err(error) if error.error_len().is_none() && !eof => error.valid_up_to(),
+            Err(error) => return Err(rewrite_utf8_error(error)),
+        };
+        let mut safe = if eof {
+            buffer.len()
+        } else {
+            buffer.len().saturating_sub(overlap)
+        };
+        safe = safe.min(valid);
+        safe = char_boundary_floor(&buffer[..valid], safe);
+        let text = std::str::from_utf8(&buffer[..valid]).expect("just validated");
+        let mut out = Vec::new();
+        let mut cursor = 0;
+        let mut search = 0;
+        while let Some(offset) = text[search..].find(self.find.as_str()) {
+            let start = search + offset;
+            if start >= safe {
+                // 匹配起点落在重叠窗口里：等下一块补齐后再判，否则会漏跨块匹配。
+                break;
+            }
+            let end = start + find.len();
+            if start > cursor {
+                out.extend_from_slice(&buffer[cursor..start]);
+            }
+            out.extend_from_slice(replacement);
+            cursor = end;
+            search = end;
+        }
+        let consumed = if cursor >= safe {
+            cursor
+        } else {
+            out.extend_from_slice(&buffer[cursor..safe]);
+            safe
+        };
+        buffer.drain(..consumed);
+        Ok(out)
+    }
+
+    /// 单线程版（WASM 与回退）：变换直接写 output。
+    fn rewrite_plain_single(
+        &self,
+        input: &mut dyn crate::fs::ReadSeek,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError> {
         let mut buffer: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; REPLACE_STREAM_CHUNK];
         loop {
             let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
             let eof = read == 0;
-            buffer.extend_from_slice(&chunk[..read]);
-            // 跨块被切开的多字节字符不算错：尾部不完整留到下一块再判，EOF 才算错。
-            let valid = match std::str::from_utf8(&buffer) {
-                Ok(_) => buffer.len(),
-                Err(error) if error.error_len().is_none() && !eof => error.valid_up_to(),
-                Err(error) => return Err(rewrite_utf8_error(error)),
-            };
-            let mut safe = if eof {
-                buffer.len()
-            } else {
-                buffer.len().saturating_sub(overlap)
-            };
-            safe = safe.min(valid);
-            safe = char_boundary_floor(&buffer[..valid], safe);
-            let text = std::str::from_utf8(&buffer[..valid]).expect("just validated");
-            let mut matches: Vec<(usize, usize)> = Vec::new();
-            let mut search = 0;
-            while let Some(offset) = text[search..].find(self.find.as_str()) {
-                let start = search + offset;
-                if start >= safe {
-                    // 匹配起点落在重叠窗口里：等下一块补齐后再判，否则会漏跨块匹配。
-                    break;
-                }
-                matches.push((start, start + find.len()));
-                search = start + find.len();
-            }
-            let mut cursor = 0;
-            for (start, end) in matches {
-                if start > cursor {
-                    output
-                        .write_all(&buffer[cursor..start])
-                        .map_err(rewrite_io_error)?;
-                }
-                output.write_all(replacement).map_err(rewrite_io_error)?;
-                cursor = end;
-            }
-            let consumed = if cursor >= safe {
-                cursor
-            } else {
-                output
-                    .write_all(&buffer[cursor..safe])
-                    .map_err(rewrite_io_error)?;
-                safe
-            };
-            buffer.drain(..consumed);
+            let out = self.plain_step(&mut buffer, &chunk[..read], eof)?;
+            output.write_all(&out).map_err(rewrite_io_error)?;
             if eof {
                 return Ok(());
             }
+        }
+    }
+
+    /// 流水线版：一个线程读+变换，主线程写盘，两者重叠。
+    ///
+    /// 依据轮次 14 的剖析：plain 臂读+变换 13.0 s、落盘 7.7 s 是串行的；
+    /// 重叠后总耗时 ≈ max(13.0, 7.7) ≈ 13 s（原 20.7 s）。
+    /// 通道有界（4 块），内存有界（约 4×64 KiB 在途）。
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rewrite_plain_pipelined(
+        &self,
+        input: &mut dyn crate::fs::ReadSeek,
+        output: &mut dyn Write,
+    ) -> Result<(), KernelError> {
+        use std::sync::mpsc;
+        let (tx, rx) = mpsc::sync_channel::<Result<Vec<u8>, KernelError>>(4);
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; REPLACE_STREAM_CHUNK];
+        let mut failure: Option<KernelError> = None;
+        std::thread::scope(|scope| {
+            let producer = scope.spawn(move || {
+                loop {
+                    let read = match input.read(&mut chunk) {
+                        Ok(read) => read,
+                        Err(error) => {
+                            let _ = tx.send(Err(rewrite_io_error(error)));
+                            return;
+                        }
+                    };
+                    let eof = read == 0;
+                    match self.plain_step(&mut buffer, &chunk[..read], eof) {
+                        Ok(out) => {
+                            // 接收端关闭（写失败）→ 立刻停，避免 scope join 阻塞。
+                            if tx.send(Ok(out)).is_err() {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = tx.send(Err(error));
+                            return;
+                        }
+                    }
+                    if eof {
+                        return;
+                    }
+                }
+            });
+            for item in rx {
+                match item {
+                    Ok(out) => {
+                        if let Err(error) = output.write_all(&out) {
+                            failure = Some(rewrite_io_error(error));
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            // `rx` 已随 for 结束而关闭，producer 的下一次 send 会失败并退出。
+            let _ = producer.join();
+        });
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 
