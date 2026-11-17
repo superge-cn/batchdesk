@@ -37,6 +37,12 @@ pub const MAX_ENTRY_CONCURRENCY: usize = 16;
 pub struct ApplyOptions {
     #[serde(default)]
     pub on_conflict: OnConflict,
+    /// `on_conflict` 是否由调用方**显式**给出。
+    ///
+    /// 计划条目自带的 `resolution` 是**计划期建议**；调用方显式传 `--on-conflict` 时应以调用方为准
+    /// （设计 13 的 apply 契约）。缺省 false＝未显式，沿用计划 resolution。
+    #[serde(default, skip_serializing)]
+    pub on_conflict_explicit: bool,
     #[serde(default)]
     pub overwrite_confirmed: bool,
     /// 任务内条目级并发（有界工作池，方案 §5.12）；1＝串行（缺省，行为不变）。
@@ -172,6 +178,7 @@ impl Default for ApplyOptions {
     fn default() -> Self {
         Self {
             on_conflict: OnConflict::Skip,
+            on_conflict_explicit: false,
             overwrite_confirmed: false,
             entry_concurrency: default_entry_concurrency(),
             cancel_policy: CancelPolicy::default(),

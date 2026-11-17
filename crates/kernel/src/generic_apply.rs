@@ -1175,12 +1175,17 @@ fn resolve_target(
         return Ok(TargetDecision::Use(target.to_string()));
     }
     let resolution = entry.resolution;
-    let policy = match resolution {
-        Some(PlanResolution::Overwrite) => OnConflict::Overwrite,
-        Some(PlanResolution::Sequence) => OnConflict::Sequence,
-        Some(PlanResolution::Proceed) => OnConflict::Skip,
-        Some(PlanResolution::Skip) => OnConflict::Skip,
-        None => options.on_conflict,
+    // 调用方显式给出策略时以调用方为准；否则沿用计划期的 resolution 建议（设计 13 apply 契约）。
+    let policy = if options.on_conflict_explicit {
+        options.on_conflict
+    } else {
+        match resolution {
+            Some(PlanResolution::Overwrite) => OnConflict::Overwrite,
+            Some(PlanResolution::Sequence) => OnConflict::Sequence,
+            Some(PlanResolution::Proceed) => OnConflict::Skip,
+            Some(PlanResolution::Skip) => OnConflict::Skip,
+            None => options.on_conflict,
+        }
     };
     match policy {
         OnConflict::Overwrite => {

@@ -715,6 +715,10 @@ fn run_apply(args: &[String]) -> i32 {
     let mut protected_dirs = Vec::new();
     let mut password_from_stdin = false;
     let mut json = false;
+    // 冲突策略（设计 13 的 apply 契约；四策略中的 ask 已在预览期消化，此处只接受三个可执行策略）。
+    let mut on_conflict = kernel::apply::OnConflict::Skip;
+    let mut on_conflict_explicit = false;
+    let mut overwrite_confirmed = false;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -746,6 +750,25 @@ fn run_apply(args: &[String]) -> i32 {
                 };
                 protected_dirs.push(PathBuf::from(value));
             }
+            "--on-conflict" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --on-conflict requires skip|sequence|overwrite");
+                };
+                on_conflict_explicit = true;
+                on_conflict = match value.as_str() {
+                    "skip" => kernel::apply::OnConflict::Skip,
+                    "sequence" => kernel::apply::OnConflict::Sequence,
+                    "overwrite" => kernel::apply::OnConflict::Overwrite,
+                    other => {
+                        return input_error(format!(
+                            "E1002: --on-conflict 只接受 skip|sequence|overwrite，收到 {other}"
+                        ))
+                    }
+                };
+            }
+            // overwrite 需显式确认（内核的确认门：无确认按 skip 处理，§7.3）。
+            "--overwrite-confirmed" => overwrite_confirmed = true,
             // 密码只走 stdin（ADR-0074 §3.7）：命令行参数会进 shell 历史与进程列表。
             "--password-stdin" => password_from_stdin = true,
             "--json" => json = true,
@@ -798,6 +821,13 @@ fn run_apply(args: &[String]) -> i32 {
     };
     let license = AlwaysAllowLicense;
     let network_retry = CliNetworkRetry;
+    // 冲突策略：CLI 显式传入（缺省 skip，与既有行为一致）。
+    let apply_options = kernel::apply::ApplyOptions {
+        on_conflict,
+        on_conflict_explicit: on_conflict_explicit,
+        overwrite_confirmed,
+        ..kernel::apply::ApplyOptions::default()
+    };
     let password = match password_from_stdin {
         true => match read_password_stdin() {
             Ok(password) => Some(password),
@@ -823,7 +853,7 @@ fn run_apply(args: &[String]) -> i32 {
             network_retry: Some(&network_retry),
         };
         run_generic_or_specific(
-            apply_archive_plan(&plan, &ApplyOptions::default(), &mut context),
+            apply_archive_plan(&plan, &apply_options, &mut context),
             json,
         )
     } else if plan.kind == kernel::plan::C09_KIND {
@@ -840,10 +870,7 @@ fn run_apply(args: &[String]) -> i32 {
             cancel: None,
             network_retry: Some(&network_retry),
         };
-        run_generic_or_specific(
-            apply_plan(&plan, &ApplyOptions::default(), &mut context),
-            json,
-        )
+        run_generic_or_specific(apply_plan(&plan, &apply_options, &mut context), json)
     } else {
         // 通用执行器：c01/c02/c03/f 系列 rename/move/copy/delete/edit-content 计划。
         let is_c01 = plan.kind == C01_KIND;
@@ -920,7 +947,7 @@ fn run_apply(args: &[String]) -> i32 {
             directory_lister: Some(&lister),
         };
         run_generic_or_specific(
-            apply_generic_plan(&plan, &ApplyOptions::default(), &mut generic),
+            apply_generic_plan(&plan, &apply_options, &mut generic),
             json,
         )
     }

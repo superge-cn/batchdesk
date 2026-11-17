@@ -7528,3 +7528,168 @@ fn undo_reports_e2008_on_an_exclusively_held_target_and_keeps_the_mapping() {
     assert!(root.join("a.txt").exists(), "应改回原名字");
     assert!(!renamed.exists(), "新名字应已移走");
 }
+
+// ── C19 冲突策略：四策略中的 ask 在预览期消化，执行侧三策略逐项（TC-F01-EXE-03） ──
+
+/// 三策略共用夹具：源 9 字节 3 行，目标分片 6 字节 → 两个分片 `big.1.txt` / `big.2.txt`。
+/// 预置 `big.1.txt` 为撞名目标，用于观察策略行为。
+fn c19_plan_with_occupied_first_part() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = TempDir::new();
+    let root = dir.0.join("c19");
+    let parts = root.join("parts");
+    fs::create_dir_all(&parts).unwrap();
+    let source = root.join("big.txt");
+    fs::write(&source, b"aaa\nbbb\nccc\n").unwrap();
+    // 撞名：第一片的目标名已存在
+    fs::write(parts.join("big.1.txt"), b"OLD").unwrap();
+
+    let plan = batchdesk(&[
+        "f01",
+        "--file",
+        path_text(&source),
+        "--target-bytes",
+        "6",
+        "--output-dir",
+        path_text(&parts),
+        "--plan-id",
+        PLAN_ID,
+        "--json",
+    ]);
+    assert!(
+        plan.status.success(),
+        "plan failed: {}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let plan_path = root.join("plan.json");
+    fs::write(&plan_path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    (dir, plan_path, parts)
+}
+
+#[test]
+fn c19_skip_leaves_occupied_target_untouched_by_default() {
+    let (_dir, plan_path, parts) = c19_plan_with_occupied_first_part();
+    let quarantine = _dir.0.join("q");
+    let journal = _dir.0.join("j.json");
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    // 缺省 skip：撞名的第一片被跳过，第二片正常产出
+    assert_eq!(
+        fs::read(parts.join("big.1.txt")).unwrap(),
+        b"OLD",
+        "skip 不得覆盖"
+    );
+    assert_eq!(fs::read(parts.join("big.2.txt")).unwrap(), b"ccc\n");
+}
+
+#[test]
+fn c19_sequence_renames_the_occupied_target() {
+    let (_dir, plan_path, parts) = c19_plan_with_occupied_first_part();
+    let quarantine = _dir.0.join("q");
+    let journal = _dir.0.join("j.json");
+
+    let apply = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--on-conflict",
+        "sequence",
+        "--json",
+    ]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    // sequence：原占位内容保留，新分片顺延为 .1（占用名顺次后推）
+    assert_eq!(
+        fs::read(parts.join("big.1.txt")).unwrap(),
+        b"OLD",
+        "sequence 不得覆盖"
+    );
+    let renamed = fs::read_dir(&parts)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .any(|name| name.starts_with("big.") && name != "big.1.txt" && name != "big.2.txt");
+    assert!(
+        renamed,
+        "sequence 应产出顺延名，实际目录：{:?}",
+        fs::read_dir(&parts).unwrap().collect::<Vec<_>>()
+    );
+    assert_eq!(fs::read(parts.join("big.2.txt")).unwrap(), b"ccc\n");
+}
+
+#[test]
+fn c19_overwrite_requires_confirmation_and_then_replaces() {
+    let (_dir, plan_path, parts) = c19_plan_with_occupied_first_part();
+    let quarantine = _dir.0.join("q");
+    let journal = _dir.0.join("j.json");
+
+    // 未确认：内核确认门报 E1002（§7.3「无静默覆盖」——报错而非静默跳过）
+    let unconfirmed = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--on-conflict",
+        "overwrite",
+        "--json",
+    ]);
+    assert!(
+        !unconfirmed.status.success(),
+        "未确认的 overwrite 应失败：{}",
+        String::from_utf8_lossy(&unconfirmed.stdout)
+    );
+    assert_eq!(
+        fs::read(parts.join("big.1.txt")).unwrap(),
+        b"OLD",
+        "未确认不得覆盖"
+    );
+
+    // 已确认：覆盖生效
+    let confirmed = batchdesk(&[
+        "apply",
+        "--plan",
+        path_text(&plan_path),
+        "--quarantine-dir",
+        path_text(&quarantine),
+        "--journal",
+        path_text(&journal),
+        "--on-conflict",
+        "overwrite",
+        "--overwrite-confirmed",
+        "--json",
+    ]);
+    assert!(
+        confirmed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&confirmed.stderr)
+    );
+    assert_eq!(
+        fs::read(parts.join("big.1.txt")).unwrap(),
+        b"aaa\nbbb\n",
+        "确认后应覆盖"
+    );
+}
