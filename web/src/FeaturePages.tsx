@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Info, Loader2, Save, Undo2 } from "lucide-react";
 import {
   applyPlan,
+  getConfig,
   getTask,
   isTauri,
   listenTaskDone,
@@ -929,9 +930,20 @@ export function FeaturePages({
     setError(null);
     setNotice(null);
     try {
+      // C19：冲突策略取自设置（processing.onConflict，默认 skip）；选 overwrite 即视为已确认。
+      let onConflict: "skip" | "sequence" | "overwrite" = "skip";
+      try {
+        const scope = await getConfig("processing");
+        const value = scope.values["onConflict"]?.value;
+        if (value === "skip" || value === "sequence" || value === "overwrite") {
+          onConflict = value;
+        }
+      } catch {
+        // 读不到设置时保持缺省 skip（安全默认：不覆盖）。
+      }
       const handle = await applyPlan(plan.planId, {
-        onConflict: "skip",
-        overwriteConfirmed: false
+        onConflict,
+        overwriteConfirmed: onConflict === "overwrite"
       });
       setTask({
         taskId: handle.taskId,

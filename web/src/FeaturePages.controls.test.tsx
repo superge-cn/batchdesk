@@ -31,6 +31,8 @@ vi.mock("./lib/ipc", () => ({
   getUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   setUiState: vi.fn(async () => ({ uiStateVersion: 1, updatedAt: "" })),
   planOperation: vi.fn(async () => fakePlan),
+  // C19：冲突策略取自设置；默认桩返回 skip，个别用例覆写。
+  getConfig: vi.fn(async () => ({ values: { onConflict: { value: "skip" } } })),
   applyPlan: vi.fn(async () => ({ taskId: "task-apply" })),
   undoPlan: vi.fn(async () => ({ taskId: "task-undo" })),
   cancelTask: vi.fn(async () => undefined),
@@ -56,6 +58,7 @@ vi.mock("./lib/ipc", () => ({
 import {
   applyPlan,
   cancelTask,
+  getConfig,
   planOperation,
   retryTask,
   undoDryRun,
@@ -201,6 +204,28 @@ describe("功能视图的任务控制与撤销", () => {
     await user.click(await screen.findByTestId("danger-confirm-button"));
     await waitFor(() =>
       expect(applyPlan).toHaveBeenCalledWith("01PLAN", { onConflict: "skip", overwriteConfirmed: false })
+    );
+  });
+
+  it("C19：冲突策略取自设置并传给 applyPlan", async () => {
+    vi.mocked(getConfig).mockResolvedValueOnce({ values: { onConflict: { value: "sequence" } } } as never);
+    const user = userEvent.setup();
+    render(<FeaturePages view="f12" onBack={() => undefined} />);
+    await planThrough(user);
+    await user.click(screen.getByRole("button", { name: /^执行$/ }));
+    await waitFor(() =>
+      expect(applyPlan).toHaveBeenCalledWith("01PLAN", { onConflict: "sequence", overwriteConfirmed: false })
+    );
+  });
+
+  it("C19：设置选 overwrite 时视为已确认", async () => {
+    vi.mocked(getConfig).mockResolvedValueOnce({ values: { onConflict: { value: "overwrite" } } } as never);
+    const user = userEvent.setup();
+    render(<FeaturePages view="f12" onBack={() => undefined} />);
+    await planThrough(user);
+    await user.click(screen.getByRole("button", { name: /^执行$/ }));
+    await waitFor(() =>
+      expect(applyPlan).toHaveBeenCalledWith("01PLAN", { onConflict: "overwrite", overwriteConfirmed: true })
     );
   });
 
