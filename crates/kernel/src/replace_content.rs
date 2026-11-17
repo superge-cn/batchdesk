@@ -1463,13 +1463,14 @@ impl ReplaceRewriter {
     ///
     /// 与状态机口径一致：字段切分＝按分隔符切；行尾 CR 已在调用处剥离；
     /// `terminator` 为 `None` 表示末行（源末尾无换行，不补终止符）。
-    fn write_plain_record(
+    /// 输出**追加**到 `sink`（调用方按块统一写出，避免每行一次 write 与每行一次分配）。
+    fn push_plain_record(
         &self,
         line: &[u8],
         delimiter: u8,
         terminator: Option<&[u8]>,
         matcher: &Matcher,
-        output: &mut dyn Write,
+        sink: &mut Vec<u8>,
     ) -> Result<(), KernelError> {
         let text = std::str::from_utf8(line).map_err(|error| {
             KernelError::new(
@@ -1479,23 +1480,21 @@ impl ReplaceRewriter {
                 false,
             )
         })?;
-        let mut out = Vec::with_capacity(line.len() + 8);
         if text.contains(self.find.as_str()) {
             let mut first = true;
             for field in text.split(delimiter as char) {
                 if !first {
-                    out.push(delimiter);
+                    sink.push(delimiter);
                 }
                 first = false;
-                out.extend_from_slice(matcher.replace(field, &self.replacement).as_bytes());
+                sink.extend_from_slice(matcher.replace(field, &self.replacement).as_bytes());
             }
         } else {
-            out.extend_from_slice(line);
+            sink.extend_from_slice(line);
         }
         if let Some(terminator) = terminator {
-            out.extend_from_slice(terminator);
+            sink.extend_from_slice(terminator);
         }
-        output.write_all(&out).map_err(rewrite_io_error)?;
         Ok(())
     }
 
@@ -1542,12 +1541,15 @@ impl ReplaceRewriter {
             // ── 快路径：全文无引号。按 LF 切行，未改动的行**整行直传**。
             // 逐字节状态机是 cell 变换的主要成本（轮次 14 剖析：变换 63.4～102 s）。
             let mut line_buf: Vec<u8> = Vec::new();
+            // 整块构造、**一次写出**：复用 `out`，避免每行一次分配与一次 write。
+            let mut out: Vec<u8> = Vec::with_capacity(REPLACE_STREAM_CHUNK + 1024);
             loop {
                 let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
                 if read == 0 {
                     break;
                 }
                 line_buf.extend_from_slice(&chunk[..read]);
+                out.clear();
                 // 用**偏移**而非逐行 drain：后者是 O(块内²) 的字节移动。
                 let mut offset = 0usize;
                 while let Some(rel) = line_buf[offset..].iter().position(|&byte| byte == b'\n') {
@@ -1557,17 +1559,20 @@ impl ReplaceRewriter {
                     if line.last() == Some(&b'\r') {
                         line = &line[..line.len() - 1];
                     }
-                    self.write_plain_record(
+                    self.push_plain_record(
                         line,
                         delimiter_byte,
                         Some(terminator_bytes),
                         &matcher,
-                        output,
+                        &mut out,
                     )?;
                     offset = lf + 1;
                 }
                 if offset > 0 {
                     line_buf.drain(..offset);
+                }
+                if !out.is_empty() {
+                    output.write_all(&out).map_err(rewrite_io_error)?;
                 }
             }
             // 末行（源末尾无换行）：不补终止符（源结构保护）。
@@ -1576,7 +1581,9 @@ impl ReplaceRewriter {
                 if line.last() == Some(&b'\r') {
                     line = &line[..line.len() - 1];
                 }
-                self.write_plain_record(line, delimiter_byte, None, &matcher, output)?;
+                out.clear();
+                self.push_plain_record(line, delimiter_byte, None, &matcher, &mut out)?;
+                output.write_all(&out).map_err(rewrite_io_error)?;
             }
             return Ok(());
         }
