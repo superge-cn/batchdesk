@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kernel::error::KernelError;
 use kernel::fs::{
@@ -166,6 +166,51 @@ pub fn case_sensitivity() -> CaseSense {
     }
 }
 
+/// 性能剖析包装（仅 `BATCHDESK_REWRITE_PROF` 开启时用）：把「读盘／落盘」从
+/// 「变换」里分出来——变换时间 ≈ 总时间 − 读 − 写。**默认关闭**，不影响任何行为。
+struct ProfReader {
+    inner: fs::File,
+    read: Duration,
+    bytes: u64,
+}
+
+impl Read for ProfReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let started = Instant::now();
+        let read = self.inner.read(buf)?;
+        self.read += started.elapsed();
+        self.bytes += read as u64;
+        Ok(read)
+    }
+}
+
+impl Seek for ProfReader {
+    fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+struct ProfWriter {
+    inner: io::BufWriter<fs::File>,
+    write: Duration,
+    bytes: u64,
+}
+
+impl Write for ProfWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let started = Instant::now();
+        let written = self.inner.write(buf)?;
+        self.write += started.elapsed();
+        self.bytes += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+
 impl FsAdapter for CliFsAdapter {
     fn is_network_path(&self, path: &str) -> bool {
         kernel::retry::is_network_path(path) || mapped_drive_is_remote(path)
@@ -282,21 +327,73 @@ impl FsAdapter for CliFsAdapter {
             .map_err(|error| io_error(&error, Path::new(path)))?;
         let file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
         // 同 write_atomic_with：重写器按行／按匹配写出，裸 File 会让每次写都成一次系统调用。
-        let mut file = io::BufWriter::with_capacity(STREAM_CHUNK_BYTES, file);
-        if let Err(error) = rewrite(&mut reader, &mut file) {
+        let file = io::BufWriter::with_capacity(STREAM_CHUNK_BYTES, file);
+        // 剖析输出去向：`BATCHDESK_REWRITE_PROF=<path>` 追加到该文件（默认关闭）。
+        // 不能走 stderr——夹具常把 stderr 合并进 stdout，会污染 JSON 报告。
+        let prof_path = std::env::var_os("BATCHDESK_REWRITE_PROF").map(std::path::PathBuf::from);
+        let prof = prof_path.is_some();
+        if prof {
+            let mut reader = ProfReader { inner: reader, read: Duration::ZERO, bytes: 0 };
+            let mut file = ProfWriter { inner: file, write: Duration::ZERO, bytes: 0 };
+            let started = Instant::now();
+            let outcome = rewrite(&mut reader, &mut file);
+            let flush_started = Instant::now();
+            let flush_outcome = file.inner.flush();
+            let flush_elapsed = flush_started.elapsed();
+            let total = started.elapsed();
+            let line = format!(
+                "[rewrite-prof] {} total={:.3}s read={:.3}s/{}B write={:.3}s/{}B flush={:.3}s transform≈{:.3}s
+",
+                path,
+                total.as_secs_f64(),
+                reader.read.as_secs_f64(),
+                reader.bytes,
+                file.write.as_secs_f64(),
+                file.bytes,
+                flush_elapsed.as_secs_f64(),
+                total.as_secs_f64()
+                    - reader.read.as_secs_f64()
+                    - file.write.as_secs_f64()
+                    - flush_elapsed.as_secs_f64(),
+            );
+            if let Some(prof_path) = prof_path.as_ref() {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(prof_path)
+                    .and_then(|mut sink| {
+                        use std::io::Write as _;
+                        sink.write_all(line.as_bytes())
+                    });
+            }
             drop(file);
             drop(reader);
-            let _ = fs::remove_file(&temp);
-            return Err(error);
-        }
-        if let Err(error) = file.flush() {
+            if let Err(error) = outcome {
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+            if let Err(error) = flush_outcome {
+                let _ = fs::remove_file(&temp);
+                return Err(io_error(&error, &temp));
+            }
+        } else {
+            let mut file = file;
+            let mut reader = reader;
+            if let Err(error) = rewrite(&mut reader, &mut file) {
+                drop(file);
+                drop(reader);
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+            if let Err(error) = file.flush() {
+                drop(file);
+                drop(reader);
+                let _ = fs::remove_file(&temp);
+                return Err(io_error(&error, &temp));
+            }
             drop(file);
             drop(reader);
-            let _ = fs::remove_file(&temp);
-            return Err(io_error(&error, &temp));
         }
-        drop(file);
-        drop(reader);
         #[cfg(windows)]
         if target.exists() {
             fs::remove_file(&target).map_err(|error| io_error(&error, &target))?;
