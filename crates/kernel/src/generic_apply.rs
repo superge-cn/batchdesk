@@ -12,7 +12,7 @@
 //! 与 edit-content 先经 `FsAdapter::backup_to_quarantine` 备份原内容，逆是
 //! `WriteAtomic{dataRef}` 备份还原。回滚统一走 `apply::execute_reverse`。
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 use crate::apply::{
     execute_reverse, ApplyEntryReport, ApplyOptions, ApplyOutcome, ApplyReport, ApplyState,
@@ -90,7 +90,9 @@ pub trait ContentRewriter: Send + Sync {
     fn rewrite(
         &self,
         entry: &crate::plan::PlanEntry,
-        input: &mut dyn Read,
+        // 要求 `Seek`：改写器可能需要**重读**（如 C03 单元格模式先扫一遍推断记录终止符，
+        // 再按定档结果流式改写）。平台层给的是真实文件句柄，天然可重绕。
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
         cancel: &dyn CancelToken,
     ) -> Result<EditOutcome, KernelError>;
@@ -3916,7 +3918,7 @@ mod tests {
             }
             // reader 覆盖原字节；回调失败不提交（原子语义与平台实现一致）。
             let mut sink = Sink(Vec::new());
-            let mut reader: &[u8] = &original;
+            let mut reader = std::io::Cursor::new(original.clone());
             rewrite(&mut reader, &mut sink)?;
             self.files.lock().unwrap().insert(path.to_string(), sink.0);
             Ok(())
@@ -4945,7 +4947,7 @@ mod tests {
             fn rewrite(
                 &self,
                 _entry: &crate::plan::PlanEntry,
-                _input: &mut dyn std::io::Read,
+                _input: &mut dyn crate::fs::ReadSeek,
                 _output: &mut dyn std::io::Write,
                 _cancel: &dyn CancelToken,
             ) -> Result<EditOutcome, KernelError> {
@@ -7261,7 +7263,7 @@ mod tests {
         fn rewrite(
             &self,
             _entry: &crate::plan::PlanEntry,
-            input: &mut dyn std::io::Read,
+            input: &mut dyn crate::fs::ReadSeek,
             output: &mut dyn std::io::Write,
             _cancel: &dyn CancelToken,
         ) -> Result<EditOutcome, KernelError> {

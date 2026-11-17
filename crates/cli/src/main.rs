@@ -7309,7 +7309,7 @@ mod tests {
             let outcome = rewriter
                 .rewrite(
                     &entry,
-                    &mut &gb[..],
+                    &mut std::io::Cursor::new(gb.clone()),
                     &mut output,
                     &kernel::progress::NoCancel,
                 )

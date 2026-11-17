@@ -81,9 +81,17 @@ pub enum CaseSense {
 /// The quarantine restore is expressed as `rename(quarantine_path, original,
 /// ConflictPolicy::Skip)` so the frozen `FsOp::Rename` journal reverse can be
 /// replayed without another operation variant.
+/// **可重读**的输入流：改写器可能需要两遍读。
+///
+/// 为什么要它：C03 单元格模式要「先扫一遍推断记录终止符，再按定档结果流式改写」，
+/// 而终止符在 EOF 前未知——单遍边读边写只能每块做一次两趟扫描（慢），
+/// 两遍读才能每块只写一次。平台层给的是真实文件句柄，天然满足。
+pub trait ReadSeek: std::io::Read + std::io::Seek {}
+impl<T: std::io::Read + std::io::Seek> ReadSeek for T {}
+
 /// 流式改写的读写回调（C02 专用）；适配层提供源/目标文件句柄。
 pub type RewriteCallback<'a> =
-    dyn FnMut(&mut dyn std::io::Read, &mut dyn std::io::Write) -> Result<(), KernelError> + 'a;
+    dyn FnMut(&mut dyn ReadSeek, &mut dyn std::io::Write) -> Result<(), KernelError> + 'a;
 
 /// 卷的介质类型（方案 §5.12「并发的默认值（决策）：按介质自适应」）。
 ///

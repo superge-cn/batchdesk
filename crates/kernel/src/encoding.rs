@@ -749,7 +749,7 @@ impl crate::generic_apply::ContentRewriter for TranscodeRewriter {
     fn rewrite(
         &self,
         _entry: &crate::plan::PlanEntry,
-        input: &mut dyn std::io::Read,
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn std::io::Write,
         // C01 尚未逐块检查取消（ADR-0097 §5）；取消仍会在条目边界生效。
         _cancel: &dyn crate::progress::CancelToken,

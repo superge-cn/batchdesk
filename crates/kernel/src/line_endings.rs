@@ -5,7 +5,7 @@
 //! 计划层纯函数；执行层经 `ContentRewriter` 注入流式读写，不整文件读入内存。
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Write;
 
 use crate::binary;
 use crate::csv_merge::source_block;
@@ -330,7 +330,7 @@ impl crate::generic_apply::ContentRewriter for LineEndingRewriter {
     fn rewrite(
         &self,
         entry: &PlanEntry,
-        input: &mut dyn Read,
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
         cancel: &dyn crate::progress::CancelToken,
     ) -> Result<crate::generic_apply::EditOutcome, KernelError> {

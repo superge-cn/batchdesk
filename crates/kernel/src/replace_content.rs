@@ -6,7 +6,7 @@
 //! 记录级增量，ADR-0057），regex 模式仍整段（最大匹配长度不可知）。
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Write;
 
 use regex::Regex;
 
@@ -1202,7 +1202,7 @@ impl ReplaceRewriter {
     /// 语义与 `str::replace` 的非重叠、从左到右一致；内存 O(find + 块)。
     fn rewrite_plain(
         &self,
-        input: &mut dyn Read,
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
     ) -> Result<(), KernelError> {
         let find = self.find.as_bytes();
@@ -1284,7 +1284,7 @@ impl ReplaceRewriter {
         &self,
         regex: &Regex,
         window: usize,
-        input: &mut dyn Read,
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
     ) -> Result<(), KernelError> {
         let mut buffer: Vec<u8> = Vec::new();
@@ -1351,7 +1351,7 @@ impl ReplaceRewriter {
     /// 整段序列化逐字节一致；内存 O(单条记录 + 块)。
     fn rewrite_cells(
         &self,
-        input: &mut dyn Read,
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
     ) -> Result<(), KernelError> {
         let matcher = Matcher::compile(self.mode, &self.find, &self.replacement)?;
@@ -1363,47 +1363,46 @@ impl ReplaceRewriter {
                 KernelError::invalid_params("CSV delimiter could not be detected; pass --delimiter")
             })?,
         };
-        let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter.as_byte());
-        // TC-C03-EXE-04：终止符在**读到 EOF 之前**未知（流式），故先按缺省 LF 写、
-        // 边读边累计计数；定档后把**本段**（＝一条记录）里的终止符统一改写。
-        //
-        // 内存口径：段缓冲＝一个读块内产出的记录（64 KiB 量级），O(块)。**不得改为整文件累积**
-        // （`Vec<u8>` 收全量再改）——那会把内存变成 O(输出体积)，整档 2 GiB 实测把 RSS
-        // 顶到 >1 GiB（本轮实测回归，见 fixtures/bench/results.md 轮次 10）。
+        // 终止符在 EOF 前未知，而产物又必须沿用源的终止符（TC-C03-EXE-04）。
+        // 单遍边读边写只能每块做一次「两趟扫描＋片段重写」（实测比两遍读慢约 40%）；
+        // 两遍读：第一遍只推断（不解析、不写盘），第二遍按定档终止符流式写，每块只写一次。
+        // 内存 O(块)，与文件体积无关（整档 2 GiB 实测峰值个位数 MiB）。
         let mut terminator_state = crate::csv_merge::TerminatorState::default();
-        // 段缓冲：每次 flush 前持有一批刚写出的记录，改写后写出，内存 O(本批最大记录)。
-        let mut segment: Vec<u8> = Vec::new();
         crate::csv_merge::RecordTerminator::infer(&chunk[..first], &mut terminator_state);
-        // 段缓冲＝**一个读块内产出的记录**（64 KiB 量级），定档后立刻改写写出，
-        // 内存 O(块)。绝不能把 flush 放到循环外——那会退化成 O(输出体积)。
-        let push_records = |records: Vec<Vec<String>>, segment: &mut Vec<u8>| {
-            for record in records {
-                let replaced: Vec<String> = record
-                    .iter()
-                    .map(|field| matcher.replace(field, &self.replacement))
-                    .collect();
-                let mut line = String::new();
-                write_record(&replaced, delimiter.as_byte(), &mut line);
-                segment.extend_from_slice(line.as_bytes());
-            }
-        };
-        let flush_segment = |segment: &mut Vec<u8>,
-                             state: &crate::csv_merge::TerminatorState,
-                             output: &mut dyn Write|
-         -> Result<(), KernelError> {
-            let terminator = crate::csv_merge::RecordTerminator::finalize(state);
-            rewrite_terminators(&std::mem::take(segment), terminator.bytes(), output)
-        };
-        push_records(feeder.push(&chunk[..first]), &mut segment);
-        flush_segment(&mut segment, &terminator_state, output)?;
         loop {
             let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
             if read == 0 {
                 break;
             }
             crate::csv_merge::RecordTerminator::infer(&chunk[..read], &mut terminator_state);
-            push_records(feeder.push(&chunk[..read]), &mut segment);
-            flush_segment(&mut segment, &terminator_state, output)?;
+        }
+        let terminator = crate::csv_merge::RecordTerminator::finalize(&terminator_state);
+        // 重绕到文件头，按定档终止符流式改写。
+        input
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(rewrite_io_error)?;
+        let mut feeder = crate::csv_merge::RecordFeeder::new(delimiter.as_byte());
+        loop {
+            let read = input.read(&mut chunk).map_err(rewrite_io_error)?;
+            if read == 0 {
+                break;
+            }
+            for record in feeder.push(&chunk[..read]) {
+                let replaced: Vec<String> = record
+                    .iter()
+                    .map(|field| matcher.replace(field, &self.replacement))
+                    .collect();
+                let mut line = String::new();
+                crate::csv_merge::write_record_with_terminator(
+                    &replaced,
+                    delimiter.as_byte(),
+                    terminator.bytes(),
+                    &mut line,
+                );
+                output
+                    .write_all(line.as_bytes())
+                    .map_err(rewrite_io_error)?;
+            }
         }
         if feeder.unclosed_quote() {
             return Err(KernelError::new(
@@ -1413,8 +1412,7 @@ impl ReplaceRewriter {
                 false,
             ));
         }
-        // 末条：feeder 的 finish 会给出完整记录，写它时**不带终止符**
-        // （源文件末尾原本没有换行，产物也不该凭空多出一条空记录）。
+        // 末条：源末尾无换行时不凭空补一个终止符（源结构保护）。
         let tail = feeder.drain_finish();
         if !tail.is_empty() {
             let replaced: Vec<String> = tail[0]
@@ -1465,87 +1463,11 @@ fn write_record_body(fields: &[String], delimiter: u8, out: &mut String) {
     }
 }
 
-/// 把缓冲里所有**引号外**的 LF 换成 `terminator`（TC-C03-EXE-04）。
-///
-/// 两趟法：先按同一套引号规则把每条记录切成片段，再逐片写出并把片末的 LF 换掉。
-/// 边扫边写会错位（改写后长度变化），所以必须先切后拼。
-/// 把缓冲里所有**引号外**的 LF 换成 `terminator`（TC-C03-EXE-04）。
-///
-/// 扫描规则与 [`RecordFeeder::push`]／[`RecordTerminator::infer`] 完全一致，
-/// **包括"引号结束后紧跟的那一字节"也按引号外处理**——少算这一字节会让扫描状态
-/// 与实际字节错位，把后面某条记录的终止符漏换。
-fn rewrite_terminators(
-    data: &[u8],
-    terminator: &[u8],
-    output: &mut dyn Write,
-) -> Result<(), KernelError> {
-    if terminator == b"\n" {
-        return output.write_all(data).map_err(rewrite_io_error);
-    }
-    // 第一趟：扫出所有引号外的 LF 下标（扫描规则与 infer/RecordFeeder 一致）。
-    let mut hits: Vec<usize> = Vec::new();
-    let mut in_quotes = false;
-    let mut after_quote = false;
-    let mut at_field_start = true;
-    let mut index = 0usize;
-    while index < data.len() {
-        let byte = data[index];
-        if in_quotes {
-            if after_quote {
-                if byte == b'"' {
-                    after_quote = false;
-                    index += 1;
-                    continue;
-                }
-                in_quotes = false;
-                after_quote = false;
-            } else if byte == b'"' {
-                after_quote = true;
-                index += 1;
-                continue;
-            } else {
-                index += 1;
-                continue;
-            }
-        }
-        if at_field_start && byte == b'"' {
-            in_quotes = true;
-            at_field_start = false;
-            index += 1;
-            continue;
-        }
-        if byte == b'\n' {
-            hits.push(index);
-            at_field_start = true;
-            index += 1;
-            continue;
-        }
-        if byte != b'\r' {
-            at_field_start = false;
-        }
-        index += 1;
-    }
-
-    // 第二趟：按片段写，片段末尾的 LF 换成目标终止符。
-    let mut record_start = 0usize;
-    for hit in hits {
-        output
-            .write_all(&data[record_start..hit])
-            .map_err(rewrite_io_error)?;
-        output.write_all(terminator).map_err(rewrite_io_error)?;
-        record_start = hit + 1;
-    }
-    output
-        .write_all(&data[record_start..])
-        .map_err(rewrite_io_error)?;
-    Ok(())
-}
-
 impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
     fn rewrite(
         &self,
         entry: &PlanEntry,
-        input: &mut dyn Read,
+        input: &mut dyn crate::fs::ReadSeek,
         output: &mut dyn Write,
         // C03 尚未逐块检查取消（ADR-0097 §5）：它有四条重写路径，逐块接线另属一切片。
         _cancel: &dyn crate::progress::CancelToken,
@@ -1588,6 +1510,7 @@ impl crate::generic_apply::ContentRewriter for ReplaceRewriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Seek};
 
     const PLAN_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -2354,6 +2277,25 @@ mod tests {
             out[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
             self.pos += take;
             Ok(take)
+        }
+    }
+
+    impl Seek for Dripping {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            let len = self.data.len() as i64;
+            let target = match pos {
+                std::io::SeekFrom::Start(offset) => offset as i64,
+                std::io::SeekFrom::Current(delta) => self.pos as i64 + delta,
+                std::io::SeekFrom::End(delta) => len + delta,
+            };
+            if target < 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "seek to negative position",
+                ));
+            }
+            self.pos = target as usize;
+            Ok(target as u64)
         }
     }
 
