@@ -200,6 +200,7 @@
 
 | 日期 | 任务/功能 | 状态 | 证据（命令/测试/文件） | 剩余缺口 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-11-18 | 文档一致性专项：核实台账滞后标注 | 完成（核实＋更正） | 逐条比对 `OPEN-QUESTIONS` 裁决、`ADR-0047/0097`、`navCatalog.ts`、`App.navigation.test.tsx`、`E:/batchdesk-shijiri` 实机记录；`check_docs.py` 通过 | 本轮更正：AGENTS 授权装配点表述、映射表 ✅278/◐18 → ✅295/◐0/⛔1、Wave 4 任务面板入口、缺口分类 A/F、DEVELOPMENT-PLAN 可达百分比；**§6.1 为追加式历史记录，此前各行的滞后表述属当时快照，不改** | 开发代理 |
 | 2026-10-29 | W0-1 任务队列/状态机/事件 | 完成 | `src-tauri/src/tasks.rs`；`cargo test --manifest-path src-tauri/Cargo.toml --offline` 2 passed；kernel 取消/进度单测 3 项 | `retryTask`、任务持久化、事件合帧 | 开发代理 |
 | 2026-10-29 | W0-2 applyPlan/undoPlan 返回 taskId | 完成 | `src-tauri/src/lib.rs` 命令；`web/src/lib/ipc/index.ts` 订阅封装；`pnpm build` 通过 | — | 开发代理 |
 | 2026-10-29 | W0-3 Tauri WebView E2E | 完成 | `node scripts/e2e-tauri.mjs`：apply→undo、cleanup 演练、执行中取消回滚全部 PASS；截图 `target/e2e/tauri-task-queue.png` | Playwright/Vitest 矩阵、CSP/capabilities 断言 | 开发代理 |
