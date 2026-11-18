@@ -20,6 +20,11 @@ serde = { version = "1", features = ["derive"] }
 # ConfigDocument 的 patch 与 SettingValue 需要动态 JSON 值（设计 03 §2/§4；ADR-0010 同一选型）。
 serde_json = "1"
 
+# Web 形态零强制力（设计 05 §2、AGENTS 不变量 11）：启用后编译期裁掉
+# 基于 LicenseService 的阻断分支，使 WASM 产物二进制层面不存在该路径。
+[features]
+web-zero-force = []
+
 [dev-dependencies]
 # 纯函数微基准（CI bench job）；默认特性关掉绘图（plotters）以缩小依赖树，
 # 保留 cargo_bench_support（cargo bench 集成）与 csv_reports（供跨提交对比脚本用）。

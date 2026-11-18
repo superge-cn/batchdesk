@@ -4,6 +4,7 @@ members = [
     "crates/kernel",
     "crates/platform",
     "crates/cli",
+    "crates/wasm",
 ]
 
 [workspace.package]

@@ -855,7 +855,7 @@ pub fn plan_c09(input: PlanC09Input) -> Result<PlanDocument, KernelError> {
 
 /// C01 逐文件输入。`sample` 由壳层采样读取（`platform::text::sample_bytes`），
 /// kernel 只做纯判定（方案 §5.2"头部与随机采样块"）。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlanC01File {
     pub path: String,
     pub canonical_path: Option<String>,
@@ -863,7 +863,7 @@ pub struct PlanC01File {
     pub sample: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlanC01Input {
     pub plan_id: String,
     pub target: TargetEncoding,
