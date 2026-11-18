@@ -91,7 +91,7 @@ pub struct DiskSpaceCheck {
     pub margin_ratio: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PathCheck {
     pub path: String,
     pub canonical_path: Option<String>,

@@ -38,3 +38,20 @@ pub fn plan_c01(json: &str) -> Result<String, JsValue> {
         .map_err(|error| JsValue::from_str(&format!("{}: {}", error.code, error.message)))?;
     serde_json::to_string(&plan).map_err(|error| JsValue::from_str(&format!("E1002: {error}")))
 }
+
+/// F12 改名计划（只读）：入参/出参均为 JSON 字符串。
+///
+/// 目标名合法性规则由调用方（服务端下发或按目标卷选择）传入；**缺省＝POSIX 语义**
+/// （保守：只拦 `/` 与 NUL，不额外推断平台保留名）。这是**平台事实**而非授权判定
+/// （不变量 11、设计 05 §2）。
+#[wasm_bindgen]
+pub fn plan_f12(json: &str) -> Result<String, JsValue> {
+    let input: kernel::rename::WebPlanF12Input = serde_json::from_str(json)
+        .map_err(|error| JsValue::from_str(&format!("E1002: {error}")))?;
+    let input: kernel::rename::PlanF12Input = input
+        .try_into()
+        .map_err(|error: serde_json::Error| JsValue::from_str(&format!("E1002: {error}")))?;
+    let plan = kernel::rename::plan_f12(input)
+        .map_err(|error| JsValue::from_str(&format!("{}: {}", error.code, error.message)))?;
+    serde_json::to_string(&plan).map_err(|error| JsValue::from_str(&format!("E1002: {error}")))
+}

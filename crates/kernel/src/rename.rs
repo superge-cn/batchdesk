@@ -19,7 +19,7 @@ use crate::plan::{
 
 pub const F12_KIND: &str = "f12";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RenameScope {
     Full,
     Stem,
@@ -45,7 +45,7 @@ impl RenameScope {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlanF12Rule {
     pub prefix: Option<String>,
     pub suffix: Option<String>,
@@ -75,7 +75,77 @@ pub struct PlanF12Item {
     pub name: String,
 }
 
-#[derive(Clone, Debug)]
+/// **Web 形态专用**的 F12 计划输入（ADR-0099）。
+///
+/// 与桌面版 `PlanF12Input` 语义一一对应，差别只在**目标名合法性规则的承载形式**：
+/// 桌面走编译期静态切片（`&'static [char]`），Web 形态的规则由**服务端下发或按目标卷
+/// 选择**后随请求传入，故用 [`OwnedNameRules`]。
+///
+/// **零强制力边界（不变量 11、设计 05 §2）**：这里传的是**平台事实**（名字合不合法），
+/// 不是授权判定——规则值来自调用方声明，内核只做合法性比较，不判「能不能用」。
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WebPlanF12Input {
+    pub plan_id: String,
+    pub items: Vec<WebPlanF12Item>,
+    pub existing_targets: Vec<String>,
+    pub protected_dirs: Vec<crate::path::ProtectedDir>,
+    pub case_sense: crate::fs::CaseSense,
+    pub long_path_supported: bool,
+    pub access_facts: Vec<crate::preflight::PathCheck>,
+    /// 目标名合法性规则（服务端下发／按目标卷选择）；**缺省＝POSIX 语义**（见实现）。
+    #[serde(default)]
+    pub name_rules: Option<crate::conflict::OwnedNameRules>,
+    /// 全局改名规则；JSON 对象，与 `PlanF12Input.rule` 同形。
+    pub rule: serde_json::Value,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WebPlanF12Item {
+    pub path: String,
+}
+
+/// Web 输入的**全局**改名规则（与 `PlanF12Input.rule` 同形）。
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WebPlanF12Rule(pub serde_json::Value);
+
+/// 把 Web 输入转成内核输入。`rule` 缺字段即报错（不静默补默认）。
+impl TryFrom<WebPlanF12Input> for PlanF12Input {
+    type Error = serde_json::Error;
+
+    fn try_from(value: WebPlanF12Input) -> Result<Self, Self::Error> {
+        let items = value
+            .items
+            .into_iter()
+            .map(|item| {
+                let name = std::path::Path::new(&item.path)
+                    .file_name()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Ok(PlanF12Item {
+                    path: item.path,
+                    name,
+                })
+            })
+            .collect::<Result<Vec<_>, serde_json::Error>>()?;
+        let rule = serde_json::from_value(value.rule)?;
+        Ok(PlanF12Input {
+            plan_id: value.plan_id,
+            items,
+            existing_targets: value.existing_targets,
+            protected_dirs: value.protected_dirs,
+            case_sense: value.case_sense,
+            // 规则缺省＝POSIX 语义（保守：只拦 `/` 与 NUL，不额外推断平台保留名）。
+            name_rules: value
+                .name_rules
+                .unwrap_or_else(crate::conflict::OwnedNameRules::posix)
+                .into(),
+            long_path_supported: value.long_path_supported,
+            access_facts: value.access_facts,
+            rule,
+        })
+    }
+}
+
 pub struct PlanF12Input {
     pub plan_id: String,
     pub items: Vec<PlanF12Item>,

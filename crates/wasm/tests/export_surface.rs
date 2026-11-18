@@ -157,7 +157,7 @@ console.log(JSON.stringify(exp.filter(n=>!n.startsWith("__"))));"#,
         .map(|name| name.split('_').next().unwrap_or(name))
         .filter(|name| !["memory", "abort_handler", "instance_terminated"].contains(name))
         .collect();
-    let allowed = ["browser_capabilities", "plan_c01"];
+    let allowed = ["browser_capabilities", "plan_c01", "plan_f12"];
     for name in &business {
         assert!(
             allowed.contains(name),
@@ -167,4 +167,28 @@ console.log(JSON.stringify(exp.filter(n=>!n.startsWith("__"))));"#,
     for must in allowed {
         assert!(business.contains(&must), "wasm 导出面缺少应有入口 `{must}`");
     }
+}
+
+/// Web F12 输入能产出计划（端到端：JSON → WebPlanF12Input → PlanF12Input → plan_f12）。
+///
+/// 同时钉住**零强制力边界**：`name_rules` 缺省时按 POSIX 语义（不推断平台保留名），
+/// 且规则来自调用方声明而非内核授权判定。
+#[test]
+fn web_plan_f12_round_trips_and_defaults_name_rules_to_posix() {
+    let payload = serde_json::json!({
+        "plan_id": "01J9Z3K8Y6Q8Q8Q8Q8Q8Q8Q8Q8",
+        "items": [{"path": "/dir/a.txt"}],
+        "existing_targets": [],
+        "protected_dirs": [],
+        "case_sense": "sensitive",
+        "long_path_supported": true,
+        "access_facts": [],
+        "rule": {"prefix": "x", "suffix": ".bak", "replace": "", "scope": "Full"}
+    });
+    let web: kernel::rename::WebPlanF12Input =
+        serde_json::from_value(payload).expect("WebPlanF12Input 可反序列化");
+    let input: kernel::rename::PlanF12Input = web.try_into().expect("Web 输入可转内核输入");
+    let plan = kernel::rename::plan_f12(input).expect("计划生成成功");
+    assert_eq!(plan.entries.len(), 1, "一个输入一条 rename 条目");
+    assert_eq!(plan.entries[0].target.as_deref(), Some("/dir/xa.txt.bak"));
 }
