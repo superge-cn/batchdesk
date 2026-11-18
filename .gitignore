@@ -57,3 +57,6 @@ web/.probe/entry-*.mjs
 web/.probe/*.log
 ctrl.log
 warn.log
+
+# Web 形态 WASM 产物（scripts/build-wasm.mjs 生成，不入库；ADR-0098）
+web/wasm/
