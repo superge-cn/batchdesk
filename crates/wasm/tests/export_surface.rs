@@ -151,21 +151,26 @@ console.log(JSON.stringify(exp.filter(n=>!n.startsWith("__"))));"#,
     );
     let names: Vec<String> = serde_json::from_slice(&output.stdout).expect("导出表 JSON");
 
-    // 业务入口白名单（去掉 wasm-bindgen 的哈希后缀）。
+    // wasm-bindgen 会给导出名加哈希后缀（`plan_c01_f2c4df315bee1a29`），
+    // 故按**前缀**匹配白名单；运行期内部符号（memory/__wbindgen_*）排除。
+    let internal = ["memory", "abort_handler", "instance_terminated"];
+    let allowed = ["browser_capabilities", "plan_c01", "plan_f12"];
     let business: Vec<&str> = names
         .iter()
-        .map(|name| name.split('_').next().unwrap_or(name))
-        .filter(|name| !["memory", "abort_handler", "instance_terminated"].contains(name))
+        .map(String::as_str)
+        .filter(|name| !internal.contains(name))
         .collect();
-    let allowed = ["browser_capabilities", "plan_c01", "plan_f12"];
     for name in &business {
         assert!(
-            allowed.contains(name),
+            allowed.iter().any(|entry| name.starts_with(entry)),
             "wasm 导出面出现未登记入口 `{name}`（设计 05 §2 白名单外）"
         );
     }
     for must in allowed {
-        assert!(business.contains(&must), "wasm 导出面缺少应有入口 `{must}`");
+        assert!(
+            business.iter().any(|name| name.starts_with(must)),
+            "wasm 导出面缺少应有入口 `{must}`"
+        );
     }
 }
 
