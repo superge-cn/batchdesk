@@ -38,8 +38,10 @@ Wave 5 要开 Web/WASM 形态。设计 05 §0 的三条结论要求：
 
 - kernel 新增 feature（`crates/kernel/Cargo.toml`），wasm crate 转发；
 - 启用后编译期裁掉基于 `LicenseService` 的阻断分支（设计 05 §2 的验收升级）；
-- **本批只立开关与断言**，实际裁剪点随下一批（把 `apply.rs` 的 capability/consume/release
-  分支按 feature 门控）落地——那需要逐处影响面清单，不在骨架批次射程。
+- **裁剪点已落地（2026-11-18 续）**：`apply.rs` 的 `capability(C09)` 与 `consume(C09,1)` 两处按 feature 门控（`#[cfg(...)]` 分支）；`release` 保持调用（Web 形态注入的实现为 no-op）。
+  影响面：`capability` 的 Deny/Quota 分支（E4001/E4004）与 `consume` 的错误路径；其余 5 处 `release` 不受影响。
+  行为断言：新增 `web_zero_force_ignores_deny_license`（feature 下 DenyLicense 不阻断，条目 `Ok`）；
+  既有 `denied_license_does_not_touch_the_file` 以 `#[cfg(not(feature = "web-zero-force"))]` 门控（语义相反）。
 
 ### 4. 导出面断言（两层）
 

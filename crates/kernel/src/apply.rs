@@ -379,7 +379,13 @@ pub fn apply_plan(
             }
         }
 
-        match context.license.capability(C09) {
+        // 设计 05 §2／AGENTS 不变量 11：Web 形态零强制力——本地模式不产生
+        // E4001/E4004 阻断，授权判定只存在于云端服务端。
+        #[cfg(feature = "web-zero-force")]
+        let capability = Capability::Allow;
+        #[cfg(not(feature = "web-zero-force"))]
+        let capability = context.license.capability(C09);
+        match capability {
             Capability::Allow => {}
             Capability::Deny { reason } => {
                 failed += 1;
@@ -494,6 +500,8 @@ pub fn apply_plan(
             }
         }
 
+        // 同上：Web 形态不做本地配额扣减（记账在服务端）。
+        #[cfg(not(feature = "web-zero-force"))]
         if let Err(error) = context.license.consume(C09, 1) {
             failed += 1;
             entries.push(failed_entry(&entry.entry_id, error));
@@ -2047,6 +2055,9 @@ mod tests {
         assert_eq!(error.code, "E2005");
     }
 
+    /// 非 Web 形态：DenyLicense 阻断执行（E4001）且零副作用。
+    /// Web 形态见 `web_zero_force_ignores_deny_license`（语义相反，故门控）。
+    #[cfg(not(feature = "web-zero-force"))]
     #[test]
     fn denied_license_does_not_touch_the_file() {
         let fs = TestFs::with_files(&["a"]);
@@ -2066,6 +2077,28 @@ mod tests {
         );
         assert!(fs.exists("a"));
         assert!(journal.entries.is_empty());
+    }
+
+    /// 设计 05 §2：Web 形态（`web-zero-force`）零强制力——即使注入 DenyLicense，
+    /// 本地也不产生 E4001 阻断，条目照常执行。
+    #[cfg(feature = "web-zero-force")]
+    #[test]
+    fn web_zero_force_ignores_deny_license() {
+        let fs = TestFs::with_files(&["a"]);
+        let license = DenyLicense;
+        let mut journal = TestJournal::default();
+        let outcome = apply_plan(
+            &plan(vec![delete_entry("e1", "a")]),
+            &ApplyOptions::default(),
+            &mut context(&fs, &license, &mut journal),
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.state,
+            ApplyState::Completed,
+            "Web 形态不得因授权拒绝而阻断"
+        );
+        assert_eq!(outcome.report.entries[0].status, ApplyStatus::Ok);
     }
 
     #[test]
