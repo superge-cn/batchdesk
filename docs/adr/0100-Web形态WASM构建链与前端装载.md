@@ -47,9 +47,20 @@ cargo build -p batchdesk-wasm --target wasm32-unknown-unknown --features web-zer
   能力事实形状恰为 `form/localMode/exportVersion`）；
 - `pnpm test` 全绿；`pnpm build` 通过（5.51s）。
 
+## Worker 化（2026-11-18 续做）
+
+内核调用移到独立线程，避免大计划阻塞 UI：
+
+- `worker.ts`：Worker 内 `init(new URL("../../../wasm/batchdesk_wasm_bg.wasm", import.meta.url))`
+  （`--target web` 的 `init` 无参时会按 worker 脚本目录解析 `.wasm`，与产物实际位置不符，故显式传 URL）；
+- `client.ts`：主线程按 **id 关联请求/响应**；Worker 构造失败或 `onerror` 时，
+  在途请求一律按 `wasm-unavailable` 降级——**不抛、不判定**；
+- `load.ts` 暴露 `createWorkerClient()`。
+
+验证：`pnpm test` **194 项全过**（32 文件，含协议契约 4 项）；`pnpm build` 通过。
+
 ## 未做（下一批）
 
-- **Worker 化**：当前是主线程懒加载；移到 Worker 需处理 `postMessage` 与
-  `wasm-bindgen` 的 `--target web` 在 Worker 内的初始化（`init` 传 `self`），属独立一批；
+- 真实浏览器内的 Worker 端到端（Playwright 驱动 wasm 产物；当前测试为协议层断言）；
 - **服务端下发配额**：设计 07 的云端服务端尚不存在；前端只预留「渲染服务端结果」的位置；
 - **其余功能接入**：f05/f07/c07… 按 ADR-0099 的承载方式逐个评估。

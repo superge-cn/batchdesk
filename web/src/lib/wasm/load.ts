@@ -7,6 +7,8 @@
  * 调用方按「能力不可用」处理——**前端不做任何判定**（设计 05 §0 第 2 条）。
  */
 
+import { createWasmClient } from "./client";
+import type { WasmClient } from "./client";
 import type { BatchDeskWasm } from "./contract";
 
 let cached: BatchDeskWasm | null | undefined;
@@ -42,4 +44,13 @@ export async function loadBatchDeskWasm(): Promise<BatchDeskWasm | null> {
 /** 测试用：清缓存。 */
 export function resetWasmCacheForTests(): void {
   cached = undefined;
+}
+
+/**
+ * Worker 客户端（ADR-0100 续）：内核调用走独立线程。
+ *
+ * Worker 不可用时返回 `null`——调用方按「能力不可用」降级，**不判定**。
+ */
+export function createWorkerClient(): WasmClient | null {
+  return createWasmClient();
 }
