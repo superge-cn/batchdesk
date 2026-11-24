@@ -279,6 +279,12 @@ jobs:
         working-directory: web
       - name: 桌面壳 cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml
+      # 与 lint job 的 rustfmt 同理：`cargo clippy --workspace` 只覆盖根 workspace，
+      # 桌面壳是独立 workspace，此前从未跑过 clippy。放在 desktop job 而不是 lint job，
+      # 因为 lint job 的 ubuntu 没装 WebKitGTK，编不了 src-tauri。
+      # 2026-11-24 首次试跑为 0 警告，补进门禁防止日后漂移。
+      - name: 桌面壳 clippy（零容忍）
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       # 壳层单测是 34 条「载体＝壳层命令」用例的执行位置（用例覆盖映射表），
       # 只 check 不跑测试会让这些证据永远只有本地口径。
       - name: 桌面壳单元测试（任务队列/预检门/恢复/日志）
