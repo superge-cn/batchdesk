@@ -106,6 +106,14 @@ jobs:
         # src-tauri/Cargo.toml 的 [profile.release] 与 ADR-0002。
         run: pnpm tauri build --ci --no-sign
 
+      # ADR-0002 §3：加固要求必须机器验收，不能只靠 profile 配了就认为生效。
+      # 断言符号表已剥离、授权关键字符串不落明文；失败让 job 红。
+      # 脚本对「CodeView/RSDS 残留」只 WARN 不判红——当前 strip=symbols 确实
+      # 移除符号表但保留 PDB 路径，这是已登记缺口，不能用假断言声称已满足。
+      - name: 发行产物硬化断言（符号剥离／授权字符串不落明文）
+        shell: pwsh
+        run: python scripts/check_release_artifact.py --binary src-tauri/target/release/batchdesk-desktop.exe
+
       - name: 生成校验和（不含签名）
         # 设计 11 §2 的产物清单含 checksums；签名与清单验签不在本工作流
         # （证书与密钥托管未定，OQ-06/设计 11 §3）。

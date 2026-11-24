@@ -1,0 +1,7 @@
+# 发行产物中不得出现的授权相关标识符（ADR-0002 §3「授权关键字符串不落明文」）。
+# 一行一个；`#` 开头为注释。清单只放仓库中真实存在的标识符，不发明占位项。
+# 命中即判红：说明该字符串未经任何处理就进了发行二进制。
+AlwaysAllowLicense
+LicenseService
+is_quota_exhausted
+QuotaBasedLicense
