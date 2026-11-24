@@ -154,6 +154,7 @@ const NAV_ICONS: Record<View, LucideIcon> = {
   c10: Files,
   f11: Files,
   f12: Files,
+  f13: Files,
   f01: Files,
   f02: Files,
   f03: Files,

@@ -825,3 +825,100 @@ describe("改名族的浏览器执行（A3-11）", () => {
     ]);
   });
 });
+
+describe("F13 正则改名的浏览器入口（ADR-0117）", () => {
+  const regexPlan = {
+    planId: "01REGEXF13PLAN000000000000",
+    kind: "f13",
+    params: { pattern: "^(\d{4})-", replacement: "$1_", scope: "stem" },
+    entries: [
+      {
+        entryId: "e1",
+        source: "素材/2026-a.txt",
+        target: "素材/2026_a.txt",
+        action: "rename",
+        reason: "rename to target",
+        blocked: null,
+        range: null
+      }
+    ],
+    stats: { total: 1, conflict: 0, warning: 0, blocked: 0 },
+    warnings: []
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    callWasm.mockImplementation(async (request: { op: string }) => {
+      switch (request.op) {
+        case "plan_f13":
+          return { ok: true, result: JSON.stringify(regexPlan) };
+        case "stage_inputs":
+          return { ok: true, result: '{"staged":1}' };
+        case "apply_plan":
+          return {
+            ok: true,
+            result: JSON.stringify({
+              outcome: {
+                state: "completed",
+                report: { entries: [{ status: "ok" }] }
+              },
+              products: [{ path: "/素材/2026_a.txt", size: 3 }]
+            }),
+            products: [
+              { path: "/素材/2026_a.txt", size: 3, blob: new Blob(["AAA"]) }
+            ]
+          };
+        case "reset_sandbox":
+          return { ok: true, result: '{"reset":true}' };
+        default:
+          throw new Error(`unexpected op ${request.op}`);
+      }
+    });
+  });
+
+  it("选目录 + 填正则 → plan_f13 → stage（含子树）→ apply，产物可下载", async () => {
+    const user = userEvent.setup();
+    render(<FeaturePages view="f13" onBack={() => undefined} />);
+
+    // 与 F12/C04 同口径：dir 在浏览器里是目录选择器。
+    const input = screen.getByTestId("web-directory-input") as HTMLInputElement;
+    expect(input.hasAttribute("webkitdirectory")).toBe(true);
+    fireEvent.change(input, {
+      target: {
+        files: [
+          pickFromDirectory("素材/2026-a.txt", "AAA"),
+          pickFromDirectory("素材/sub/b.txt", "BB")
+        ]
+      }
+    });
+    // 用 fireEvent 直接改值：`user.type` 会把 `{4}` 当按键描述符解析，
+    // 打出来的正则与预期不是一个串（`{{`/`}}` 的转义规则不适合正则字面量）。
+    fireEvent.change(document.querySelector<HTMLInputElement>("#f13-pattern")!, {
+      target: { value: "^(\d{4})-" }
+    });
+    fireEvent.change(document.querySelector<HTMLInputElement>("#f13-replace")!, {
+      target: { value: "${1}_" }
+    });
+    fireEvent.change(document.querySelector<HTMLInputElement>("#f13-scope")!, {
+      target: { value: "stem" }
+    });
+    await user.click(screen.getByRole("button", { name: /生成计划预览/ }));
+    await screen.findByRole("heading", { name: "计划预览" });
+
+    await user.click(screen.getByRole("button", { name: /^执行$/ }));
+    const panel = await screen.findByTestId("web-sandbox-result");
+    expect(panel.textContent).toContain("/素材/2026_a.txt");
+
+    const ops = callWasm.mock.calls.map(([call]) => (call as { op: string }).op);
+    expect(ops).toEqual(["plan_f13", "stage_inputs", "apply_plan"]);
+    const planCall = callWasm.mock.calls.find(
+      ([call]) => (call as { op: string }).op === "plan_f13"
+    )![0] as { payload: string };
+    // 正则与模板原样进内核；scope 是小写字符串（内核 `RenameScope::parse` 认这个形态）。
+    expect(JSON.parse(planCall.payload).rule).toEqual({
+      pattern: "^(\d{4})-",
+      replacement: "${1}_",
+      scope: "stem"
+    });
+  });
+});

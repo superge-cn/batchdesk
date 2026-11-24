@@ -12,6 +12,7 @@ const VIEWS: Array<[string, string, string]> = [
   ["目录清单", "F10", "生成目录清单（F10）"],
   ["清单建档", "F11", "清单建档（F11）"],
   ["批量改名", "F12", "批量改名（F12）"],
+  ["正则改名", "F13", "正则改名（F13）"],
   ["TXT 按字节分割", "F01", "TXT 按字节分割（F01）"],
   ["TXT 按行数分割", "F02", "TXT 按行数分割（F02）"],
   ["TXT 按份数分割", "F03", "TXT 按份数分割（F03）"],
@@ -34,7 +35,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "功能导航" })).toBeVisible();
 });
 
-test("23 个功能视图在真实浏览器里逐个可达", async ({ page }) => {
+test("24 个功能视图在真实浏览器里逐个可达", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "功能导航" });
   for (const [label, code, title] of VIEWS) {
     const button = nav.getByRole("button", { name: new RegExp(`^${label}\\s*${code}$`) });

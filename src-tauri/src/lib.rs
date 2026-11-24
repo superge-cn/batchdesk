@@ -312,6 +312,7 @@ fn plan_operation_impl(
         "f05" => return plan_f05_shell(state, params, source_paths),
         "f11" => return plan_f11_shell(state, params, source_paths),
         "f12" => return plan_f12_shell(state, params, source_paths),
+        "f13" => return plan_f13_shell(state, params, source_paths),
         "f01" | "f02" | "f03" => {
             return plan_kinds::plan_split_shell(state, &kind, params).map_err(IpcError::from)
         }
@@ -1464,6 +1465,69 @@ fn default_scope() -> String {
     "full".to_string()
 }
 
+/// F13 正则改名的壳层入参（`pattern` 是正则、`replacement` 是模板，不是字面量）。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct F13ShellParams {
+    dir: String,
+    pattern: String,
+    #[serde(default = "default_empty")]
+    replacement: String,
+    #[serde(default = "default_scope")]
+    scope: String,
+    #[serde(default)]
+    plan_id: Option<String>,
+}
+
+/// 改名族（F12/F13）的目录第一层条目与事实：**与 CLI 同口径**。
+///
+/// 两处必须一致，否则同一个功能在 UI 与 CLI 上会得到不同的改名集合：跳过符号链接
+/// （改名链接不等于改名目标）、按名字排序（两阶段编排与冲突裁决的顺序必须确定）。
+/// 此前 F12 壳层这两条都没做，与 `run_f12` 各说一套；F13 接入时提成共用实现。
+struct RenameEntries {
+    items: Vec<kernel::rename::PlanF12Item>,
+    /// 计划期已存在的目录项（冲突扫描排除本批次将移走的源）。
+    existing: Vec<String>,
+    access_facts: Vec<kernel::preflight::PathCheck>,
+    long_path_supported: bool,
+}
+
+fn collect_rename_entries(dir: &Path) -> Result<RenameEntries, IpcError> {
+    let long_path_supported = platform::preflight::long_path_supported();
+    let mut items = Vec::new();
+    let mut existing = Vec::new();
+    let mut access_facts = Vec::new();
+    for entry in std::fs::read_dir(dir)
+        .map_err(|error| IpcError::new("E1004", format!("{}: {error}", dir.display())))?
+    {
+        let entry = entry.map_err(|error| IpcError::new("E1004", error.to_string()))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if !metadata.file_type().is_symlink() => {}
+            // 读不到属性或本身是符号链接：与 CLI 一样跳过（不猜它是文件还是目录）。
+            _ => continue,
+        }
+        existing.push(path.to_string_lossy().into_owned());
+        // 只读在预览期点名（方案 §5.13）；占用属预检面，计划期不探测。
+        access_facts.push(platform::preflight::path_check_light(
+            &path,
+            long_path_supported,
+        ));
+        items.push(kernel::rename::PlanF12Item {
+            path: path.to_string_lossy().into_owned(),
+            name,
+        });
+    }
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(RenameEntries {
+        items,
+        existing,
+        access_facts,
+        long_path_supported,
+    })
+}
+
 fn plan_f12_shell(
     state: &State<'_, AppState>,
     params: Value,
@@ -1477,27 +1541,12 @@ fn plan_f12_shell(
     if !dir.is_dir() {
         return Err(IpcError::new("E1003", "f12 dir must be a directory"));
     }
-    let mut items = Vec::new();
-    let mut existing = Vec::new();
-    let long_path_supported = platform::preflight::long_path_supported();
-    let mut access_facts = Vec::new();
-    for entry in std::fs::read_dir(&dir)
-        .map_err(|error| IpcError::new("E1004", format!("{}: {error}", dir.display())))?
-    {
-        let entry = entry.map_err(|error| IpcError::new("E1004", error.to_string()))?;
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        existing.push(path.to_string_lossy().into_owned());
-        // 只读在预览期点名（方案 §5.13）；占用属预检面，计划期不探测。
-        access_facts.push(platform::preflight::path_check_light(
-            &path,
-            long_path_supported,
-        ));
-        items.push(kernel::rename::PlanF12Item {
-            path: path.to_string_lossy().into_owned(),
-            name,
-        });
-    }
+    let RenameEntries {
+        items,
+        existing,
+        access_facts,
+        long_path_supported,
+    } = collect_rename_entries(&dir)?;
     let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f12"));
     let plan = kernel::rename::plan_f12(kernel::rename::PlanF12Input {
         plan_id: plan_id.clone(),
@@ -1529,7 +1578,59 @@ fn plan_f12_shell(
     Ok(plan)
 }
 
-/// C05 预览面板（§7.4）：对已生成的重命名族计划聚合对照行与计数，零副作用。
+/// F13 正则改名的计划入口（与 CLI `f13 --dir --regex --replace --scope` 同口径）。
+///
+/// 采集复用 `collect_rename_entries`：条目同为目录第一层、同样跳符号链接并按名排序。
+/// 规则不同——本入口收**正则**与替换模板，编译与捕获引用校验都在内核计划期完成
+/// （非法正则/缺失捕获组直接 E1002，不会进到执行）。
+fn plan_f13_shell(
+    state: &State<'_, AppState>,
+    params: Value,
+    _source_paths: Vec<String>,
+) -> Result<PlanDocument, IpcError> {
+    let params: F13ShellParams = serde_json::from_value(params)
+        .map_err(|error| IpcError::new("E1002", format!("invalid f13 params: {error}")))?;
+    let scope = kernel::rename::RenameScope::parse(&params.scope)
+        .ok_or_else(|| IpcError::new("E1002", format!("invalid scope: {}", params.scope)))?;
+    let dir = make_absolute(Path::new(&params.dir));
+    if !dir.is_dir() {
+        return Err(IpcError::new("E1003", "f13 dir must be a directory"));
+    }
+    let RenameEntries {
+        items,
+        existing,
+        access_facts,
+        long_path_supported,
+    } = collect_rename_entries(&dir)?;
+    let plan_id = params.plan_id.unwrap_or_else(|| new_ulid("f13"));
+    let plan = kernel::regex_rename::plan_f13(kernel::regex_rename::PlanF13Input {
+        plan_id: plan_id.clone(),
+        items,
+        existing_targets: existing,
+        protected_dirs: Vec::new(),
+        case_sense: CliFsAdapter::new(None).case_sensitivity(),
+        name_rules: platform::fs::name_rules(),
+        long_path_supported,
+        access_facts,
+        rule: kernel::regex_rename::PlanF13Rule {
+            pattern: params.pattern,
+            replacement: params.replacement,
+            scope,
+        },
+    })
+    .map_err(IpcError::from)?;
+    state.plans.lock().unwrap().insert(
+        plan.plan_id.clone(),
+        StoredPlan {
+            plan: plan.clone(),
+            protected_dirs: Vec::new(),
+            case_sense: CliFsAdapter::new(None).case_sensitivity(),
+            protected_source: ProtectedSource::Params,
+        },
+    );
+    Ok(plan)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 #[allow(non_snake_case)]
 fn renamePreview(state: State<'_, AppState>, plan_id: String) -> Result<Value, IpcError> {
@@ -2223,6 +2324,18 @@ mod tests {
         let params = slots_of("f12", &[], &[("dir", json!("/data"))]);
         let parsed: F12ShellParams = serde_json::from_value(params).unwrap();
         assert_eq!(parsed.dir, "/data", "f12 的 dir 槽");
+
+        // f13 的槽位表里只有 dir；pattern/replacement 属**变换正文**（模板存它们，
+        // 但它们在快照里、不在路径槽位里）——所以 `pattern` 由快照侧注入，
+        // 否则解结构体时缺必填字段，红的会是它而不是槽位键。
+        let params = slots_of(
+            "f13",
+            &[("pattern", json!("(.*)"))],
+            &[("dir", json!("/data"))],
+        );
+        let parsed: F13ShellParams = serde_json::from_value(params).unwrap();
+        assert_eq!(parsed.dir, "/data", "f13 的 dir 槽");
+        assert_eq!(parsed.pattern, "(.*)", "f13 的 pattern 快照");
     }
 
     #[test]
@@ -2311,7 +2424,8 @@ mod tests {
         // 新加功能却没补落地断言＝表可以漂移而 CI 全绿，这条就是拦这个的。
         let covered: std::collections::BTreeSet<&str> = [
             "f01", "f02", "f03", "f04", "f05", "f06", "f07", "f08", "f09", "f10", "f11", "f12",
-            "c01", "c02", "c03", "c04", "c07", "c08", "c09", "c10", "c11", "c12", "c13", "c14",
+            "f13", "c01", "c02", "c03", "c04", "c07", "c08", "c09", "c10", "c11", "c12", "c13",
+            "c14",
         ]
         .into_iter()
         .collect();
@@ -2512,6 +2626,49 @@ mod tests {
         );
         // 清理失败不影响断言结论：部分 Windows 构建上 `remove_dir_all` 会对
         // 目录内普通文件报 ERROR_DIR_NOT_EMPTY（本机已复现），不能把测试判红。
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_entry_collection_skips_symlinks_and_sorts_by_name() {
+        // F12/F13 的桌面入口与 CLI 必须同口径（`run_f12`/`run_f13`）：跳符号链接、
+        // 按名字排序。此前 F12 壳层两条都没做，同一个目录在 UI 与 CLI 上会得到不同的
+        // 改名集合；这条断言钉住共用采集器。
+        use std::fs;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("batchdesk-f13-{}-{seq}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for name in ["b.txt", "a.txt", "C.txt"] {
+            fs::write(root.join(name), b"x").unwrap();
+        }
+        // Windows 上创建符号链接需要开发者模式/提权，失败就只验排序面。
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("a.txt"), root.join("link.txt")).unwrap();
+
+        let entries = collect_rename_entries(&root).unwrap();
+        let names: Vec<&str> = entries
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["C.txt", "a.txt", "b.txt"],
+            "条目按名字升序（与 CLI 的 sort_by 同一条规则）"
+        );
+        #[cfg(unix)]
+        assert!(
+            !names.contains(&"link.txt"),
+            "符号链接不进改名条目：{names:?}"
+        );
+        assert_eq!(
+            entries.existing.len(),
+            entries.items.len(),
+            "存在清单与条目必须同面（同一次 read_dir 的产物）"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -822,7 +822,7 @@ describe("Web 计划通道（C07 清单同步：两份独立输入）", () => {
   });
 });
 
-describe("C04/F12：目录第一层条目（ADR-0113）", () => {
+describe("C04/F12/F13：目录第一层条目（ADR-0113／ADR-0117）", () => {
   it("C04 条目取第一层：根层文件 + 子目录名，深层文件不单独成条目", async () => {
     const calls: WasmCall[] = [];
     const caller = async (request: WasmCall): Promise<WasmCallResult> => {
@@ -875,6 +875,46 @@ describe("C04/F12：目录第一层条目（ADR-0113）", () => {
     // 浏览器没有目标文件系统：目标占用事实只能是空（沙箱执行前本来就是空的）。
     expect(payload.existingTargets).toEqual([]);
     expect(payload.longPathSupported).toBe(true);
+  });
+
+  it("F13 把正则与模板原样送进内核，scope 用小写（与 C04 同形）", async () => {
+    const calls: WasmCall[] = [];
+    const caller = async (request: WasmCall): Promise<WasmCallResult> => {
+      calls.push(request);
+      return { ok: true, result: planDocument("f13") };
+    };
+    await planWithPickedInputs(
+      caller,
+      "f13",
+      { dir: [dirFile("素材/2026-a.txt", "A"), dirFile("素材/sub/b.txt", "B")] },
+      { pattern: "^(\d{4})-", replace: "$1_", scope: "stem" }
+    );
+    expect(calls.map((call) => call.op)).toEqual(["plan_f13"]);
+    const payload = JSON.parse((calls[0] as { payload: string }).payload);
+    // 条目口径与 C04/F12 相同：第一层文件 + 第一层子目录名。
+    expect(payload.items).toEqual([
+      { path: "素材/2026-a.txt" },
+      { path: "素材/sub" }
+    ]);
+    // 正则与模板**不做任何加工**（编译与捕获引用校验在内核计划期）；
+    // scope 是小写字符串（F12 那个入口才要 PascalCase）。
+    expect(payload.rule).toEqual({
+      pattern: "^(\d{4})-",
+      replacement: "$1_",
+      scope: "stem"
+    });
+    expect(payload.existingTargets).toEqual([]);
+  });
+
+  it("F13 缺正则时在调 WASM 前拒绝（不送空 pattern 进内核）", async () => {
+    const caller = vi.fn(async (): Promise<WasmCallResult> => ({
+      ok: true,
+      result: planDocument("f13")
+    }));
+    await expect(
+      planWithPickedInputs(caller, "f13", { dir: [dirFile("素材/a.txt", "A")] }, {})
+    ).rejects.toMatchObject({ code: "E1001" });
+    expect(caller).not.toHaveBeenCalled();
   });
 
   it("普通多选（无相对路径）在调 WASM 前拒绝，不拿裸文件名凑数", async () => {
@@ -930,8 +970,8 @@ describe("Web 计划通道（能力矩阵：25 个入口逐个表态）", () => 
     const unsupported = views.filter(
       (view) => webPlanSupport(view).level === "unsupported"
     );
-    expect(native).toHaveLength(22);
-    expect(unsupported).toHaveLength(3);
+    expect(native).toHaveLength(23);
+    expect(unsupported).toHaveLength(2);
     // 每个不支持的视图都必须说明原因（否则界面只能给一句空话）。
     for (const view of unsupported) {
       expect(webPlanSupport(view).gap).toBeDefined();
@@ -978,6 +1018,7 @@ describe("Web 计划通道（能力矩阵：25 个入口逐个表态）", () => 
     ["c07"],
     ["c04"],
     ["f12"],
+    ["f13"],
     ["f10"]
   ])("%s 声明为 native 就一定有实现（不会走到 E5001）", async (view) => {
     const caller = async (): Promise<WasmCallResult> => ({

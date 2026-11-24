@@ -157,6 +157,12 @@ export type WebNativeView =
   | "c04"
   | "f12"
   /**
+   * F13 正则改名：与 C04/F12 同一套条目口径（目录第一层名字），规则是正则＋
+   * 替换模板。正则编译与捕获引用校验都在内核计划期完成（`plan_f13`），
+   * Web 侧只负责把目录事实送进去。
+   */
+  | "f13"
+  /**
    * F10 目录清单（ADR-0114）：条目＝所选目录的根，产物是一份 UTF-8 BOM CSV。
    *
    * 有别于桌面的事实：浏览器不给**空目录**（`dirs` 只数得到非空目录）、不给目录
@@ -167,9 +173,8 @@ export type WebNativeView =
 /**
  * 浏览器事实不全、必须拒绝的视图。
  *
- * F13（正则改名）不在表内：Web 前端没有这个视图入口（`navCatalog` 无此项），
- * 档位表不留永远查不到的死条目（A3-9 的教训）；将来加视图时先走 `pending-wiring`
- * 兜底，再按实际缺什么归位。
+ * F13 于 2026-11-24 接入（ADR-0117）后从「无视图」变为 native——它的条目口径与
+ * C04/F12 相同（`webkitdirectory` 的第一层名字），不需要额外事实。
  */
 export type WebUnsupportedView = "c09" | "f11";
 
@@ -876,6 +881,39 @@ async function planF12(
 }
 
 /**
+ * F13 正则改名。
+ *
+ * 与 C04/F12 同一套条目口径（目录第一层），差别是规则形态：内核收 `pattern`／
+ * `replacement`／`scope`，正则编译与捕获引用校验在计划期完成——非法正则不会
+ * 走到执行。`scope` 在这里是小写字符串（与 C04 同），F12 那个入口收 PascalCase
+ * 枚举，`renameScope` 负责翻译。
+ */
+async function planF13(
+  caller: PlanCaller,
+  files: File[],
+  form: Record<string, string>
+): Promise<PlanDocument> {
+  const pattern = trimmed(form, "pattern");
+  if (pattern === undefined) {
+    throw new KernelError("E1001: f13 needs the regex pattern");
+  }
+  return callPlan(caller, "plan_f13", {
+    items: dirEntries(files),
+    // 与 planF12 同一处置：浏览器没有目标文件系统，这两份事实只能是空。
+    existingTargets: [],
+    protectedDirs: [],
+    caseSense: "sensitive",
+    longPathSupported: true,
+    accessFacts: [],
+    rule: {
+      pattern,
+      replacement: form.replace ?? "",
+      scope: renameScope(form.scope, "lower")
+    }
+  });
+}
+
+/**
  * 清单解析（字节型入口）：返回内核解析好的两列行。
  *
  * 不走 `callPlan`：那条路只装 JSON，而这里必须把**原始字节**交给内核做编码检测
@@ -1106,6 +1144,7 @@ const NATIVE_PLANNERS: Record<
   c10: planC10,
   c04: viaFiles(planC04),
   f12: viaFiles(planF12),
+  f13: viaFiles(planF13),
   f10: viaFiles(planF10)
 };
 

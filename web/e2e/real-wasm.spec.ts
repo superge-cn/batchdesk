@@ -179,6 +179,32 @@ test("F12 批量改名：目录第一层 → WASM rename → 产物是新名字"
   await expect(panel).toContainText("new_old.txt");
 });
 
+test("F13 正则改名：目录第一层 → WASM plan_f13（regex）→ 产物是新名字", async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto("/");
+
+  const nav = page.getByRole("navigation", { name: "功能导航" });
+  await nav.getByRole("button", { name: /^正则改名\s*F13$/ }).click();
+
+  await pickDirectory(page, "f13-dir", [
+    { rel: "素材/2026-a.txt", text: "a" },
+    { rel: "素材/2026-b.txt", text: "b" }
+  ]);
+  // Playwright 的 `fill()` 直写 value，不经过按键解析——正则可以原样写。
+  await page.locator("#f13-pattern").fill("^(\\d{4})-");
+  // `$1_` 会被内核按「组名 1_」解析（E1002），后接下划线/字母时必须用 `${1}`。
+  await page.locator("#f13-replace").fill("${1}_");
+  await page.locator("#f13-scope").fill("stem");
+  await page.getByRole("button", { name: /生成计划预览/ }).click();
+  await expect(page.getByRole("heading", { name: "计划预览" })).toBeVisible();
+
+  await page.getByRole("button", { name: /^执行$/ }).click();
+  const panel = page.getByTestId("web-sandbox-result");
+  await expect(panel).toBeVisible({ timeout: 60_000 });
+  // 捕获组替换的结果：`2026-a.txt` → `2026_a.txt`（`scope=stem` 只动主名）。
+  await expect(panel).toContainText("2026_a.txt");
+});
+
 test("C07 清单移动：字节清单 → WASM 解析 → 沙箱 move → 产物可见", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/");

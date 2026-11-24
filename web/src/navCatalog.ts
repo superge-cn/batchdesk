@@ -13,9 +13,9 @@ import type { MessageKey } from "./i18n";
  */
 
 /**
- * 23 个功能视图＝侧栏里除 C09 工作台与三个顶层项（处理模板／任务与撤销／设置）之外的全部页面。
- * F13 不在其中：它的登记是「切片完成（CLI，无 UI）」——见 `docs/DEVELOPMENT-PLAN.md`
- * §4 阶段 0 清单分组实现第 3 条，属既定范围而不是遗漏。
+ * 24 个功能视图＝侧栏里除 C09 工作台与三个顶层项（处理模板／任务与撤销／设置）之外的全部页面。
+ * F13 于 2026-11-24 接入（ADR-0117）：此前只有内核与 CLI，属「切片完成（CLI，无 UI）」
+ * 的既定范围；补齐后阶段 0 的 25 项功能在桌面上都有入口。
  */
 export type FeatureView =
   | "f01"
@@ -30,6 +30,7 @@ export type FeatureView =
   | "f10"
   | "f11"
   | "f12"
+  | "f13"
   | "c01"
   | "c02"
   | "c03"
@@ -68,6 +69,7 @@ export const NAV_ENTRIES: Array<{ id: View; label: MessageKey; tag: string }> = 
   { id: "c10", label: "nav.c10", tag: "C10" },
   { id: "f11", label: "nav.f11", tag: "F11" },
   { id: "f12", label: "nav.f12", tag: "F12" },
+  { id: "f13", label: "nav.f13", tag: "F13" },
   { id: "f01", label: "nav.f01", tag: "F01" },
   { id: "f02", label: "nav.f02", tag: "F02" },
   { id: "f03", label: "nav.f03", tag: "F03" },

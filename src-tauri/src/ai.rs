@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 pub const AI_PHASE: u8 = 3;
 
 /// FunctionCatalog 的版本；目录变化必须递增（设计 14 §5 规则 5）。
-pub const CATALOG_VERSION: &str = "2026-11-09.p3";
+pub const CATALOG_VERSION: &str = "2026-11-24.p3";
 
 /// 单个计划束的最大步骤数（设计 14 §7.2；OQ-23 已确认 10 步）。
 pub const MAX_BUNDLE_STEPS: usize = 10;
@@ -36,8 +36,8 @@ pub const MAX_BUNDLE_STEPS: usize = 10;
 /// Phase 2 的 AI 可计划功能（设计 14 §5／§11）。
 ///
 /// 这是**唯一来源**：不在表里的 kind 一律 E6003/不可见，AI 侧不得另存一份清单。
-/// 条目与 `src-tauri/src/lib.rs` 的 `plan_operation_impl` 路由一一对应（f13 等
-/// 未在壳层路由的 kind 不登记）；`catalog_covers_every_shell_routable_plan_kind`
+/// 条目与 `src-tauri/src/lib.rs` 的 `plan_operation_impl` 路由一一对应（未在壳层
+/// 路由的 kind 不登记，如 c05/c06/c15/s01）；`catalog_covers_every_shell_routable_plan_kind`
 /// 是防漂移断言。
 pub const CATALOG: &[FunctionDescriptor] = &[
     // Phase 1（F15-lite，2026-11-09）：设计 14 §1 的 4 个功能。
@@ -159,6 +159,12 @@ pub const CATALOG: &[FunctionDescriptor] = &[
     },
     FunctionDescriptor {
         kind: "c14",
+        plan_capable: true,
+        ai_phase: 2,
+    },
+    // F13 于 2026-11-24 接入壳层路由（此前只有内核与 CLI）——Phase 2 目录同步。
+    FunctionDescriptor {
+        kind: "f13",
         plan_capable: true,
         ai_phase: 2,
     },
@@ -1166,7 +1172,8 @@ mod tests {
     fn catalog_covers_every_shell_routable_plan_kind() {
         let mut expected = vec![
             "c09", "f01", "f02", "f03", "f04", "f05", "f06", "f07", "f08", "f09", "f10", "f11",
-            "f12", "c01", "c02", "c03", "c04", "c07", "c08", "c10", "c11", "c12", "c13", "c14",
+            "f12", "f13", "c01", "c02", "c03", "c04", "c07", "c08", "c10", "c11", "c12", "c13",
+            "c14",
         ];
         expected.sort_unstable();
         let mut actual: Vec<_> = CATALOG.iter().map(|item| item.kind).collect();
@@ -1192,7 +1199,7 @@ mod tests {
 
     #[test]
     fn non_plan_capable_or_unrouted_kinds_are_rejected_with_e6003() {
-        for kind in ["c05", "c06", "f13", "c15", "s01", "zz"] {
+        for kind in ["c05", "c06", "c15", "s01", "zz"] {
             let error = validate_intent(&intent(kind, json!({})))
                 .expect_err("non-catalog kind must be rejected");
             assert_eq!(error.code, "E6003", "{kind}");
@@ -1203,7 +1210,7 @@ mod tests {
     fn every_catalog_kind_reaches_the_plan_factory_with_one_bundle_step() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let kinds = supported_kinds(AI_PHASE);
-        assert_eq!(kinds.len(), 24);
+        assert_eq!(kinds.len(), 25);
         for kind in kinds {
             let (service, _, events) = make_service(ModelResponse {
                 text: "ok".to_string(),
@@ -1233,7 +1240,7 @@ mod tests {
             );
         }
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 24);
+        assert_eq!(seen.len(), 25);
         assert_eq!(seen.first().map(String::as_str), Some("f12"));
     }
 
@@ -1255,7 +1262,7 @@ mod tests {
         });
         ask(&service, AiContext::default(), None);
         let seen = provider.seen.lock().unwrap().clone().expect("request");
-        assert_eq!(seen.supported_kinds.len(), 24);
+        assert_eq!(seen.supported_kinds.len(), 25);
         assert!(seen.supported_kinds.contains(&"c14"));
     }
 
@@ -1263,7 +1270,7 @@ mod tests {
     fn unknown_function_kind_is_rejected_with_e6003() {
         let (service, _, events) = make_service(ModelResponse {
             text: "ok".to_string(),
-            intent: Some(intent("f13", json!({}))),
+            intent: Some(intent("c05", json!({}))),
             tool_calls: Vec::new(),
         });
         ask(&service, AiContext::default(), None);

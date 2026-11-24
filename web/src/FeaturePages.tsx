@@ -404,6 +404,19 @@ function planOperationFor(
       sourcePaths: []
     });
   }
+  if (view === "f13") {
+    return planOperation({
+      kind: "f13",
+      params: {
+        dir: form.dir,
+        pattern: form.pattern,
+        replacement: form.replace ?? "",
+        scope: form.scope || "full"
+      },
+      sourcePaths: []
+    });
+  }
+  // F12 是这条链的兜底（历史写法）：其余视图都已在上面的分支里具名处理。
   return planOperation({
     kind: "f12",
     params: {
@@ -474,6 +487,14 @@ function statusBadge(t: Translate, status: PreviewStatus) {
   return <span className={PREVIEW_STATUS_TONES[status]}>{t(PREVIEW_STATUS_KEYS[status])}</span>;
 }
 
+/**
+ * 显示 C05 改名对照预览的视图（内核 `C05_PREVIEW_KINDS` 支持 f12/f13/c04）。
+ *
+ * 这里只登记**已接入该面板**的两个改名入口：F12 与 F13。C04 的预览面尚未接
+ * （内核支持，界面没接），不在此列——不把「内核能算」写成「界面已有」。
+ */
+const RENAME_PREVIEW_VIEWS: ReadonlySet<View> = new Set<View>(["f12", "f13"]);
+
 const FEATURE_TITLES: Record<View, MessageKey> = {
   f01: "feature.title.f01",
   f02: "feature.title.f02",
@@ -497,7 +518,8 @@ const FEATURE_TITLES: Record<View, MessageKey> = {
   c08: "feature.title.c08",
   c10: "feature.title.c10",
   f11: "feature.title.f11",
-  f12: "feature.title.f12"
+  f12: "feature.title.f12",
+  f13: "feature.title.f13"
 };
 
 interface FieldSpec {
@@ -943,6 +965,30 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
       placeholderKey: "feature.placeholder.replaceText"
     },
     { name: "scope", labelKey: "feature.field.scope", placeholder: "full" }
+  ],
+  f13: [
+    {
+      name: "dir",
+      labelKey: "feature.field.renameDir",
+      // 与 F12/C04 同口径：条目来自目录选择的相对路径，浏览器里只改第一层。
+      kind: "directory",
+      webHintKey: "feature.field.dirWebHint",
+      placeholder: "/path/dir",
+      wide: true
+    },
+    {
+      name: "pattern",
+      labelKey: "feature.field.pattern",
+      // 纯技术示例（正则），原样展示；提示文案走 hintKey 以支持双语。
+      placeholder: "^(\\d{4})-(.*)$",
+      hintKey: "feature.field.f13.hint"
+    },
+    {
+      name: "replace",
+      labelKey: "feature.field.replace",
+      placeholder: "${1}_${2}"
+    },
+    { name: "scope", labelKey: "feature.field.scope", placeholder: "full" }
   ]
 };
 
@@ -1190,7 +1236,7 @@ export function FeaturePages({
     setError(null);
     setDangerOpen(false);
     setNotice(t("feature.notice.aiPlan", { count: initialPlan.entries.length }));
-    if (view === "f12") {
+    if (RENAME_PREVIEW_VIEWS.has(view)) {
       renamePreview(initialPlan.planId)
         .then(setPreview)
         .catch(() => setPreview(null));
@@ -1232,7 +1278,7 @@ export function FeaturePages({
       }
       setPlan(next);
       setPlannedForm(JSON.stringify(form));
-      if (view === "f12") {
+      if (RENAME_PREVIEW_VIEWS.has(view)) {
         try {
           setPreview(await renamePreview(next.planId));
         } catch (value) {
@@ -2130,7 +2176,7 @@ const runSandboxApply = async (client: { call: ExecCaller }) => {
             )}
           </section>
 
-          {view === "f12" && preview && (
+          {RENAME_PREVIEW_VIEWS.has(view) && preview && (
             <section className="card" aria-labelledby="c05-preview">
               <div className="card-header">
                 <div>

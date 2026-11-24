@@ -546,7 +546,8 @@ def check_kind_routing(errors: list[str]) -> None:
 
     动因：三处此前各抄一份，加一个功能漏一处不会有任何东西变红——
     路由漏了则用户点页面得到 E1002，导航漏了则功能有路由却没有入口。
-    （c09 工作台不在功能视图里，单独排除；F13 只有内核与 CLI，两侧都不该出现。）
+    （c09 工作台不在功能视图里，单独排除；F13 于 2026-11-24 接入三处，
+    此前「只有内核与 CLI」的例外已不存在。）
     """
     lib = ROOT / "src-tauri" / "src" / "lib.rs"
     catalog = ROOT / "web" / "src" / "navCatalog.ts"

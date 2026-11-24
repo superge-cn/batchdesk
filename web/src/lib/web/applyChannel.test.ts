@@ -5,6 +5,7 @@ import {
   SANDBOX_TOTAL_GUIDANCE_BYTES,
   applyInSandbox,
   productFileName,
+  productFileNames,
   resetSandbox,
   saveProducts,
   stageInputs,
@@ -44,19 +45,19 @@ function dirFile(relative: string, content: string): File {
 }
 
 describe("webApplySupport", () => {
-  it("22 个视图接入执行：分片/合并族 + 改写三兄弟 + CSV 行列变换 + 归档族 + 改名族 + 目录清单", () => {
+  it("23 个视图接入执行：分片/合并族 + 改写三兄弟 + CSV 行列变换 + 归档族 + 改名族 + 目录清单", () => {
     const wired = [
       "f01", "f02", "f03", "f04", "f05", "f06",
       "f07", "f08", "f09",
       "c01", "c02", "c03",
       "c07", "c08", "c10",
-      "c04", "f12", "f10",
+      "c04", "f12", "f13", "f10",
       "c11", "c12", "c13", "c14"
     ];
     for (const view of wired) {
       expect(webApplySupport(view)).toEqual({ level: "native" });
     }
-    expect(wired).toHaveLength(22);
+    expect(wired).toHaveLength(23);
   });
 
   it("计划侧不支持的视图，执行侧也不谎称能执行", () => {
@@ -297,6 +298,22 @@ describe("stageInputs", () => {
       { path: "素材/sub/b.txt", length: 2 }
     ]);
   });
+
+  it("F13 与 F12 同一口径：dir 槽按「根名/相对路径」登记（含子树）", async () => {
+    const caller = vi.fn(async (_request: WasmCall): Promise<WasmCallResult> => ({
+      ok: true,
+      result: "{}"
+    }));
+    await stageInputs(caller, "f13", {
+      dir: [dirFile("素材/2026-a.txt", "A"), dirFile("素材/sub/b.txt", "BB")]
+    });
+    const request = caller.mock.calls[0][0];
+    if (request.op !== "stage_inputs") throw new Error("unreachable");
+    expect(JSON.parse(request.payload)).toEqual([
+      { path: "素材/2026-a.txt", length: 1 },
+      { path: "素材/sub/b.txt", length: 2 }
+    ]);
+  });
 });
 
 describe("applyInSandbox / undoInSandbox", () => {
@@ -415,5 +432,16 @@ describe("saveProducts", () => {
     expect(count).toBe(3);
     expect(saved).toEqual(["part.txt", "2-part.txt", "notes.1.txt"]);
     expect(productFileName("/a/b/c.txt")).toBe("c.txt");
+  });
+
+  it("产物本身叫「2-x.txt」时不能与去重前缀撞名", () => {
+    // 旧实现按「出现次数」算序号：`x.txt`、`x.txt`、`2-x.txt` 会得到
+    // `["x.txt", "2-x.txt", "2-x.txt"]`——第三条把第二条覆盖掉，用户静默丢一个产物。
+    const names = productFileNames([
+      { path: "/out/a/x.txt", size: 1, blob: new Blob(["1"]) },
+      { path: "/out/b/x.txt", size: 1, blob: new Blob(["2"]) },
+      { path: "/out/c/2-x.txt", size: 1, blob: new Blob(["3"]) }
+    ]);
+    expect(new Set(names).size).toBe(3);
   });
 });

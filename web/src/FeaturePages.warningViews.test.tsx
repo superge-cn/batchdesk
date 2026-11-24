@@ -33,6 +33,8 @@ const VIEW_WARNING: Record<FeatureView, string> = {
   f10: "empty-directory",
   f11: "parent-is-file",
   f12: "invalid-target-names",
+  // F13 复用重命名引擎：名字没变时不产条目、只留一条 no-change 预警。
+  f13: "no-change",
   c01: "incomplete-hash",
   c02: "mixed-line-endings",
   c03: "csv-text-mode",

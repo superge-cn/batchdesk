@@ -46,7 +46,7 @@ export interface WebApplySupport {
 /**
  * 视图 → 执行能力档位。
  *
- * 22 个视图接上（19 个原有 + C04 名称替换、F12 批量改名、F10 目录清单），
+ * 23 个视图接上（22 个原有 + F13 正则改名），
  * 按「执行臂需要什么」分七族：
  * - **只要读写**：分片三兄弟（F01/F02/F03）＋合并族（F04 合并文本、F05 CSV 分片、
  *   F06 CSV 合并）——动作是 `split`/`merge`/`csv`，走 `FsAdapter` 就够；
@@ -63,7 +63,7 @@ export interface WebApplySupport {
  * - **归档编解码**：C10 解压/压缩——执行臂要 `ArchiveService` 端口，Web 侧由
  *   `MemoryArchiveService` 提供（WASM 内真 ZIP 读写，与桌面同一个 `zip` crate、
  *   同一套错误码；ADR-0112）。解压的源是包本身，压缩的源是用户选中的文件；
- * - **按相对路径改名**：C04 名称替换、F12 批量改名——动作是 `rename`，条目是目录
+ * - **按相对路径改名**：C04 名称替换、F12 批量改名、F13 正则改名——动作是 `rename`，条目是目录
  *   的**第一层名字**（与桌面 `read_dir` 同口径），子目录条目的子树随目录一起移动，
  *   所以 staging 要放进整个目录（ADR-0113）。产物是改名后的文件，可下载、可撤销。
  * - **只读元数据的清单**：F10 目录清单——动作是 `listing`，执行臂要 `DirectoryLister`
@@ -92,6 +92,7 @@ const WEB_APPLY_VIEWS = new Set([
   "c14",
   "c04",
   "f12",
+  "f13",
   "f10"
 ]);
 
@@ -137,7 +138,7 @@ export function webSandboxFacts(files: File[]): WebSandboxFacts {
  * （`根名/名字`），其子目录条目的子树也要一起进沙箱（否则 rename 目录时子树不在，
  * 产物只剩一个空目录）。两类形状相同，共用一条拼法。
  */
-const RELATIVE_ROOT_VIEWS = new Set(["c07", "c08", "c04", "f12"]);
+const RELATIVE_ROOT_VIEWS = new Set(["c07", "c08", "c04", "f12", "f13"]);
 
 /**
  * 执行期要登记进沙箱的输入槽。
@@ -153,7 +154,8 @@ const STAGED_SLOTS: Record<string, string[]> = {
   c07: ["sourceRoot"],
   c08: ["sourceRoot"],
   c04: ["dir"],
-  f12: ["dir"]
+  f12: ["dir"],
+  f13: ["dir"]
 };
 
 /**
@@ -421,14 +423,23 @@ export const defaultProductSaver: ProductSaver = (name, blob) => {
  *
  * 按**文件名**去重：不同目录的同名产物在浏览器里只能存成同一个名字，
  * 第二个起加序号前缀。两处各写一份必然漂移，所以只有这一份。
+ *
+ * 判重按**已分配的名字集合**，不是按「同名出现次数」：若按次数算，产物本身
+ * 叫 `2-x.txt` 时会与前面 `x.txt` 的去重前缀撞车（`x.txt`、`x.txt`、`2-x.txt`
+ * → `2-x.txt` 出现两次），后写的那份直接覆盖前一份，用户静默丢产物。
  */
 export function productFileNames(products: WebApplyProduct[]): string[] {
-  const used = new Map<string, number>();
+  const assigned = new Set<string>();
   return products.map((product) => {
-    const name = productFileName(product.path);
-    const occurrences = used.get(name) ?? 0;
-    used.set(name, occurrences + 1);
-    return productFileName(product.path, occurrences);
+    const base = productFileName(product.path);
+    let name = base;
+    // `productFileName(path, n)` 的第 n 档是 `<n+1>-<基名>`；撞了就继续往上挪，
+    // 直到拿到一个没被占用的名字（总数有限，循环必然收敛）。
+    for (let index = 1; assigned.has(name); index += 1) {
+      name = productFileName(product.path, index);
+    }
+    assigned.add(name);
+    return name;
   });
 }
 

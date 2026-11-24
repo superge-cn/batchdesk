@@ -404,6 +404,15 @@ export interface RenamePlanParams {
   planId?: string;
 }
 
+/** F13 正则改名：`pattern` 是正则、`replacement` 是模板（`$1`/`${name}`）。 */
+export interface RegexRenamePlanParams {
+  dir: string;
+  pattern: string;
+  replacement?: string;
+  scope?: string;
+  planId?: string;
+}
+
 /**
  * F06–F10 共用 `CsvPlanParams`，但**各自只用其中一部分键**——分开声明避免
  * 「F06 传了 f08 的 window」这类交叉错误。
@@ -598,6 +607,7 @@ export type PlanOperationInput =
   | { kind: "f05"; params: CsvSplitPlanParams; sourcePaths: string[] }
   | { kind: "f11"; params: CreateDirsPlanParams; sourcePaths: string[] }
   | { kind: "f12"; params: RenamePlanParams; sourcePaths: string[] }
+  | { kind: "f13"; params: RegexRenamePlanParams; sourcePaths: string[] }
   | (CsvFamilyPlanParams & { sourcePaths: string[] })
   | (OpFamilyPlanParams & { sourcePaths: string[] });
 

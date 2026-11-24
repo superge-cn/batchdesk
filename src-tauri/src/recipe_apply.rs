@@ -144,6 +144,12 @@ pub const FEATURE_PATH_SLOTS: &[FeaturePaths] = &[
         via_source_paths: false,
     },
     FeaturePaths {
+        feature: "f13",
+        required: &[one("dir")],
+        outputs: &[],
+        via_source_paths: false,
+    },
+    FeaturePaths {
         feature: "c04",
         required: &[one("dir")],
         outputs: &[],
@@ -407,6 +413,7 @@ pub const FEATURE_PARAM_MAP: &[FeatureParamMap] = &[
     },
     m("f11"),
     m("f12"),
+    m("f13"),
     FeatureParamMap {
         renames: &[("platformPrior", "prior")],
         sampling: &[

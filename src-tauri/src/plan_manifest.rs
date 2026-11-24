@@ -11,7 +11,9 @@ use kernel::archive::{
     plan_c10, plan_c10_compress, ArchiveCompression, ArchiveService, PlanC10CompressInput,
     PlanC10Input,
 };
-use kernel::c07::{parse_manifest, plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input};
+use kernel::c07::{
+    parse_manifest, plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input,
+};
 use kernel::c08::{
     plan_c08, ArchiveCondition, ArchiveRule, PlanC08File, PlanC08Input, UnmatchedPolicy,
 };
@@ -103,14 +105,13 @@ pub fn plan_manifest_shell(
         })?),
         None => None,
     };
-    let source_encoding = match &params.source {
-        Some(value) => Some(
-            kernel::encoding::SourceEncoding::parse(value).ok_or_else(|| {
-                KernelError::invalid_params(format!("c07: unknown source encoding: {value}"))
-            })?,
-        ),
-        None => None,
-    };
+    let source_encoding =
+        match &params.source {
+            Some(value) => Some(kernel::encoding::SourceEncoding::parse(value).ok_or_else(
+                || KernelError::invalid_params(format!("c07: unknown source encoding: {value}")),
+            )?),
+            None => None,
+        };
     let manifest = require_file(Path::new(&params.manifest), "c07")?;
     let source_root = require_dir(Path::new(&params.source_root), "c07")?;
     let target_root = require_dir(Path::new(&params.target_root), "c07")?;

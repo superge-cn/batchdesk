@@ -1267,6 +1267,7 @@ const APPLY_SLOTS: Record<string, { required: [string, boolean][]; outputs: [str
   f10: { required: [["roots", true]], outputs: [["output", false], ["outputDir", false]] },
   f11: { required: [["list", false], ["root", false]], outputs: [] },
   f12: { required: [["dir", false]], outputs: [] },
+  f13: { required: [["dir", false]], outputs: [] },
   c01: { required: [["files", true]], outputs: [] },
   c02: { required: [["files", true]], outputs: [] },
   c03: { required: [["files", true]], outputs: [] },
