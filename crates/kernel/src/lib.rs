@@ -31,6 +31,7 @@ pub mod journal;
 pub mod license;
 pub mod line_endings;
 pub mod listing;
+pub mod memfs;
 pub mod merge;
 pub mod name_replace;
 pub mod path;

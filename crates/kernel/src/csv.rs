@@ -1075,6 +1075,37 @@ fn conflict_key(path: &str, sense: CaseSense) -> String {
     }
 }
 
+/// **字节级** CSV 分片布局（ADR-0102 A2-4）。
+///
+/// 桌面壳在 `platform::csv` 流式喂 `CsvRecordScanner` 驱动累加器；Web 形态读整段
+/// 字节。累加器本就在 kernel，这里补齐「整段字节 → 布局」的一端，让两条路共用
+/// 同一套分片语义（含「单条记录超目标值独占一片」「尾片保留」）。
+pub fn csv_split_from_bytes(
+    data: &[u8],
+    file_size: u64,
+    delimiter: Delimiter,
+    delimiter_detected: bool,
+    source_encoding: Option<SourceEncoding>,
+    shard_bom: Option<Bom>,
+    accumulator: CsvSplitAccumulator,
+) -> CsvSplitLayout {
+    let mut accumulator = accumulator;
+    let mut scanner = CsvRecordScanner::new(delimiter.as_byte());
+    scanner.feed(data, |record| accumulator.push_record(record));
+    let tail = scanner.finish();
+    if let Some(record) = tail.tail {
+        accumulator.push_record(record);
+    }
+    accumulator.finish(
+        file_size,
+        delimiter,
+        delimiter_detected,
+        tail.unclosed_quote,
+        source_encoding,
+        shard_bom,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

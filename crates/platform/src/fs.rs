@@ -987,7 +987,7 @@ impl CliFsAdapter {
             std::process::id(),
             self.next_id()
         ));
-        let mut reader = fs::File::open(fs_path(Path::new(path)))
+        let reader = fs::File::open(fs_path(Path::new(path)))
             .map_err(|error| io_error(&error, Path::new(path)))?;
         let file = fs::File::create(&temp).map_err(|error| io_error(&error, &temp))?;
         // 同 write_atomic_with：重写器按行／按匹配写出，裸 File 会让每次写都成一次系统调用。
@@ -1543,9 +1543,52 @@ fn pid_is_alive(pid: u32) -> bool {
     }
 }
 
+/// `kill(pid, 0)` / Win32 探测的语义三态（2026-11-20）。
+///
+/// 抽成枚举是为了让**判定分支本身**可在任意平台被测试执行：syscall 是平台相关的，
+/// 但「PermissionDenied 视为存活、NoSuchProcess 视为退出」这条规则与平台无关。
+// 非 unix 构建里唯一的调用方（`pid_is_alive`）被 cfg 掉，但规则本身要有跨平台测试。
+#[cfg_attr(not(unix), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeState {
+    /// 存在且可发信号（`kill` 返回 0）。
+    Deliverable,
+    /// 存在但属他人（`kill` 返回 EPERM）——**仍是存活进程**。
+    PermissionDenied,
+    /// 不存在（`kill` 返回 ESRCH）。
+    NoSuchProcess,
+}
+
+/// 由探测结果得出是否存活。Windows 侧语义等价：拿不到句柄＝已退出。
+#[cfg_attr(not(unix), allow(dead_code))]
+fn alive_from_probe(state: ProbeState) -> bool {
+    match state {
+        ProbeState::Deliverable | ProbeState::PermissionDenied => true,
+        ProbeState::NoSuchProcess => false,
+    }
+}
+
+/// 进程是否存活（Unix）。
+///
+/// 2026-11-20 修正：原实现只认 `/proc/<pid>`——**macOS 没有 `/proc`**，于是恒 false，
+/// `cleanup_abandoned_copy_temps` 会把**其他存活实例**在途的 `.batchdesk-copy-*`
+/// 当成崩溃残留删掉（跨实例丢数据）。改用 POSIX 标准的 `kill(pid, 0)`。
 #[cfg(unix)]
 fn pid_is_alive(pid: u32) -> bool {
-    pid != 0 && Path::new(&format!("/proc/{pid}")).exists()
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: `kill` 是 libc 的异步信号安全接口；sig=0 只做存在性与权限检查，不投递信号。
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    let state = if result == 0 {
+        ProbeState::Deliverable
+    } else {
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::EPERM) => ProbeState::PermissionDenied,
+            _ => ProbeState::NoSuchProcess,
+        }
+    };
+    alive_from_probe(state)
 }
 
 #[cfg(not(any(windows, unix)))]
@@ -2144,6 +2187,38 @@ mod tests {
     fn cleanup_of_missing_directory_is_a_noop() {
         let dir = TempDir::new();
         assert_eq!(cleanup_abandoned_copy_temps(&dir.0.join("missing")), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_child_process_is_alive_and_exited_one_is_not() {
+        // 2026-11-20：原实现只认 `/proc/<pid>`，而 macOS 没有 /proc → 恒 false，
+        // 于是**其他存活实例**在途的 `.batchdesk-copy-*` 会被当崩溃残留删掉（跨实例丢数据）。
+        // 改用 POSIX `kill(pid, 0)`。这条用例在 Linux/macOS 都跑（`#[cfg(unix)]`）。
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id();
+        assert!(
+            pid_is_alive(pid),
+            "存活子进程必须判为存活（否则会误删在途复制）"
+        );
+        child.kill().expect("kill child");
+        child.wait().expect("wait child");
+        assert!(!pid_is_alive(pid), "已退出的进程不得判为存活");
+    }
+
+    #[test]
+    fn probe_state_mapping_is_platform_independent() {
+        // 判定分支与平台无关，故在**任何**开发机上都执行（含 Windows）：
+        // EPERM 视为存活是本次修复的核心——把它当"已退出"就是跨实例误删。
+        assert!(alive_from_probe(ProbeState::Deliverable));
+        assert!(
+            alive_from_probe(ProbeState::PermissionDenied),
+            "存在但属他人的进程仍是存活进程"
+        );
+        assert!(!alive_from_probe(ProbeState::NoSuchProcess));
     }
 
     #[cfg(windows)]

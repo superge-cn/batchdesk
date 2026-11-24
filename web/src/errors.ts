@@ -86,6 +86,20 @@ export function isKnownErrorCode(code: string): code is ErrorCode {
   return Object.prototype.hasOwnProperty.call(ERROR_TEXT_KEYS, code);
 }
 
+/**
+ * 从后端返回串里取出错误码（设计 06 码位分段）。
+ *
+ * 这是**唯一**做「原文 → 码位」解析的地方：界面其余位置只读 `.code`，
+ * 不再自取 `error.message` 原文（门禁 check_locales.py 第 ⑨ 项逐文件盯住）。
+ * 非 `E<四位数字>` 形式返回 `E0000`＝未知码位，由 `describeError` 走兜底分支。
+ */
+export function errorCodeFromText(raw: unknown): string {
+  const match = /^([E][0-9]{4}):/s.exec(
+    raw instanceof Error ? raw.message : String(raw)
+  );
+  return match ? match[1] : "E0000";
+}
+
 type Translator = (
   key: MessageKey,
   params?: Record<string, string | number>,

@@ -669,6 +669,91 @@ pub(crate) fn perform_csv_sort(
     })
 }
 
+/// 取排序键列在全部数据行中的取值（ADR-0102 A2-6）。
+///
+/// 原在**壳层**（`src-tauri/src/plan_ops.rs`）；Web 形态没有壳层，而该计算是纯
+/// 记录处理（列解析＋取值），故下沉 kernel——与 `CsvInspection` 同一理由。
+pub fn key_values(
+    keys: &[ColumnPick],
+    columns: &[String],
+    records: &[Vec<String>],
+    has_header: bool,
+) -> Vec<String> {
+    if records.is_empty() {
+        return Vec::new();
+    }
+    let normalized: Vec<String> = columns
+        .iter()
+        .map(|column| column.trim_start_matches('\u{feff}').trim().to_string())
+        .collect();
+    let resolved = keys.iter().find_map(|pick| match pick {
+        ColumnPick::Name(name) => normalized
+            .iter()
+            .position(|column| column == name)
+            .map(|position| position + 1),
+        ColumnPick::Index(index) => Some(*index as usize),
+    });
+    let Some(column) = resolved else {
+        return Vec::new();
+    };
+    let rows: &[Vec<String>] = if has_header {
+        records.get(1..).unwrap_or(&[])
+    } else {
+        records
+    };
+    // 与壳层同口径：`filter_map` 跳过缺该列的行（不补空串），否则排序键与行号错位。
+    rows.iter()
+        .filter_map(|row| row.get(column.saturating_sub(1)).cloned())
+        .collect()
+}
+
+#[cfg(test)]
+mod a2_6_key_values {
+    use super::*;
+    use crate::csv_extract::ColumnPick;
+
+    /// A2-6 下沉验证：键列取值**跳过缺该列的行**（与壳层同口径，不补空串）。
+    #[test]
+    fn key_values_skips_rows_missing_the_column() {
+        let columns = vec!["id".to_string(), "score".to_string()];
+        let records = vec![
+            vec!["id".to_string(), "score".to_string()], // 表头
+            vec!["1".to_string(), "10".to_string()],
+            vec!["2".to_string()], // 缺 score → 跳过
+            vec!["3".to_string(), "30".to_string()],
+        ];
+        let keys = vec![ColumnPick::Name("score".to_string())];
+        let values = key_values(&keys, &columns, &records, true);
+        assert_eq!(values, vec!["10".to_string(), "30".to_string()]);
+    }
+
+    /// 名称选择需剥离 BOM 与空白（与壳层同口径）。
+    #[test]
+    fn name_lookup_tolerates_bom_and_padding() {
+        let bom = String::from_utf8(vec![0xef, 0xbb, 0xbf]).unwrap();
+        let mut column = bom.clone();
+        column.push_str("name ");
+        let mut header = column.clone();
+        header = header.trim().to_string();
+        let records = vec![vec![column], vec!["a".to_string()]];
+        let keys = vec![ColumnPick::Name("name".to_string())];
+        let values = key_values(&keys, &[header], &records, true);
+        assert_eq!(values, vec!["a".to_string()]);
+    }
+
+    /// 列序号选择直接使用 1-based 下标。
+    #[test]
+    fn index_pick_is_one_based() {
+        let columns: Vec<String> = Vec::new();
+        let records = vec![vec!["x".to_string(), "y".to_string()]];
+        let keys = vec![ColumnPick::Index(2)];
+        assert_eq!(
+            key_values(&keys, &columns, &records, false),
+            vec!["y".to_string()]
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

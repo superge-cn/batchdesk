@@ -4,7 +4,9 @@ import { expect, test } from "@playwright/test";
 // 数据来自浏览器 mock 夹具（src/lib/ipc/mock.ts 的 mockRenamePreview），
 // 因此这里断言的是"面板如何呈现与失效"，不是 shell 的判定结果。
 async function fillRenameForm(page: import("@playwright/test").Page, scope: string) {
-  await page.getByLabel(/改名目录/).fill("/mock/dir");
+  // 浏览器形态下「改名目录」是**目录选择器**（A3-11 起），不是文本输入；
+  // 选了文件会切到 WASM 真计划路径。本组用例验证的是 mock 计划的面板语义
+  // （ADR-0046 边界），所以不选文件——留在 mock IPC 路径上。
   await page.getByLabel(/前缀/).fill("2026-");
   await page.getByLabel(/替换为/).fill("x");
   const scopeInput = page.getByLabel(/作用范围/);

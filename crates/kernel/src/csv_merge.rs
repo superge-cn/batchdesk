@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::csv::Delimiter;
+use crate::csv::{sniff_delimiter, Delimiter};
 use crate::encoding::{InvalidSequencePolicy, SourceEncoding, TargetEncoding};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
@@ -976,6 +976,123 @@ pub(crate) fn target_block(
     }
 }
 
+/// **字节级** CSV 检查事实（ADR-0102 A2-3）。
+///
+/// F06–F09／C11–C14 这八个功能的计划输入都需要同一组事实：源编码、分隔符、
+/// 是否表头、原始表头字段、列数、数据行数、脏行数。桌面壳在 `platform::csv_*`
+/// 里读文件后再算；Web 形态拿不到真实 FS，只能把字节读进来。
+///
+/// 本结构是两组共用的**唯一事实来源**——platform 与 WASM 都填它，避免出现
+/// 「两个形态对同一文件算出不同列数」的双实现（方案 §13.5 明排除）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CsvInspection {
+    pub file_size: u64,
+    /// 检测到的源编码；`None` 表示需人工确认（计划层按 E3001 阻断）。
+    pub source_encoding: Option<crate::encoding::SourceEncoding>,
+    pub delimiter: Delimiter,
+    pub delimiter_detected: bool,
+    pub has_header: bool,
+    /// 原始表头字段（未规范化；计划层再剥离 BOM/空白）。
+    pub columns: Vec<String>,
+    /// 列数：有表头取表头字段数，否则取各数据行最大字段数。
+    pub column_count: u64,
+    pub data_rows: u64,
+    /// 字段数与列宽不一致的数据行计数（只上报，不静默修正）。
+    pub dirty_rows: u64,
+}
+
+impl Default for CsvInspection {
+    fn default() -> Self {
+        Self {
+            file_size: 0,
+            source_encoding: None,
+            // `Delimiter` 刻意不实现 `Default`（避免"默认分隔符"被误当成语义）；
+            // 本结构未嗅探出结果时按逗号兜底，由 `delimiter_detected=false` 标记。
+            delimiter: Delimiter::Comma,
+            delimiter_detected: false,
+            has_header: false,
+            columns: Vec::new(),
+            column_count: 0,
+            data_rows: 0,
+            dirty_rows: 0,
+        }
+    }
+}
+
+/// 由**头部采样**定下编码与分隔符（对应 platform 的嗅探段）。
+///
+/// `sample` 是调用方读到的头部窗口字节，`file_size` 是完整文件大小——
+/// 本函数不读 FS，两者都由适配层提供。
+pub fn inspect_head(
+    sample: &[u8],
+    file_size: u64,
+    platform_prior: crate::encoding::PlatformPrior,
+    explicit_delimiter: Option<Delimiter>,
+) -> CsvInspection {
+    let mut inspection = CsvInspection {
+        file_size,
+        ..CsvInspection::default()
+    };
+    let detection = crate::encoding::detect(sample, platform_prior);
+    if let Ok(encoding) = detection.require_encoding() {
+        inspection.source_encoding = Some(encoding);
+    }
+    match explicit_delimiter {
+        Some(delimiter) => {
+            inspection.delimiter = delimiter;
+            inspection.delimiter_detected = true;
+        }
+        None => match sniff_delimiter(sample) {
+            Some(delimiter) => {
+                inspection.delimiter = delimiter;
+                inspection.delimiter_detected = true;
+            }
+            None => {
+                inspection.delimiter = Delimiter::Comma;
+                inspection.delimiter_detected = false;
+            }
+        },
+    }
+    inspection
+}
+
+/// 用**整段 UTF-8 字节**补全行数与列信息（对应 platform 的解码+解析段）。
+///
+/// 调用前 `inspection.source_encoding` 必须已确认为 UTF-8（Web 侧浏览器读到的
+/// 即原始字节，无法在此转码）；`has_header` 由调用方声明。
+pub fn complete_records(
+    inspection: &mut CsvInspection,
+    decoded: &[u8],
+    has_header: bool,
+) -> Vec<Vec<String>> {
+    let records = parse_records(decoded, inspection.delimiter.as_byte());
+    inspection.has_header = has_header;
+    let (columns, rows): (Vec<String>, &[Vec<String>]) = if has_header {
+        match records.split_first() {
+            Some((header, rows)) => (header.clone(), rows),
+            None => (Vec::new(), &[]),
+        }
+    } else {
+        (Vec::new(), &records)
+    };
+    inspection.column_count = if has_header {
+        columns.len() as u64
+    } else {
+        records
+            .iter()
+            .map(|row| row.len() as u64)
+            .max()
+            .unwrap_or(0)
+    };
+    inspection.data_rows = rows.len() as u64;
+    inspection.dirty_rows = rows
+        .iter()
+        .filter(|row| row.len() as u64 != inspection.column_count)
+        .count() as u64;
+    inspection.columns = columns;
+    records
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1263,5 +1380,95 @@ mod tests {
         assert_eq!(entry.conflict.as_ref().unwrap().kind, "existing-target");
         assert_eq!(entry.resolution, Some(PlanResolution::Skip));
         assert_eq!(plan.stats.conflict, 1);
+    }
+}
+
+#[cfg(test)]
+mod a2_3_bytes_tests {
+    use super::{complete_records, inspect_head, CsvInspection, Delimiter};
+
+    /// A2-3 下沉入口的最小验证：头部嗅探 + 整段补全，产出与 platform 同形的字段。
+    #[test]
+    fn head_and_records_produce_the_shared_facts() {
+        let data = b"name,age
+ann,30
+bob,25
+";
+        let mut inspection = inspect_head(
+            data,
+            data.len() as u64,
+            crate::encoding::PlatformPrior::Other,
+            None,
+        );
+        assert!(inspection.delimiter_detected);
+        assert_eq!(inspection.delimiter.as_byte(), b',');
+        let records = complete_records(&mut inspection, data, true);
+        assert_eq!(
+            inspection.columns,
+            vec!["name".to_string(), "age".to_string()]
+        );
+        assert_eq!(inspection.column_count, 2);
+        assert_eq!(inspection.data_rows, 2);
+        assert_eq!(inspection.dirty_rows, 0);
+        assert_eq!(records.len(), 3, "含表头共 3 行记录");
+    }
+
+    /// 脏行必须被如实计数，不静默修正（方案 §5.15 的"只上报"口径）。
+    #[test]
+    fn dirty_rows_are_counted_not_repaired() {
+        let data = b"a,b
+1,2,3
+4
+";
+        let mut inspection = CsvInspection {
+            delimiter: Delimiter::Comma,
+            ..CsvInspection::default()
+        };
+        complete_records(&mut inspection, data, true);
+        assert_eq!(inspection.column_count, 2);
+        assert_eq!(inspection.dirty_rows, 2, "字段数 3 与 1 的两行都是脏行");
+    }
+
+    /// 无表头时列数取各数据行最大字段数（platform 同口径）。
+    #[test]
+    fn column_count_without_header_is_max_row_width() {
+        let data = b"1,2,3
+4,5
+";
+        let mut inspection = CsvInspection {
+            delimiter: Delimiter::Comma,
+            ..CsvInspection::default()
+        };
+        complete_records(&mut inspection, data, false);
+        assert_eq!(inspection.column_count, 3);
+        assert_eq!(inspection.columns.len(), 0);
+        assert_eq!(inspection.data_rows, 2);
+    }
+
+    /// 显式分隔符不被嗅探覆盖；嗅探失败按逗号兜底且标记未检测到。
+    #[test]
+    fn explicit_delimiter_wins_and_miss_is_flagged() {
+        let semi = b"a;b
+1;2
+";
+        let mut forced = inspect_head(
+            semi,
+            semi.len() as u64,
+            crate::encoding::PlatformPrior::Other,
+            Some(Delimiter::Semicolon),
+        );
+        assert_eq!(forced.delimiter.as_byte(), b';');
+        // 单行无结构的数据：嗅探不出 → 兜底逗号并如实标记
+        let flat = b"no structure here
+";
+        let missed = inspect_head(
+            flat,
+            flat.len() as u64,
+            crate::encoding::PlatformPrior::Other,
+            None,
+        );
+        assert!(!missed.delimiter_detected, "嗅探失败必须如实标记");
+        assert_eq!(missed.delimiter, Delimiter::Comma);
+        forced.file_size = 0;
     }
 }

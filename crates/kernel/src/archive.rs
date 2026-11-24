@@ -136,6 +136,39 @@ pub fn format_archive_manifest(items: &[ArchiveManifestItem], limit: usize) -> S
     out.trim_end().to_string()
 }
 
+/// 解出 ZIP 条目的名字：UTF-8 旗标优先，否则按 GB18030 回退。
+///
+/// 返回 `(名字, 是否走了 GBK 回退)`；两段都解不出来时名字为 `None`（条目照样列出，
+/// 由计划侧按「无法解码」处置）。
+///
+/// **两个端口实现共用这一份**（桌面 `ZipArchiveService` 与浏览器 `MemoryArchiveService`）：
+/// 同一个包在两端必须解出同一个名字，否则同一份计划会在桌面写 `报告.docx`、在浏览器
+/// 写 `?`. 名字解码是纯函数，留在内核而不是各写一遍（不变量 1 的纯函数层）。
+pub fn decode_entry_name(raw: &[u8], utf8_flag: bool) -> (Option<String>, bool) {
+    use crate::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
+    if utf8_flag {
+        return match std::str::from_utf8(raw) {
+            Ok(name) => (Some(name.to_string()), false),
+            Err(_) => (None, false),
+        };
+    }
+    if raw.is_ascii() {
+        return (Some(String::from_utf8_lossy(raw).into_owned()), false);
+    }
+    match transcode(
+        raw,
+        SourceEncoding::Gb18030,
+        TargetEncoding::Utf8 { bom: false },
+        InvalidSequencePolicy::Abort,
+    ) {
+        Ok(result) => match String::from_utf8(result.bytes) {
+            Ok(name) => (Some(name), true),
+            Err(_) => (None, true),
+        },
+        Err(_) => (None, true),
+    }
+}
+
 pub trait ArchiveService: Send + Sync {
     /// 只读中央目录元数据：**不需要密码**，加密包也能列出条目（ADR-0074 §3.1）。
     fn inspect(&self, archive: &str) -> Result<ArchiveInspect, KernelError>;

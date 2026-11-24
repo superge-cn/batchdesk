@@ -91,7 +91,13 @@ export function isFeatureView(view: View): view is FeatureView {
   return FEATURE_VIEW_SET.has(view);
 }
 
-/** id（含功能码）→ 导航名。任务列表把 `TaskSummary.kind` 可读化时吃这张表。 */
-export const NAV_LABEL_BY_ID: Record<string, MessageKey> = Object.fromEntries(
+/** id（含功能码）→ 导航名。任务列表把 `TaskSummary.kind` 可读化时吃这张表。
+ *
+ * 显式声明键集合为 `View`：未知 id 的取值是 `undefined`（运行期语义＝查不到就只显示码位），
+ * 而已知 id 的取值一定是 `MessageKey`，两处消费方都不必再 `as never` 绕过。 */
+export type NavLabelById = Partial<Record<View, MessageKey>> &
+  Record<string, MessageKey | undefined>;
+
+export const NAV_LABEL_BY_ID: NavLabelById = Object.fromEntries(
   NAV_ENTRIES.map((entry) => [entry.id, entry.label])
 );

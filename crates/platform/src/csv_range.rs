@@ -10,14 +10,14 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use kernel::csv::{sniff_delimiter, CsvRecord, CsvRecordScanner, Delimiter};
+use kernel::csv::{sniff_delimiter, CsvRecordScanner, Delimiter};
 use kernel::csv_merge::parse_records;
 use kernel::encoding::{
     detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
 };
 
 use crate::fs::fs_path;
-use crate::text::{sample_bytes, stream_segments, SampleSpec, StreamFlow};
+use crate::text::{sample_bytes, SampleSpec};
 
 /// 字节区间（左闭右开）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,51 +117,44 @@ pub fn csv_range_layout(path: &Path, options: CsvRangeScanOptions) -> io::Result
     }
     let encoding = source_encoding.expect("checked above");
 
-    let mut scanner = CsvRecordScanner::new(delimiter.as_byte());
-    let mut state = RangeState::default();
-    stream_segments(path, None, |segment| {
-        if state.done {
-            return StreamFlow::Stop;
-        }
-        scanner.feed(segment.bytes, |record| {
-            state.push(
-                record,
-                options.has_header,
-                options.start_row,
-                options.end_row,
-            );
-        });
-        if state.done {
-            StreamFlow::Stop
-        } else {
-            StreamFlow::Continue
-        }
-    })?;
-    let stopped_early = state.done;
-    let tail = scanner.finish();
-    if !stopped_early {
-        if let Some(record) = tail.tail {
-            state.push(
-                record,
-                options.has_header,
-                options.start_row,
-                options.end_row,
-            );
-        }
-    }
+    // ADR-0102 A2-3 收尾：区间状态机已下沉 kernel（`range_from_bytes`）。
+    // Web 形态读整段字节走同一条路径，避免「提前终止」语义被写成两套。
+    let data = std::fs::read(crate::fs::fs_path(path))?;
+    let facts = kernel::csv_range::range_from_bytes(
+        &data,
+        options.has_header,
+        options.start_row,
+        options.end_row,
+        delimiter,
+    )
+    .map_err(|error| io::Error::other(format!("{}: {}", error.code, error.message)))?;
+    let stopped_early = !facts.total_known;
+    let tail_unclosed_quote = {
+        let mut scanner = CsvRecordScanner::new(delimiter.as_byte());
+        scanner.feed(&data, |_| {});
+        scanner.finish().unclosed_quote
+    };
 
-    let header_columns = match state.header {
-        Some(span) => decode_header(path, span, encoding, delimiter)?,
+    let header_columns = match facts.header.clone() {
+        Some(span) => decode_header(
+            path,
+            CsvRangeSpan {
+                start: span.start,
+                end: span.end,
+            },
+            encoding,
+            delimiter,
+        )?,
         None => Vec::new(),
     };
-    let column_count = if state.header.is_some() {
+    let column_count = if facts.header.is_some() {
         header_columns.len() as u64
     } else {
-        state.max_selected_columns
+        facts.max_selected_columns
     };
-    let selected = (state.selected_rows > 0).then(|| CsvRangeSpan {
-        start: state.selected_start.expect("selected rows have a start"),
-        end: state.selected_end.expect("selected rows have an end"),
+    let selected = (facts.selected_rows > 0).then(|| CsvRangeSpan {
+        start: facts.selected.map(|(start, _)| start).unwrap_or(0),
+        end: facts.selected.map(|(_, end)| end).unwrap_or(0),
     });
 
     Ok(CsvRangeLayout {
@@ -169,88 +162,24 @@ pub fn csv_range_layout(path: &Path, options: CsvRangeScanOptions) -> io::Result
         delimiter,
         delimiter_detected,
         source_encoding,
-        header: state.header,
+        header: facts.header.map(|span| CsvRangeSpan {
+            start: span.start,
+            end: span.end,
+        }),
         header_columns,
         column_count,
-        data_rows: state.data_rows,
-        total_known: !stopped_early,
+        data_rows: facts.data_rows,
+        total_known: facts.total_known,
         selected,
-        selected_rows: state.selected_rows,
-        dirty_rows: state.dirty_rows,
-        multi_line_header: state.multi_line_header,
+        selected_rows: facts.selected_rows,
+        dirty_rows: facts.dirty_rows,
+        multi_line_header: facts.multi_line_header,
         unclosed_quote: if stopped_early {
             false
         } else {
-            tail.unclosed_quote
+            tail_unclosed_quote
         },
     })
-}
-
-#[derive(Default)]
-struct RangeState {
-    consumed: u64,
-    record_index: u64,
-    header: Option<CsvRangeSpan>,
-    header_columns: u64,
-    multi_line_header: bool,
-    data_rows: u64,
-    selected_start: Option<u64>,
-    selected_end: Option<u64>,
-    selected_rows: u64,
-    dirty_rows: u64,
-    first_selected_columns: Option<u64>,
-    max_selected_columns: u64,
-    done: bool,
-}
-
-impl RangeState {
-    fn push(&mut self, record: CsvRecord, has_header: bool, start_row: u64, end_row: u64) {
-        if self.done {
-            return;
-        }
-        let start = self.consumed;
-        let end = start.saturating_add(record.len);
-        self.consumed = end;
-
-        if has_header && self.record_index == 0 {
-            self.header = Some(CsvRangeSpan { start: 0, end });
-            self.header_columns = record.columns;
-            self.multi_line_header = record.multiline;
-            self.record_index = 1;
-            return;
-        }
-
-        self.record_index += 1;
-        self.data_rows += 1;
-        if self.data_rows >= start_row && self.data_rows <= end_row {
-            if self.selected_start.is_none() {
-                self.selected_start = Some(start);
-            }
-            self.selected_end = Some(end);
-            self.selected_rows += 1;
-            if has_header {
-                if record.columns != self.header_columns {
-                    self.dirty_rows += 1;
-                }
-            } else {
-                match self.first_selected_columns {
-                    None => {
-                        self.first_selected_columns = Some(record.columns);
-                        self.max_selected_columns = record.columns;
-                    }
-                    Some(columns) => {
-                        self.max_selected_columns = self.max_selected_columns.max(record.columns);
-                        if columns != record.columns {
-                            self.dirty_rows += 1;
-                        }
-                    }
-                }
-            }
-            if self.data_rows == end_row {
-                self.done = true;
-            }
-        }
-    }
 }
 
 fn placeholder(
@@ -313,6 +242,74 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// ADR-0102 A2-3 收尾：**桌面流式路径**与 **kernel 整段入口**必须给出同一组
+    /// 区间事实。重点覆盖「提前终止」——扫到 endRow 就停，是两套实现最容易分叉的点。
+    #[test]
+    fn desktop_stream_and_kernel_bytes_agree_on_range_facts() {
+        let samples: &[&[u8]] = &[
+            b"h1,h2
+a,b
+c,d
+e,f
+",
+            b"h1,h2
+a,b,c
+d,e
+", // 脏行
+            b"only,header
+", // 只有表头
+            b"", // 空文件
+        ];
+        for data in samples {
+            for (has_header, start_row, end_row) in [(true, 1, 2), (true, 2, 5), (false, 1, 3)] {
+                let dir = TempDir::new();
+                let path = dir.0.join("s.csv");
+                fs::write(&path, data).unwrap();
+                let options = CsvRangeScanOptions {
+                    source_encoding: Some(kernel::encoding::SourceEncoding::Utf8),
+                    delimiter: None,
+                    has_header,
+                    start_row,
+                    end_row,
+                    sample_window_bytes: 4096,
+                    platform_prior: kernel::encoding::PlatformPrior::Other,
+                };
+                let desktop = csv_range_layout(&path, options).unwrap();
+                let kernel_side = kernel::csv_range::range_from_bytes(
+                    data,
+                    has_header,
+                    start_row,
+                    end_row,
+                    desktop.delimiter,
+                )
+                .unwrap();
+
+                assert_eq!(desktop.data_rows, kernel_side.data_rows, "dataRows 不一致");
+                assert_eq!(
+                    desktop.selected_rows, kernel_side.selected_rows,
+                    "selectedRows 不一致"
+                );
+                assert_eq!(
+                    desktop.dirty_rows, kernel_side.dirty_rows,
+                    "dirtyRows 不一致"
+                );
+                assert_eq!(
+                    desktop.total_known, kernel_side.total_known,
+                    "totalKnown 不一致"
+                );
+                assert_eq!(
+                    desktop.multi_line_header, kernel_side.multi_line_header,
+                    "multiLineHeader 不一致"
+                );
+                assert_eq!(
+                    desktop.selected.map(|span| (span.start, span.end)),
+                    kernel_side.selected,
+                    "selected 区间不一致"
+                );
+            }
+        }
+    }
 
     struct TempDir(std::path::PathBuf);
 

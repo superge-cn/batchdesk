@@ -7,6 +7,7 @@ import {
   ERROR_CODES,
   ERROR_TEXT_KEYS,
   describeError,
+  errorCodeFromText,
   isKnownErrorCode,
 } from "./errors";
 import { I18nProvider, translate } from "./i18n";
@@ -52,6 +53,18 @@ describe("错误码文案（设计 06 §3／设计 09 §5）", () => {
     expect(text.title).toBe("model quota exhausted");
     expect(text.action).toBeUndefined();
     expect(isKnownErrorCode("E8999")).toBe(false);
+  });
+
+  it("从后端原文提取错误码，未知形态归 E0000（界面只读码位）", () => {
+    // check_locales.py 第 ⑨ 项：界面源码不得自取 error.message/detail 原文，
+    // 「原文 → 码位」的解析只有 errors.ts 这一处出口（WASM Worker 也走它）。
+    expect(errorCodeFromText(new Error("E1002: plan not found"))).toBe("E1002");
+    expect(errorCodeFromText("E4001: operation not licensed")).toBe("E4001");
+    expect(errorCodeFromText("网络异常")).toBe("E0000");
+    expect(errorCodeFromText(undefined)).toBe("E0000");
+    // 取出的码位必须是已收录码位或由 describeError 走兜底分支。
+    const code = errorCodeFromText("E2004: no space left on device (os error 28)");
+    expect(isKnownErrorCode(code)).toBe(true);
   });
 
   it("设计 06 §2 的码表已全量收口：56 个码位、每码两段", () => {

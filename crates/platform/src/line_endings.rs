@@ -59,6 +59,58 @@ pub fn inspect_line_endings(
     })
 }
 
+/// 统计口径自校：**流式路径**（桌面生产路径）与 **kernel 整段入口**
+/// （ADR-0102，Web 形态用）必须对同一段字节给出同一份计数。
+///
+/// 这条断言存在的理由：Web 侧只读得到整段字节、走 `counts_from_bytes`；桌面侧按块
+/// 流式喂 `LineEndingProcessor`。两者若因分块边界处理不同而产生差异，同一文件在两个
+/// 形态会算出不同的换行结构——那是方案 §13.5 明排除的双实现。
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use kernel::line_endings::{counts_from_bytes, LineEndingStructure};
+
+    fn stream_counts(data: &[u8], structure: LineEndingStructure) -> LineEndingCounts {
+        let mut processor = LineEndingProcessor::new(structure, None);
+        let mut sink = std::io::sink();
+        // 故意用非整块尺寸喂，制造跨块边界。
+        let mut index = 0;
+        while index < data.len() {
+            let end = (index + 7).min(data.len());
+            processor.feed(&data[index..end], &mut sink).unwrap();
+            index = end;
+        }
+        processor.finish(&mut sink).unwrap();
+        processor.counts()
+    }
+
+    #[test]
+    fn chunked_and_whole_file_paths_agree_on_counts() {
+        for data in [
+            &b"a\r\nb\r\nc"[..],
+            b"a\nb\rc\r\n",
+            b"\"unclosed\r\nnext",
+            b"",
+            b"\r\n",
+            b"no newlines at all",
+            // **末尾孤立 CR**：`finish` 才会把它统计为 CR——
+            // 「整段入口漏调 finish」与流式路径的差异点就在这里，必须覆盖。
+            b"trailing\r",
+            b"a\rb\r",
+        ] {
+            // `LineEndingStructure` 是**已解析**的结构（Text/Csv）；未解析的 auto
+            // 由 platform 的 `LineEndingStructureMode::resolve` 决定，不在这里。
+            for structure in [LineEndingStructure::Text, LineEndingStructure::Csv] {
+                assert_eq!(
+                    stream_counts(data, structure),
+                    counts_from_bytes(data, structure).unwrap(),
+                    "分块 {structure:?} 与整段口径不一致：{data:?}"
+                );
+            }
+        }
+    }
+}
+
 fn read_error(path: &Path, error: &std::io::Error) -> KernelError {
     KernelError::new(
         "E1004",

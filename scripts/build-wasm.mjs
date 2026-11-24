@@ -57,6 +57,12 @@ run(wasmBindgen, [
   "batchdesk_wasm",
 ]);
 
-// 启用标记：前端据此判断产物是否就位（缺失时按不可用降级，不判定）。
+// 启用标记：**唯一来源**。前端 vite.config.ts 与 load.ts 都读这个文件的存在性
+// （此前读的是环境变量 VITE_BATCHDESK_WASM，而没有任何地方设置它——判定脱节）。
 fs.writeFileSync(path.join(outDir, "ENABLED"), "1");
+
+// 供本次运行的后续命令使用（例如紧接的 `pnpm dev`）：把「产物就位」这同一事实
+// 也注入环境变量，避免两条路给出不同答案。
+process.env.VITE_BATCHDESK_WASM = "1";
 console.log(`[wasm] 完成：${outDir}`);
+console.log("[wasm] VITE_BATCHDESK_WASM=1");

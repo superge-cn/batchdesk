@@ -184,7 +184,7 @@ mod quota_tests {
                 limit: 10
             }
         );
-        assert_eq!(license.capability_for("dev-a").is_quota_exhausted(), true);
+        assert!(license.capability_for("dev-a").is_quota_exhausted());
     }
 
     /// 口径二：超额＝服务端拦截（E4004），且不产生记账副作用。

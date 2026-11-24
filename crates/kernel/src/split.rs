@@ -715,6 +715,49 @@ fn conflict_key(path: &str, sense: CaseSense) -> String {
     }
 }
 
+/// **字节级**分片布局（ADR-0102 A2-4）。
+///
+/// 桌面壳在 `platform::text` 里按块流式扫描并驱动 `SplitAccumulator`；Web 形态
+/// 读整段字节。累加器本就在 kernel，这里补一个「整段字节 → 布局」的入口，
+/// 让 F01（按字节）/F02（按行）/F03（按份数）三条共用同一段行切分语义。
+///
+/// 行切分口径与 platform 的 `stream_segments` 一致：以 `\n` 分隔；末行无换行
+/// 也算一行（尾片保留）。
+pub fn layout_from_bytes(
+    data: &[u8],
+    file_size: u64,
+    accumulator: SplitAccumulator,
+) -> SplitLayout {
+    let mut accumulator = accumulator;
+    let mut line_bytes = 0u64;
+    for &byte in data {
+        line_bytes += 1;
+        if byte == b'\n' {
+            accumulator.push_line(line_bytes, true);
+            line_bytes = 0;
+        }
+    }
+    if line_bytes > 0 {
+        accumulator.push_line(line_bytes, false);
+    }
+    accumulator.finish(file_size)
+}
+
+/// 行数预扫描（F03 的「份数超过总行数时按行数封顶」需要）。
+pub fn count_lines(data: &[u8]) -> u64 {
+    let mut lines = 0u64;
+    for &byte in data {
+        if byte == b'\n' {
+            lines += 1;
+        }
+    }
+    // 末行无换行也算一行（与 `layout_from_bytes` 同口径）。
+    if data.last().is_some_and(|byte| *byte != b'\n') {
+        lines += 1;
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

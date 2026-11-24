@@ -102,4 +102,42 @@ describe("F15 AI 面板（集成级）", () => {
     expect(mockAiStats().applyCount).toBe(0);
     expect(screen.queryByTestId("plan-stale")).toBeNull();
   });
+
+  it("AI-INT-06 上下文接线：功能页填了文件后，面板的「包含文件名」可选", async () => {
+    // 修复前 App 传的是恒空的 `fileCount: 0, kinds: []`，导致同意弹窗里
+    // 「包含文件名」永远 disabled、清单无从展示（设计 14 §9 的能力形同虚设）。
+    mockSetAiScenario("ready");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /编码转换/ }));
+    await screen.findByRole("heading", { name: "编码转换（C01）" });
+    // C01 的文件字段（`FEATURE_FIELDS` 的 labelKey）。浏览器形态渲染的是 File
+    // 选择器——桌面形态才是路径文本域，所以这里是 upload 而不是 type：
+    // 文件名清单由 `FeaturePages` 把选中文件的 name 合进上报表单。
+    const fileField = document.getElementById("c01-files") as HTMLInputElement;
+    expect(fileField).not.toBeNull();
+    expect(fileField.type).toBe("file");
+    await user.upload(fileField, [
+      new File(["contract"], "合同.pdf", { type: "application/pdf" }),
+      new File(["invoice"], "发票.pdf", { type: "application/pdf" })
+    ]);
+
+    await user.click(screen.getByTestId("ai-toggle"));
+    await screen.findByTestId("ai-panel");
+    await screen.findByText(/AI 已就绪/);
+    await user.type(screen.getByTestId("ai-input"), "转成 UTF-8");
+    await user.click(screen.getByTestId("ai-send"));
+
+    const dialog = await screen.findByTestId("ai-consent");
+    const toggle = within(dialog).getByTestId("ai-consent-names");
+    expect(toggle).toBeEnabled();
+    await user.click(toggle);
+    expect(within(dialog).getByText("合同.pdf")).toBeVisible();
+    expect(within(dialog).getByText("发票.pdf")).toBeVisible();
+
+    await user.click(within(dialog).getByTestId("ai-consent-confirm"));
+    await screen.findByTestId("ai-bundle");
+    expect(mockAiStats().lastAskInput?.context.fileNames).toEqual(["合同.pdf", "发票.pdf"]);
+  });
 });

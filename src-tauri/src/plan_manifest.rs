@@ -11,17 +11,15 @@ use kernel::archive::{
     plan_c10, plan_c10_compress, ArchiveCompression, ArchiveService, PlanC10CompressInput,
     PlanC10Input,
 };
-use kernel::c07::{plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input, PlanC07Row};
+use kernel::c07::{parse_manifest, plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input};
 use kernel::c08::{
     plan_c08, ArchiveCondition, ArchiveRule, PlanC08File, PlanC08Input, UnmatchedPolicy,
 };
 use kernel::csv::Delimiter;
-use kernel::encoding::PlatformPrior;
 use kernel::error::KernelError;
 use kernel::fs::CaseSense;
 use kernel::plan::{PlanDocument, PlanParamValue};
 use platform::archive::{existing_paths, inspect_sources, ZipArchiveService};
-use platform::csv_merge::{csv_dedup_inspect, CsvMergeScanOptions};
 use platform::ids::new_ulid;
 use platform::listing::collect_tree_files;
 
@@ -67,6 +65,10 @@ pub struct ManifestParams {
     pub missing: Option<String>,
     #[serde(default)]
     pub delimiter: Option<String>,
+    /// 清单编码（`utf-8` / `gb18030` 等）；缺省走检测。中英混排的短清单会被
+    /// 统计检测猜成候选集外的编码（E3001），这个入口是用户的出路。
+    #[serde(default)]
+    pub source: Option<String>,
     #[serde(default)]
     pub plan_id: Option<String>,
 }
@@ -101,66 +103,46 @@ pub fn plan_manifest_shell(
         })?),
         None => None,
     };
+    let source_encoding = match &params.source {
+        Some(value) => Some(
+            kernel::encoding::SourceEncoding::parse(value).ok_or_else(|| {
+                KernelError::invalid_params(format!("c07: unknown source encoding: {value}"))
+            })?,
+        ),
+        None => None,
+    };
     let manifest = require_file(Path::new(&params.manifest), "c07")?;
     let source_root = require_dir(Path::new(&params.source_root), "c07")?;
     let target_root = require_dir(Path::new(&params.target_root), "c07")?;
-    let manifest_size = std::fs::metadata(&manifest)
-        .map_err(|error| {
-            KernelError::new(
-                "E2001",
-                format!("{}: {error}", manifest.display()),
-                None,
-                false,
-            )
-        })?
-        .len()
-        .max(1);
-    // 清单解析编码感知：整份清单全量读取（清单小，采样窗口取文件大小）。
-    let inspected = csv_dedup_inspect(
-        &manifest,
-        CsvMergeScanOptions {
-            delimiter,
-            has_header: false,
-            sample_window_bytes: manifest_size,
-            sample_blocks: 1,
-            platform_prior: PlatformPrior::Other,
-            source_encoding: None,
-        },
-    )
-    .map_err(|error| {
-        adapter_error(format!(
-            "manifest is not parseable ({}): {error}",
-            manifest.display()
-        ))
+    // 清单解析的纯字节部分下沉在 kernel（`c07::parse_manifest`），与 CLI 和
+    // Web(WASM) 共用同一实现；壳层只负责读字节与采集逐行事实。
+    let manifest_bytes = std::fs::read(&manifest).map_err(|error| {
+        KernelError::new(
+            "E2001",
+            format!("{}: {error}", manifest.display()),
+            None,
+            false,
+        )
     })?;
-    let mut rows = Vec::new();
+    // 错误码原样透出：E3001（编码需人工确认）与 E1004（行格式）是不同的处置，
+    // 不能在这里统一裹成 E1004。
+    let rows = parse_manifest(&manifest_bytes, delimiter, source_encoding)?;
     let mut facts = Vec::new();
-    for record in &inspected.records {
-        if record.len() < 2 {
-            return Err(adapter_error(format!(
-                "manifest row must have two columns (name, target sub-directory): {record:?}"
-            )));
-        }
-        let name = record[0].trim();
-        let sub_dir = record[1].trim();
+    for row in &rows {
         // 事实采集与 kernel 用同一相对拼接规则（root/relative）。
-        let source = source_root.join(name);
+        let source = source_root.join(&row.name);
         let source_meta = std::fs::metadata(&source);
-        let target_dir = if sub_dir.is_empty() {
+        let target_dir = if row.sub_dir.is_empty() {
             target_root.clone()
         } else {
-            target_root.join(sub_dir)
+            target_root.join(&row.sub_dir)
         };
         let target = target_dir.join(
-            Path::new(name)
+            Path::new(&row.name)
                 .file_name()
                 .map(|value| value.to_os_string())
-                .unwrap_or_else(|| name.into()),
+                .unwrap_or_else(|| row.name.clone().into()),
         );
-        rows.push(PlanC07Row {
-            name: name.to_string(),
-            sub_dir: sub_dir.to_string(),
-        });
         facts.push(PlanC07Fact {
             exists: source_meta
                 .as_ref()

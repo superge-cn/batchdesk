@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Info, Loader2, Save, Undo2 } from "lucide-react";
 import {
   applyPlan,
@@ -22,6 +22,35 @@ import { ErrorBanner } from "./ErrorBanner";
 import { warningKindTitle } from "./warnings";
 import { VirtualList } from "./VirtualList";
 import type { FeatureView as View } from "./navCatalog";
+import { createWasmClient } from "./lib/wasm/client";
+import {
+  WebPlanUnavailable,
+  planWithPickedInputs,
+  webPlanSupport,
+  type WebPlanGap
+} from "./lib/web/planChannel";
+import { isNoHeader, splitList, splitNumbers } from "./lib/web/formValues";
+import {
+  applyInSandbox,
+  productFileNames,
+  resetSandbox,
+  saveProducts,
+  stageInputs,
+  summarizeOutcome,
+  undoInSandbox,
+  webApplySupport,
+  webSandboxFacts,
+  webStagedFiles,
+  type ExecCaller,
+  type WebApplyResult,
+  type WebSandboxFacts
+} from "./lib/web/applyChannel";
+import {
+  clearPersisted,
+  persistProducts,
+  type PersistOutcome
+} from "./lib/web/opfsStore";
+import { formatBytes } from "./lib/format";
 import { useI18n, type MessageKey } from "./i18n";
 import type { Translate } from "./labels";
 import { dryRunStatusLabel, phaseLabel, stateBadge } from "./labels";
@@ -58,6 +87,18 @@ interface TaskView {
   report?: ApplyReport;
 }
 
+/**
+ * Web 计划通道的 WASM 客户端：一页一个 Worker（重复创建有成本）。
+ * 产物未装载时 `createWasmClient()` 返回 null，调用方据此明确失败而不是出示假计划。
+ */
+let planWasmClient: ReturnType<typeof createWasmClient> | undefined;
+function sharedWasmClient(): ReturnType<typeof createWasmClient> {
+  if (planWasmClient === undefined) {
+    planWasmClient = createWasmClient();
+  }
+  return planWasmClient;
+}
+
 function planOperationFor(
   view: View,
   form: Record<string, string>
@@ -73,49 +114,78 @@ function planOperationFor(
         ...(form.delimiter ? { delimiter: form.delimiter } : {})
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "f06" || view === "f07" || view === "f08" || view === "f09") {
-    const csvParams: Record<string, unknown> = {
+    // 公共字段（四个功能都有）；各功能的专有字段在各自分支里按精确类型声明，
+    // 不用 `Record<string, unknown>`——那样 `kind` 的判别力会被擦掉。
+    const base = {
       files: form.files ? form.files.split("\n").filter(Boolean) : [],
       target: form.target,
       sampleWindow: Number(form.sampleWindow || 4096),
-      sampleBlocks: Number(form.sampleBlocks || 0)
+      sampleBlocks: Number(form.sampleBlocks || 0),
+      ...(form.delimiter ? { delimiter: form.delimiter } : {}),
+      ...(form.source ? { source: form.source } : {}),
+      ...(isNoHeader(form.header) ? { hasHeader: false } : {})
     };
-    if (form.delimiter) csvParams.delimiter = form.delimiter;
-    if (form.source) csvParams.source = form.source;
-    if (isNoHeader(form.header)) csvParams.hasHeader = false;
     if (view === "f06") {
-      csvParams.output = form.output;
-      if (form.sourceColumnName) {
-        csvParams.sourceColumn = true;
-        csvParams.sourceColumnName = form.sourceColumnName;
-      }
-      if (form.strict) csvParams.strict = true;
-    } else {
-      if (form.output) csvParams.output = form.output;
-      if (form.outputDir) csvParams.outputDir = form.outputDir;
+      return planOperation({
+        kind: "f06",
+        params: {
+          ...base,
+          output: form.output,
+          ...(form.sourceColumnName
+            ? { sourceColumn: true as const, sourceColumnName: form.sourceColumnName }
+            : {}),
+          ...(form.strict ? { strict: true as const } : {})
+        },
+        sourcePaths: []
+      });
     }
     if (view === "f07") {
-      csvParams.columns = form.columns
-        ? form.columns.split(",").map((value) => value.trim()).filter(Boolean)
-        : [];
-      csvParams.columnIndexes = form.columnIndexes
-        ? form.columnIndexes
-            .split(",")
-            .map((value) => Number(value.trim()))
-            .filter((value) => Number.isFinite(value) && value > 0)
-        : [];
+      return planOperation({
+        kind: "f07",
+        params: {
+          ...base,
+          ...(form.output ? { output: form.output } : {}),
+          ...(form.outputDir ? { outputDir: form.outputDir } : {}),
+          columns: form.columns
+            ? form.columns.split(",").map((value) => value.trim()).filter(Boolean)
+            : [],
+          columnIndexes: form.columnIndexes
+            ? form.columnIndexes
+                .split(",")
+                .map((value) => Number(value.trim()))
+                .filter((value) => Number.isFinite(value) && value > 0)
+            : []
+        },
+        sourcePaths: []
+      });
     }
     if (view === "f08") {
-      csvParams.window = form.window === "last" ? "last" : "first";
-      csvParams.count = Number(form.count || 0);
+      return planOperation({
+        kind: "f08",
+        params: {
+          ...base,
+          ...(form.output ? { output: form.output } : {}),
+          ...(form.outputDir ? { outputDir: form.outputDir } : {}),
+          window: form.window === "last" ? ("last" as const) : ("first" as const),
+          count: Number(form.count || 0)
+        },
+        sourcePaths: []
+      });
     }
-    if (view === "f09") {
-      csvParams.startRow = Number(form.startRow || 0);
-      csvParams.endRow = Number(form.endRow || 0);
-    }
-    return planOperation({ kind: view, params: csvParams, sourcePaths: [] } as never);
+    return planOperation({
+      kind: "f09",
+      params: {
+        ...base,
+        ...(form.output ? { output: form.output } : {}),
+        ...(form.outputDir ? { outputDir: form.outputDir } : {}),
+        startRow: Number(form.startRow || 0),
+        endRow: Number(form.endRow || 0)
+      },
+      sourcePaths: []
+    });
   }
   if (view === "f10") {
     return planOperation({
@@ -126,7 +196,7 @@ function planOperationFor(
         ...(form.outputDir ? { outputDir: form.outputDir } : {})
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c07") {
     return planOperation({
@@ -140,7 +210,7 @@ function planOperationFor(
         ...(form.delimiter ? { delimiter: form.delimiter } : {})
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c08") {
     return planOperation({
@@ -153,7 +223,7 @@ function planOperationFor(
         ...(form.unclassifiedDir ? { unclassifiedDir: form.unclassifiedDir } : {})
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c10") {
     const compress = form.mode === "compress";
@@ -177,7 +247,7 @@ function planOperationFor(
             })
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c04") {
     return planOperation({
@@ -190,57 +260,84 @@ function planOperationFor(
         scope: form.scope || "full"
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c11" || view === "c12" || view === "c13" || view === "c14") {
-    const opParams: Record<string, unknown> = {
+    const base = {
       files: form.files ? form.files.split("\n").filter(Boolean) : [],
       target: form.target,
       sampleWindow: Number(form.sampleWindow || 4096),
-      sampleBlocks: Number(form.sampleBlocks || 0)
+      sampleBlocks: Number(form.sampleBlocks || 0),
+      ...(form.output ? { output: form.output } : {}),
+      ...(form.outputDir ? { outputDir: form.outputDir } : {}),
+      ...(form.delimiter ? { delimiter: form.delimiter } : {}),
+      ...(form.source ? { source: form.source } : {}),
+      ...(isNoHeader(form.header) ? { hasHeader: false } : {})
     };
-    if (form.output) opParams.output = form.output;
-    if (form.outputDir) opParams.outputDir = form.outputDir;
-    if (form.delimiter) opParams.delimiter = form.delimiter;
-    if (form.source) opParams.source = form.source;
-    if (isNoHeader(form.header)) opParams.hasHeader = false;
     if (view === "c11") {
-      opParams.keyColumns = splitList(form.keyColumns);
-      opParams.keyColumnIndexes = splitNumbers(form.keyColumnIndexes);
+      return planOperation({
+        kind: "c11",
+        params: {
+          ...base,
+          keyColumns: splitList(form.keyColumns),
+          keyColumnIndexes: splitNumbers(form.keyColumnIndexes)
+        },
+        sourcePaths: []
+      });
     }
     if (view === "c12") {
-      if (form.column) opParams.column = form.column;
-      if (form.columnIndex) opParams.columnIndex = Number(form.columnIndex);
-      opParams.op = form.op;
-      opParams.value = form.value ?? "";
-      opParams.filterMode = form.filterMode === "drop" ? "drop" : "keep";
+      return planOperation({
+        kind: "c12",
+        params: {
+          ...base,
+          ...(form.column ? { column: form.column } : {}),
+          ...(form.columnIndex ? { columnIndex: Number(form.columnIndex) } : {}),
+          ...(form.op ? { op: form.op } : {}),
+          value: form.value ?? "",
+          filterMode: form.filterMode === "drop" ? ("drop" as const) : ("keep" as const)
+        },
+        sourcePaths: []
+      });
     }
     if (view === "c13") {
-      opParams.sortColumns = splitList(form.sortColumns);
-      opParams.sortColumnIndexes = splitNumbers(form.sortColumnIndexes);
-      opParams.order = form.order === "desc" ? "desc" : "asc";
-      if (form.externalChunkRows)
-        opParams.externalChunkRows = Number(form.externalChunkRows);
+      return planOperation({
+        kind: "c13",
+        params: {
+          ...base,
+          sortColumns: splitList(form.sortColumns),
+          sortColumnIndexes: splitNumbers(form.sortColumnIndexes),
+          order: form.order === "desc" ? ("desc" as const) : ("asc" as const),
+          ...(form.externalChunkRows
+            ? { externalChunkRows: Number(form.externalChunkRows) }
+            : {})
+        },
+        sourcePaths: []
+      });
     }
-    if (view === "c14") {
-      if (form.splitColumn) opParams.splitColumn = form.splitColumn;
-      if (form.splitColumnIndex)
-        opParams.splitColumnIndex = Number(form.splitColumnIndex);
-      if (form.splitSeparator) opParams.splitSeparator = form.splitSeparator;
-      if (form.splitRegex) opParams.splitRegex = form.splitRegex;
-      opParams.mergeColumns = splitList(form.mergeColumns);
-      opParams.mergeColumnIndexes = splitNumbers(form.mergeColumnIndexes);
-      if (form.mergeJoinWith !== undefined) opParams.mergeJoinWith = form.mergeJoinWith;
-      if (form.mergeName) opParams.mergeName = form.mergeName;
-    }
-    return planOperation({ kind: view, params: opParams, sourcePaths: [] } as never);
+    return planOperation({
+      kind: "c14",
+      params: {
+        ...base,
+        ...(form.splitColumn ? { splitColumn: form.splitColumn } : {}),
+        ...(form.splitColumnIndex
+          ? { splitColumnIndex: Number(form.splitColumnIndex) }
+          : {}),
+        ...(form.splitSeparator ? { splitSeparator: form.splitSeparator } : {}),
+        ...(form.splitRegex ? { splitRegex: form.splitRegex } : {}),
+        mergeColumns: splitList(form.mergeColumns),
+        mergeColumnIndexes: splitNumbers(form.mergeColumnIndexes),
+        ...(form.mergeJoinWith !== undefined ? { mergeJoinWith: form.mergeJoinWith } : {}),
+        ...(form.mergeName ? { mergeName: form.mergeName } : {})
+      },
+      sourcePaths: []
+    });
   }
   if (view === "f11") {
     return planOperation({
       kind: "f11",
       params: { list: form.list, root: form.root },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "f01" || view === "f02" || view === "f03") {
     return planOperation({
@@ -257,7 +354,7 @@ function planOperationFor(
         ...(view === "f03" && form.parts ? { parts: Number(form.parts) } : {})
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "f04") {
     return planOperation({
@@ -269,7 +366,7 @@ function planOperationFor(
         ...(form.source ? { source: form.source } : {})
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c01") {
     return planOperation({
@@ -281,7 +378,7 @@ function planOperationFor(
         sampleBlocks: Number(form.sampleBlocks || 0)
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c02") {
     return planOperation({
@@ -292,7 +389,7 @@ function planOperationFor(
         sampleBytes: Number(form.sampleBytes || 4096)
       },
       sourcePaths: []
-    } as never);
+    });
   }
   if (view === "c03") {
     return planOperation({
@@ -305,7 +402,7 @@ function planOperationFor(
         sampleBytes: Number(form.sampleBytes || 4096)
       },
       sourcePaths: []
-    } as never);
+    });
   }
   return planOperation({
     kind: "f12",
@@ -318,27 +415,21 @@ function planOperationFor(
       scope: form.scope
     },
     sourcePaths: []
-  } as never);
+  });
 }
 
-function splitList(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+// 表单值解析（splitList／splitNumbers／isNoHeader）与 Web 计划通道共用，
+// 定义在 `lib/web/formValues.ts`——两处各写一份必然漂移。
 
-function splitNumbers(value: string | undefined): number[] {
-  return splitList(value)
-    .map((item) => Number(item))
-    .filter((item) => Number.isFinite(item) && item > 0);
-}
-
-function isNoHeader(value: string | undefined) {
-  const normalized = (value ?? "").trim().toLowerCase();
-  // 这是"表头 有|无"输入框的取值判定，不是界面文案。
-  return normalized === "无" || normalized === "no" || normalized === "false"; // i18n-exempt
-}
+/**
+ * 浏览器计划能力缺口的文案键：`webPlanSupport` 给的是原因枚举（lib 层不依赖语言包），
+ * 界面在这里翻译成人话。`Record<WebPlanGap, ...>` 保证新增缺口时编译不过。
+ */
+const WEB_PLAN_GAP_KEYS: Record<WebPlanGap, MessageKey> = {
+  "directory-walk": "feature.plan.gap.directoryWalk",
+  "file-identity": "feature.plan.gap.fileIdentity",
+  "pending-wiring": "feature.plan.gap.pendingWiring"
+};
 
 /**
  * 预览行状态徽章。`Record` 全覆盖＋语气色表：内核将来加一个状态时这里编译不过，
@@ -416,30 +507,69 @@ interface FieldSpec {
   placeholder?: string;
   placeholderKey?: MessageKey;
   wide?: boolean;
-  kind?: "textarea" | "password";
+  /**
+   * `files`：多文件选择器（File API）。
+   * `file`：**单文件**选择器（C10 的压缩包：一次只解一个，多选没有语义）。
+   * `directory`：**整个目录**选择器（`webkitdirectory`）——C08 需要每个文件的
+   * 相对路径，只有目录选择才拿得到（`webkitRelativePath`）。
+   * 桌面形态三者都仍渲染同一名字的路径输入——渲染按 `isTauri()` 分流，
+   * 计划侧也分两条路（见 `onPlan`），字段名保持一致以免模板/上下文漂移。
+   */
+  kind?: "textarea" | "password" | "files" | "file" | "directory";
+  /**
+   * 桌面仍是 `kind` 的形态、浏览器改走**目录选择**。
+   *
+   * 与 `kind: "directory"` 的区别：那个连桌面也渲染成单行路径输入；F10 的 `roots`
+   * 桌面是**多行**（多个根目录一行一个），不能为了 Web 的目录选择把桌面降级成单行。
+   */
+  webDirectory?: boolean;
   hintKey?: MessageKey;
+  /**
+   * 浏览器形态专属提示（覆盖 `hintKey`）。同一字段在桌面与浏览器的**能力**
+   * 不同时用：桌面能查目标占用、浏览器不能，提示不能共用一条。
+   */
+  webHintKey?: MessageKey;
 }
 
 const FILE_LIST: FieldSpec = {
   name: "files",
   labelKey: "feature.field.files",
-  kind: "textarea",
+  // 浏览器渲染 File 选择器、桌面渲染路径文本域（渲染按 isTauri 分流，字段名一致）。
+  kind: "files",
   placeholder: "/path/a.csv\n/path/b.csv\n"
 };
 
 const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
   f01: [
-    { name: "file", labelKey: "feature.field.file", placeholder: "/path/a.txt", wide: true },
+    {
+      name: "file",
+      labelKey: "feature.field.file",
+      kind: "files",
+      placeholder: "/path/a.txt",
+      wide: true
+    },
     { name: "targetBytes", labelKey: "feature.field.targetBytes", placeholder: "8" },
     { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true }
   ],
   f02: [
-    { name: "file", labelKey: "feature.field.file", placeholder: "/path/a.txt", wide: true },
+    {
+      name: "file",
+      labelKey: "feature.field.file",
+      kind: "files",
+      placeholder: "/path/a.txt",
+      wide: true
+    },
     { name: "linesPerPart", labelKey: "feature.field.linesPerPart", placeholder: "100" },
     { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true }
   ],
   f03: [
-    { name: "file", labelKey: "feature.field.file", placeholder: "/path/a.txt", wide: true },
+    {
+      name: "file",
+      labelKey: "feature.field.file",
+      kind: "files",
+      placeholder: "/path/a.txt",
+      wide: true
+    },
     { name: "parts", labelKey: "feature.field.parts", placeholder: "4" },
     { name: "outputDir", labelKey: "feature.field.outputDir", placeholder: "/path/out", wide: true }
   ],
@@ -454,7 +584,8 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     { name: "sampleWindow", labelKey: "feature.field.sampleWindow", placeholder: "4096" }
   ],
   c02: [
-    FILE_LIST,
+    // 浏览器形态用文件选择器；桌面形态是路径文本域（同一字段名，按 isTauri 分流）。
+    { name: "files", labelKey: "feature.field.files", kind: "files" },
     { name: "target", labelKey: "feature.field.target", placeholder: "crlf|lf|cr", wide: true },
     { name: "sampleBytes", labelKey: "feature.field.sampleBytes", placeholder: "4096" }
   ],
@@ -470,7 +601,13 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     }
   ],
   f05: [
-    { name: "file", labelKey: "feature.field.file", placeholder: "/path/list.csv", wide: true },
+    {
+      name: "file",
+      labelKey: "feature.field.file",
+      kind: "files",
+      placeholder: "/path/list.csv",
+      wide: true
+    },
     {
       name: "targetBytes",
       labelKey: "feature.field.targetBytes",
@@ -554,14 +691,27 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     {
       name: "roots",
       labelKey: "feature.field.roots",
+      // 桌面：多个根目录一行一个；浏览器：目录选择（清单的源是根目录，只有目录
+      // 选择才拿得到相对路径与根名）。
       kind: "textarea",
+      webDirectory: true,
+      webHintKey: "feature.field.f10.webHint",
       placeholder: "/path/root-a\n/path/root-b\n",
       hintKey: "feature.field.f10.hint"
     },
     { name: "outputDir", labelKey: "feature.field.listingOutputDir", placeholder: "/path/out", wide: true }
   ],
   c04: [
-    { name: "dir", labelKey: "feature.field.dir", placeholder: "/path/dir", wide: true },
+    {
+      name: "dir",
+      labelKey: "feature.field.dir",
+      // 浏览器里必须选**整个目录**：条目＝目录的第一层名字，只有目录选择才拿得到
+      // 相对路径（普通多选没有 `webkitRelativePath`）。
+      kind: "directory",
+      webHintKey: "feature.field.dirWebHint",
+      placeholder: "/path/dir",
+      wide: true
+    },
     { name: "mode", labelKey: "feature.field.mode", placeholder: "plain" },
     { name: "scope", labelKey: "feature.field.scope", placeholder: "full" },
     {
@@ -643,17 +793,47 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     {
       name: "manifest",
       labelKey: "feature.field.manifest",
+      // 清单与源目录是**两份独立输入**：浏览器形态各占一个槽，
+      // 不把清单混进源目录的选中文件里（那样只能靠扩展名猜谁是清单）。
+      kind: "file",
+      webHintKey: "feature.field.manifest.webHint",
       placeholder: "/path/manifest.csv",
       wide: true
     },
-    { name: "sourceRoot", labelKey: "feature.field.sourceRoot", placeholder: "/path/src", wide: true },
-    { name: "targetRoot", labelKey: "feature.field.targetRoot", placeholder: "/path/dst", wide: true },
+    {
+      name: "sourceRoot",
+      labelKey: "feature.field.sourceRoot",
+      kind: "directory",
+      placeholder: "/path/src",
+      wide: true
+    },
+    {
+      name: "targetRoot",
+      labelKey: "feature.field.targetRoot",
+      webHintKey: "feature.field.c07.targetWebHint",
+      placeholder: "/path/dst",
+      wide: true
+    },
     { name: "operation", labelKey: "feature.field.operation", placeholder: "move" },
     { name: "missing", labelKey: "feature.field.missing", placeholder: "skip" },
-    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," }
+    { name: "delimiter", labelKey: "feature.field.delimiter", placeholder: "," },
+    {
+      name: "source",
+      labelKey: "feature.field.source",
+      webHintKey: "feature.field.source.webHint",
+      placeholder: "utf-8"
+    }
   ],
   c08: [
-    { name: "sourceRoot", labelKey: "feature.field.sourceRoot", placeholder: "/path/src", wide: true },
+    {
+      name: "sourceRoot",
+      labelKey: "feature.field.sourceRoot",
+      // 浏览器里必须选**整个目录**：归档规则要按相对路径判定归属，
+      // 普通多选拿不到子目录结构（`planC08` 会拒绝而不是拿文件名凑数）。
+      kind: "directory",
+      placeholder: "/path/src",
+      wide: true
+    },
     { name: "targetRoot", labelKey: "feature.field.targetRoot", placeholder: "/path/dst", wide: true },
     {
       name: "rules",
@@ -672,8 +852,23 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     }
   ],
   c10: [
-    { name: "mode", labelKey: "feature.field.mode", placeholder: "extract" },
-    { name: "archive", labelKey: "feature.field.archive", placeholder: "/path/a.zip", wide: true },
+    {
+      name: "mode",
+      // C10 的取值是 extract|compress，与 C03/C04 的 plain|regex 不是一回事：
+      // 标签必须专属，否则界面上会写「模式 (plain|regex)」而实际只收这两个值。
+      labelKey: "feature.field.c10.mode",
+      hintKey: "feature.field.c10.mode.hint",
+      placeholder: "extract"
+    },
+    {
+      name: "archive",
+      labelKey: "feature.field.archive",
+      // 浏览器里必须选一个压缩包：C10 的条目事实来自中央目录（ADR-0103），
+      // 没有路径就等于没有输入。桌面仍渲染路径输入。
+      kind: "file",
+      placeholder: "/path/a.zip",
+      wide: true
+    },
     {
       name: "outputDir",
       labelKey: "feature.field.extractOutputDir",
@@ -692,13 +887,17 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     {
       name: "output",
       labelKey: "feature.field.compressOutput",
+      // 浏览器没有产物文件系统：目标是否已存在查不到，计划不会预判冲突。
+      webHintKey: "feature.field.compressOutput.webHint",
       placeholder: "/path/bundle.zip",
       wide: true
     },
     {
       name: "sources",
       labelKey: "feature.field.sources",
-      kind: "textarea",
+      // 浏览器压缩只能选**文件**：拿不到目录树，「整目录压缩」不在 Web 能力内。
+      kind: "files",
+      webHintKey: "feature.field.sources.webHint",
       placeholder: "/path/src\n/path/other.txt\n"
     },
     { name: "compression", labelKey: "feature.field.compression", placeholder: "deflate" }
@@ -714,7 +913,15 @@ const FEATURE_FIELDS: Partial<Record<View, FieldSpec[]>> = {
     }
   ],
   f12: [
-    { name: "dir", labelKey: "feature.field.renameDir", placeholder: "/path/dir", wide: true },
+    {
+      name: "dir",
+      labelKey: "feature.field.renameDir",
+      // 同 C04：条目来自目录选择的相对路径，浏览器里只改第一层（与桌面 `read_dir` 同口径）。
+      kind: "directory",
+      webHintKey: "feature.field.dirWebHint",
+      placeholder: "/path/dir",
+      wide: true
+    },
     {
       name: "prefix",
       labelKey: "feature.field.prefix",
@@ -794,12 +1001,15 @@ function contentFromForm(
 export function FeaturePages({
   view,
   onBack,
-  initialPlan = null
+  initialPlan = null,
+  onContextChange
 }: {
   view: View;
   onBack: () => void;
   /** F15：AI 面板交接的计划；只进预览，执行仍由本页的确认按钮发起。 */
   initialPlan?: PlanDocument | null;
+  /** F15：把当前功能页的功能码与表单上报，供 App 组装面板上下文（设计 14 §9）。 */
+  onContextChange?: (feature: string, form: Record<string, string>) => void;
 }) {
   const { t } = useI18n();
   const title = t(FEATURE_TITLES[view] ?? "nav.c09");
@@ -808,6 +1018,38 @@ export function FeaturePages({
   const uiTables = useUiTableState();
   const previewTableId = `table.feature.${view}`;
   const [form, setForm] = useState<Record<string, string>>({});
+  /**
+   * 浏览器形态选中的本地文件，**按字段名分槽**（桌面形态恒空：路径来自表单，
+   * 由壳层采集）。
+   *
+   * 为什么分槽：C07 需要两份互不相干的输入（清单文件 ＋ 源目录）。混在一个数组里
+   * 就只能靠扩展名猜谁是清单，猜错会拿源目录里的某个 CSV 当清单解析。
+   */
+  const [pickedByField, setPickedByField] = useState<Record<string, File[]>>({});
+  /** 所有槽的扁平视图：只用于「有没有选输入」与 AI 上下文的文件名清单。 */
+  const pickedFiles = useMemo(
+    () => Object.values(pickedByField).flat(),
+    [pickedByField]
+  );
+  /**
+   * 计划来源。`wasm` 表示这份计划由浏览器内核真实算出——但 Web 形态**没有**
+   * OPFS 执行器（设计 02 §3.1 未实现），执行/撤销/回滚预演必须禁用；
+   * 否则真计划配 mock 执行会造出「已执行」的假象。
+   */
+  const [planOrigin, setPlanOrigin] = useState<"ipc" | "wasm">("ipc");
+  /** 浏览器沙箱的执行结果：真执行、产物以 Blob 交回，下载后才落到本机（ADR-0108）。 */
+  const [webApply, setWebApply] = useState<WebApplyResult | null>(null);
+  /**
+   * 本次执行往浏览器（OPFS）里留了几份产物。
+   *
+   * 只有实际存下来才显示：不支持 OPFS 的浏览器与失败分支都不该给用户
+   * 一个「已保存 0 个」的噪声（零强制力，落盘是加分项不是承诺）。
+   */
+  const [persisted, setPersisted] = useState<PersistOutcome | null>(null);
+  /** 超出 §13.10.2 本地建议档时的确认事实；非空即弹确认（确认前不读内容）。 */
+  const [sandboxAsk, setSandboxAsk] = useState<WebSandboxFacts | null>(null);
+  /** 沙箱里是否已有执行痕迹：换输入/换视图时据此决定要不要清空（避免空转调用）。 */
+  const sandboxUsed = useRef(false);
   const [plan, setPlan] = useState<PlanDocument | null>(null);
   const [preview, setPreview] = useState<RenamePreview | null>(null);
   const [dryRun, setDryRun] = useState<UndoDryRun | null>(null);
@@ -831,6 +1073,66 @@ export function FeaturePages({
 
   const setField = (name: string, value: string) =>
     setForm((previous) => ({ ...previous, [name]: value }));
+
+  /**
+   * 浏览器形态的「选好了文件」：多选与目录选择共用。
+   *
+   * 换输入即让旧计划失效（方案 §7.3）——否则界面上会留着一份按旧文件算出来的
+   * 计划，看起来仍然可以执行。
+   */
+  const onPickFiles = (field: string, picked: FileList | null) => {
+    const files = Array.from(picked ?? []);
+    setPickedByField((previous) => ({ ...previous, [field]: files }));
+    setPlan(null);
+    setPlannedForm(null);
+    setPlanOrigin("ipc");
+    setWebApply(null);
+    if (sandboxUsed.current) {
+      sandboxUsed.current = false;
+      resetPlanSandbox();
+    }
+  };
+
+  // 换功能页即换输入：浏览器选择的文件与「计划来源」都不跨视图复用
+  // （表单 field 仍按既有设计跨视图保留，那是路径文本，与 File 句柄不同）。
+  useEffect(() => {
+    setPickedByField({});
+    setPlanOrigin("ipc");
+    setWebApply(null);
+    setSandboxAsk(null);
+    if (sandboxUsed.current) {
+      sandboxUsed.current = false;
+      resetPlanSandbox();
+    }
+    // `resetPlanSandbox` 只读模块级 Worker 引用；不随渲染变化。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // F15：把当前功能页的功能码与表单上报给 App，供 AI 面板上下文取「文件名清单」。
+  // 只在视图或表单变化时上报；面板是否使用、是否发送由面板自己的同意流程决定。
+  //
+  // 浏览器形态的文件是 `File` 对象，**不在表单里**（表单只有路径文本域）。
+  // 这里把文件名按同一字段合进去：否则用户明明选了文件，AI 上下文的
+  // 「包含文件名」还是恒空（`fileNamesForFeature` 读的就是 `form.files`）。
+  //
+  // 合并结果必须 `useMemo` 缓存：每次渲染新建对象 → `setAiForm` 拿到新引用 →
+  // App 重渲染 → 回调换引用 → 本 effect 重跑，会把自己转成死循环（实测卡死）。
+  const reportedForm = useMemo(
+    () =>
+      pickedFiles.length > 0
+        ? { ...form, files: pickedFiles.map((file) => file.name).join("\n") }
+        : form,
+    [form, pickedFiles]
+  );
+  // 回调本身放在 ref 里：`onContextChange` 是调用方的内联箭头函数，每次渲染都换
+  // 引用；把它放进依赖会让「渲染 → effect → setState → 渲染」无谓地转圈。
+  const contextChangeRef = useRef(onContextChange);
+  useEffect(() => {
+    contextChangeRef.current = onContextChange;
+  }, [onContextChange]);
+  useEffect(() => {
+    contextChangeRef.current?.(view, reportedForm);
+  }, [view, reportedForm]);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -906,7 +1208,28 @@ export function FeaturePages({
     setPlannedForm(null);
     setDangerOpen(false);
     try {
-      const next = await planOperationFor(view, form);
+      // 浏览器形态 + 已选文件 → 走 WASM 真算（A3-2：能算的视图全部接线）。
+      // 事实不全的视图由 `planWithFiles` 明确拒绝（E5001），**不在这里退回 mock**：
+      // 假计划可以是演示数据，但不能是「以为算过了」。
+      let next: PlanDocument;
+      if (!isTauri() && pickedFiles.length > 0) {
+        const client = sharedWasmClient();
+        if (client === null) {
+          throw new WebPlanUnavailable(
+            "WASM runtime is not available in this environment"
+          );
+        }
+        next = await planWithPickedInputs(
+          (request) => client.call(request),
+          view,
+          pickedByField,
+          form
+        );
+        setPlanOrigin("wasm");
+      } else {
+        next = await planOperationFor(view, form);
+        setPlanOrigin("ipc");
+      }
       setPlan(next);
       setPlannedForm(JSON.stringify(form));
       if (view === "f12") {
@@ -924,23 +1247,109 @@ export function FeaturePages({
     }
   };
 
+/**
+ * 清空浏览器执行沙箱（换输入／换视图／重新预览时）。
+ *
+ * 不提示失败：沙箱不可用时后续 apply 会自己报 E5002；这里再弹一次只是噪音。
+ */
+const resetPlanSandbox = () => {
+  const client = sharedWasmClient();
+  if (client === null) return;
+  resetSandbox((request) => client.call(request)).catch(() => undefined);
+};
+
+/** 冲突策略取自设置（C19：`processing.onConflict`，缺省 skip＝安全默认）。 */
+const readOnConflict = async (): Promise<"skip" | "sequence" | "overwrite"> => {
+  try {
+    const scope = await getConfig("processing");
+    const value = scope.values["onConflict"]?.value;
+    if (value === "skip" || value === "sequence" || value === "overwrite") {
+      return value;
+    }
+  } catch {
+    // 读不到设置时保持缺省 skip（不覆盖）。
+  }
+  return "skip";
+};
+
+/**
+ * 浏览器沙箱执行（ADR-0108）：登记输入 → 内核执行 → 产物交回。
+ *
+ * 与桌面 `onApply` 的区别只在落点：桌面写用户磁盘并进任务队列；这里写 Worker
+ * 内沙箱、产物等用户下载。**同一个 `generic_apply`**，不是模拟。
+ */
+const runSandboxApply = async (client: { call: ExecCaller }) => {
+  if (!plan) return;
+  setBusy("apply");
+  setError(null);
+  setNotice(null);
+  setWebApply(null);
+  setPersisted(null);
+  try {
+    const call: ExecCaller = (request) => client.call(request);
+    await stageInputs(call, view, pickedByField);
+    const result = await applyInSandbox(call, plan, {
+      onConflict: await readOnConflict(),
+      // 解密密码只随本次请求进沙箱（ADR-0074）：计划里只有「会提供密码」这个事实，
+      // 界面上不填就不发，执行器按 E3008 整单拒绝而不是解一半。
+      ...(form.password ? { password: form.password } : {})
+    });
+    sandboxUsed.current = true;
+    setWebApply(result);
+    setNotice(t("feature.notice.webApplied", { count: result.products.length }));
+    // 落盘是**执行之后的异步搬运**（ADR-0115）：内核 FsAdapter 是同步契约，
+    // OPFS 是异步 API，所以不把 OPFS 塞进执行栈。失败不阻断、不改计划——
+    // 零强制力环境下它只是「多留一份」，不是安全边界。
+    if (result.products.length > 0) {
+      const names = productFileNames(result.products);
+      void persistProducts(
+        plan.planId,
+        result.products.map((product, index) => ({
+          name: names[index],
+          blob: product.blob
+        }))
+      )
+        .then((outcome) => {
+          if (outcome.saved > 0) setPersisted(outcome);
+        })
+        .catch(() => undefined);
+    }
+  } catch (value) {
+    setError(toIpcError(value));
+  } finally {
+    setBusy(null);
+  }
+};
+
   const onApply = async () => {
     if (!plan) return;
+    // 浏览器形态：真计划 → 沙箱真执行（不再走 mock，也不再假装"只能看"）。
+    if (!isTauri() && planOrigin === "wasm") {
+      if (webApplySupport(view).level !== "native") return;
+      const client = sharedWasmClient();
+      if (client === null) {
+        setError(
+          toIpcError(
+            new WebPlanUnavailable("WASM runtime is not available in this environment")
+          )
+        );
+        return;
+      }
+      const facts = webSandboxFacts(webStagedFiles(view, pickedByField));
+      if (facts.aboveGuidance) {
+        // §13.10.2：超本地建议档是强提示＋确认后放行，不是阻断。
+        setSandboxAsk(facts);
+        return;
+      }
+      await runSandboxApply(client);
+      return;
+    }
     setBusy("apply");
     setError(null);
     setNotice(null);
     try {
       // C19：冲突策略取自设置（processing.onConflict，默认 skip）；选 overwrite 即视为已确认。
-      let onConflict: "skip" | "sequence" | "overwrite" = "skip";
-      try {
-        const scope = await getConfig("processing");
-        const value = scope.values["onConflict"]?.value;
-        if (value === "skip" || value === "sequence" || value === "overwrite") {
-          onConflict = value;
-        }
-      } catch {
-        // 读不到设置时保持缺省 skip（安全默认：不覆盖）。
-      }
+      const onConflict = await readOnConflict();
       const handle = await applyPlan(plan.planId, {
         onConflict,
         overwriteConfirmed: onConflict === "overwrite"
@@ -963,6 +1372,28 @@ export function FeaturePages({
 
   const onUndo = async () => {
     if (!plan) return;
+    if (!isTauri() && planOrigin === "wasm") {
+      const client = sharedWasmClient();
+      if (client === null || webApply === null) return;
+      setBusy("undo");
+      setError(null);
+      setNotice(null);
+      try {
+        const result = await undoInSandbox(
+          (request) => client.call(request),
+          plan.planId
+        );
+        sandboxUsed.current = false;
+        setWebApply(null);
+        resetPlanSandbox();
+        setNotice(t("feature.notice.webUndone", { count: result.reverted }));
+      } catch (value) {
+        setError(toIpcError(value));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
     setBusy("undo");
     setError(null);
     setNotice(null);
@@ -983,6 +1414,10 @@ export function FeaturePages({
       setBusy(null);
     }
   };
+
+  /** 浏览器执行能力：只有 `native` 档才放开执行按钮（其余仍如实禁用）。 */
+  const canWebApply =
+    planOrigin === "wasm" && webApplySupport(view).level === "native";
 
   const onCancel = async () => {
     if (!task) return;
@@ -1166,7 +1601,62 @@ export function FeaturePages({
 
             <div className="field-grid">
               {(FEATURE_FIELDS[view] ?? []).map((spec) =>
-                spec.kind === "textarea" ? (
+                spec.kind === "files" && !isTauri() ? (
+                  <div className="field wide" key={spec.name}>
+                    <label htmlFor={`${view}-${spec.name}`}>{t(spec.labelKey)}</label>
+                    <input
+                      id={`${view}-${spec.name}`}
+                      className="input"
+                      type="file"
+                      multiple
+                      data-testid="web-file-input"
+                      onChange={(event) => onPickFiles(spec.name, event.target.files)}
+                    />
+                    <div className="hint">
+                      {spec.webHintKey
+                        ? t(spec.webHintKey)
+                        : t("feature.field.files.webHint")}
+                    </div>
+                  </div>
+                ) : spec.kind === "file" && !isTauri() ? (
+                  <div className="field wide" key={spec.name}>
+                    <label htmlFor={`${view}-${spec.name}`}>{t(spec.labelKey)}</label>
+                    <input
+                      id={`${view}-${spec.name}`}
+                      className="input"
+                      type="file"
+                      data-testid="web-single-file-input"
+                      onChange={(event) => onPickFiles(spec.name, event.target.files)}
+                    />
+                    <div className="hint">
+                      {spec.webHintKey
+                        ? t(spec.webHintKey)
+                        : t("feature.field.archive.webHint")}
+                    </div>
+                  </div>
+                ) : (spec.kind === "directory" || spec.webDirectory === true) &&
+                  !isTauri() ? (
+                  <div className="field wide" key={spec.name}>
+                    <label htmlFor={`${view}-${spec.name}`}>{t(spec.labelKey)}</label>
+                    <input
+                      id={`${view}-${spec.name}`}
+                      className="input"
+                      type="file"
+                      multiple
+                      data-testid="web-directory-input"
+                      // `webkitdirectory` 不在 React 的 `InputHTMLAttributes` 里，
+                      // 以属性透传方式设置：TS 不认识它，但浏览器靠它才给
+                      // `webkitRelativePath`（相对路径的唯一来源）。
+                      {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+                      onChange={(event) => onPickFiles(spec.name, event.target.files)}
+                    />
+                    <div className="hint">
+                      {spec.webHintKey
+                        ? t(spec.webHintKey)
+                        : t("feature.field.sourceRoot.webHint")}
+                    </div>
+                  </div>
+                ) : spec.kind === "textarea" || spec.kind === "files" ? (
                   <div className="field wide" key={spec.name}>
                     <label htmlFor={`${view}-${spec.name}`}>{t(spec.labelKey)}</label>
                     <textarea
@@ -1189,7 +1679,11 @@ export function FeaturePages({
                     spec.placeholderKey ? t(spec.placeholderKey) : spec.placeholder ?? "",
                     spec.wide,
                     spec.kind === "password" ? "password" : "text",
-                    spec.hintKey ? t(spec.hintKey) : undefined
+                    !isTauri() && spec.webHintKey
+                      ? t(spec.webHintKey)
+                      : spec.hintKey
+                        ? t(spec.hintKey)
+                        : undefined
                   )
                 )
               )}
@@ -1198,6 +1692,25 @@ export function FeaturePages({
             {stale && (
               <div className="banner banner-warn" role="status" data-testid="plan-stale">
                 <div>{t("feature.stale")}</div>
+              </div>
+            )}
+
+            {!isTauri() && plan && planOrigin === "ipc" && (
+              // 浏览器里的 mock 计划**必须自报家门**：它算过什么也没写盘，但界面
+              // 长得和真计划一样。不标出来，用户会以为「已经按这些条目处理过了」。
+              <div className="banner banner-warn" role="status" data-testid="web-plan-demo">
+                <div>
+                  {t("feature.plan.demo")}{" "}
+                  {webPlanSupport(view).level === "native"
+                    ? t("feature.plan.demoPick")
+                    : t("feature.plan.unsupported", {
+                        reason: t(
+                          WEB_PLAN_GAP_KEYS[
+                            webPlanSupport(view).gap ?? "pending-wiring"
+                          ]
+                        )
+                      })}
+                </div>
               </div>
             )}
 
@@ -1216,6 +1729,33 @@ export function FeaturePages({
                 onConfirm={() => {
                   setDangerOpen(false);
                   void onApply();
+                }}
+              />
+            )}
+
+            {sandboxAsk && (
+              // §13.10.2：超出本地建议档是**强提示 + 确认后放行**，不是阻断。
+              // 确认框只报事实（文件数/总量/单文件最大），不替用户改参数。
+              <DangerConfirm
+                title={t("feature.sandbox.confirmTitle")}
+                body={t("feature.sandbox.confirmBody", {
+                  count: sandboxAsk.fileCount,
+                  total: formatBytes(sandboxAsk.totalBytes)
+                })}
+                items={[
+                  t("feature.sandbox.itemTotal", {
+                    size: formatBytes(sandboxAsk.totalBytes)
+                  }),
+                  t("feature.sandbox.itemMax", {
+                    size: formatBytes(sandboxAsk.maxFileBytes)
+                  })
+                ]}
+                confirmLabel={t("feature.sandbox.confirmAction")}
+                onCancel={() => setSandboxAsk(null)}
+                onConfirm={() => {
+                  setSandboxAsk(null);
+                  const client = sharedWasmClient();
+                  if (client !== null) void runSandboxApply(client);
                 }}
               />
             )}
@@ -1257,7 +1797,7 @@ export function FeaturePages({
                   className="button button-secondary"
                   type="button"
                   data-testid="save-template"
-                  disabled={plan.entries.length === 0 || stale || savingTemplate}
+                  disabled={plan.entries.length === 0 || stale || savingTemplate || planOrigin === "wasm"}
                   onClick={() => setTemplateOpen((open) => !open)}
                 >
                   <Save size={14} /> {t("feature.template.cta")}
@@ -1380,6 +1920,22 @@ export function FeaturePages({
                 <p className="card-sub">{t("feature.execute.sub")}</p>
               </div>
             </div>
+            {planOrigin === "wasm" && !canWebApply && (
+              // 真计划 + 假执行比假计划更危险：该功能的执行臂尚未在 Web 装配
+              //（改写器/目录遍历等端口缺失），这里如实说明并禁用执行链。
+              <div
+                className="banner banner-warn"
+                role="status"
+                data-testid="web-plan-readonly"
+              >
+                {t("feature.execute.webOnly")}
+              </div>
+            )}
+            {planOrigin === "wasm" && canWebApply && (
+              <div className="banner" role="status" data-testid="web-sandbox-note">
+                {t("feature.execute.webSandbox")}
+              </div>
+            )}
             <div className="button-row">
               <button
                 className="button button-primary"
@@ -1392,7 +1948,13 @@ export function FeaturePages({
                   void onApply();
                 }}
                 disabled={
-                  !plan || busy !== null || active || plan.entries.length === 0 || stale
+                  !plan ||
+                  busy !== null ||
+                  active ||
+                  plan.entries.length === 0 ||
+                  stale ||
+                  // 浏览器执行：只有已接线且尚未产生产物的计划可执行（重跑先撤销/换输入）
+                  (planOrigin === "wasm" && (!canWebApply || webApply !== null))
                 }
               >
                 {busy === "apply" ? <Loader2 size={16} className="spin" /> : null}
@@ -1429,7 +1991,7 @@ export function FeaturePages({
                 className="button button-secondary"
                 type="button"
                 onClick={onUndoDryRun}
-                disabled={!plan || stale}
+                disabled={!plan || stale || planOrigin === "wasm"}
               >
                 {t("feature.execute.dryRun")}
               </button>
@@ -1437,12 +1999,79 @@ export function FeaturePages({
                 className="button button-secondary"
                 type="button"
                 onClick={onUndo}
-                disabled={!plan || busy !== null || active || stale}
+                disabled={
+                  !plan ||
+                  busy !== null ||
+                  active ||
+                  stale ||
+                  (planOrigin === "wasm" && webApply === null)
+                }
               >
                 {busy === "undo" ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
                 {t("common.undo")}
               </button>
             </div>
+            {webApply && (
+              <div className="task-panel" data-testid="web-sandbox-result">
+                <div className="hint">
+                  {t("feature.sandbox.summary", {
+                    ...summarizeOutcome(webApply.outcome),
+                    state: webApply.state
+                  })}
+                </div>
+                {webApply.products.length === 0 ? (
+                  <p className="hint">{t("feature.sandbox.noProducts")}</p>
+                ) : (
+                  <>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      data-testid="web-sandbox-download-all"
+                      onClick={() => saveProducts(webApply.products)}
+                    >
+                      {t("feature.sandbox.downloadAll", {
+                        count: webApply.products.length
+                      })}
+                    </button>
+                    <ul className="dialog-list" data-testid="web-sandbox-products">
+                      {webApply.products.map((product) => (
+                        <li className="dialog-list" key={product.path}>
+                          <span>{product.path}</span>{" "}
+                          <span className="hint">{formatBytes(product.size)}</span>{" "}
+                          <button
+                            className="button button-secondary"
+                            type="button"
+                            onClick={() => saveProducts([product])}
+                          >
+                            {t("feature.sandbox.download")}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {persisted !== null && (
+                  <p className="hint" data-testid="web-sandbox-persisted">
+                    {t("feature.sandbox.persisted", { count: persisted.saved })}{" "}
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      onClick={async () => {
+                        const cleared = await clearPersisted();
+                        if (cleared) {
+                          setPersisted(null);
+                          setNotice(t("feature.sandbox.persistedCleared"));
+                        }
+                      }}
+                    >
+                      {t("feature.sandbox.clearPersisted")}
+                    </button>
+                  </p>
+                )}
+                {/* 产物只存在于本页沙箱；撤销能收回沙箱，收不回已下载的副本。 */}
+                <p className="hint">{t("feature.sandbox.scope")}</p>
+              </div>
+            )}
             {task && (
               <div className="task-panel">
                 <div className="task-head">

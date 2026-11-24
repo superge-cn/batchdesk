@@ -225,27 +225,8 @@ fn key_values(
     records: &[Vec<String>],
     has_header: bool,
 ) -> Vec<String> {
-    if records.is_empty() {
-        return Vec::new();
-    }
-    let normalized: Vec<String> = columns
-        .iter()
-        .map(|column| column.trim_start_matches('\u{feff}').trim().to_string())
-        .collect();
-    let resolved = keys.iter().find_map(|pick| match pick {
-        ColumnPick::Name(name) => normalized
-            .iter()
-            .position(|column| column == name)
-            .map(|position| position + 1),
-        ColumnPick::Index(index) => Some(*index as usize),
-    });
-    match resolved {
-        Some(column) => data_rows(records, has_header)
-            .iter()
-            .filter_map(|row| row.get(column.saturating_sub(1)).cloned())
-            .collect(),
-        None => Vec::new(),
-    }
+    // ADR-0102 A2-6：下沉 kernel（与 Web 形态共用同一算法）。
+    kernel::csv_sort::key_values(keys, columns, records, has_header)
 }
 
 pub fn plan_op_shell(

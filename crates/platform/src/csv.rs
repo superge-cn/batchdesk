@@ -119,24 +119,17 @@ pub fn csv_split_layout(path: &Path, options: CsvScanOptions) -> io::Result<CsvS
         });
     }
 
-    let mut accumulator = accumulator(options)?;
-    let mut scanner = CsvRecordScanner::new(delimiter.as_byte());
-    let summary = stream_segments(path, None, |segment| {
-        scanner.feed(segment.bytes, |record| accumulator.push_record(record));
-        StreamFlow::Continue
-    })?;
-    let tail = scanner.finish();
-    if let Some(record) = tail.tail {
-        accumulator.push_record(record);
-    }
-
-    Ok(accumulator.finish(
-        summary.bytes_read,
+    // ADR-0102 A2-4：整段字节走 kernel 的分片入口（与 Web 同口径）。
+    let data = std::fs::read(crate::fs::fs_path(path))?;
+    let accumulator = accumulator(options)?;
+    Ok(kernel::csv::csv_split_from_bytes(
+        &data,
+        sampled.file_size,
         delimiter,
         delimiter_detected,
-        tail.unclosed_quote,
         source_encoding,
         None,
+        accumulator,
     ))
 }
 
@@ -146,6 +139,101 @@ fn accumulator(options: CsvScanOptions) -> io::Result<CsvSplitAccumulator> {
         CsvSplitBasis::Rows(rows) => CsvSplitAccumulator::new_rows(rows, options.keep_header),
     }
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))
+}
+
+#[cfg(test)]
+mod a2_4_parity {
+    use super::*;
+    use kernel::csv::{CsvSplitAccumulator, CsvSplitBasis, CsvSplitLayout, Delimiter};
+
+    /// ADR-0102 A2-4：**桌面流式路径**与 **kernel 整段入口**必须给出同一 CSV 分片布局。
+    #[test]
+    fn csv_split_layouts_agree_between_stream_and_bytes() {
+        let samples: &[&[u8]] = &[
+            b"h1,h2
+a,b
+c,d
+e,f
+",
+            b"h1,h2
+a,b,c
+d,e
+", // 脏行
+            b"only,header
+", // 只有表头
+            b"",                // 空文件
+            b"no-newline-tail", // 末行无换行
+        ];
+        for data in samples {
+            let size = data.len() as u64;
+            for (basis, keep_header) in [
+                (CsvSplitBasis::Bytes(4), true),
+                (CsvSplitBasis::Bytes(4), false),
+                (CsvSplitBasis::Rows(2), true),
+                (CsvSplitBasis::Rows(2), false),
+            ] {
+                let path = std::env::temp_dir().join(format!(
+                    "batchdesk-a2-4-f05-{}-{}.csv",
+                    std::process::id(),
+                    data.len()
+                ));
+                std::fs::write(&path, data).unwrap();
+                let options = CsvScanOptions {
+                    delimiter: None,
+                    keep_header,
+                    basis,
+                    sample_window_bytes: 4096,
+                };
+                let stream = csv_split_layout(&path, options).unwrap();
+                let accumulator = match basis {
+                    CsvSplitBasis::Bytes(bytes) => {
+                        CsvSplitAccumulator::new_bytes(bytes, keep_header)
+                    }
+                    CsvSplitBasis::Rows(rows) => CsvSplitAccumulator::new_rows(rows, keep_header),
+                }
+                .unwrap();
+                let bytes = kernel::csv::csv_split_from_bytes(
+                    data,
+                    size,
+                    Delimiter::Comma,
+                    true,
+                    Some(kernel::encoding::SourceEncoding::Utf8),
+                    None,
+                    accumulator,
+                );
+                assert_eq!(
+                    normalize(&stream),
+                    normalize(&bytes),
+                    "CSV 分片不一致：basis={basis:?} keep_header={keep_header} data={data:?}"
+                );
+            }
+        }
+    }
+
+    /// 一个分片的比较键（索引、起止、行数、脏行数）。
+    type ShardBounds = (u32, u64, u64, u64, u64);
+
+    /// 只比较分片边界与计数（delimiter/编码等由调用方给定，不在本对拍范围）。
+    fn normalize(layout: &CsvSplitLayout) -> (u64, Vec<ShardBounds>, u64, u64) {
+        (
+            layout.records,
+            layout
+                .shards
+                .iter()
+                .map(|shard| {
+                    (
+                        shard.index,
+                        shard.start,
+                        shard.end,
+                        shard.rows,
+                        shard.dirty_rows,
+                    )
+                })
+                .collect(),
+            layout.dirty_rows,
+            layout.file_size,
+        )
+    }
 }
 
 #[cfg(test)]

@@ -84,6 +84,7 @@ pub struct PlanF12Item {
 /// **零强制力边界（不变量 11、设计 05 §2）**：这里传的是**平台事实**（名字合不合法），
 /// 不是授权判定——规则值来自调用方声明，内核只做合法性比较，不判「能不能用」。
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebPlanF12Input {
     pub plan_id: String,
     pub items: Vec<WebPlanF12Item>,
@@ -146,6 +147,8 @@ impl TryFrom<WebPlanF12Input> for PlanF12Input {
     }
 }
 
+/// 可克隆：bench 用 `iter_batched` 每轮重建输入（`benches/core_hot_paths.rs`）。
+#[derive(Clone)]
 pub struct PlanF12Input {
     pub plan_id: String,
     pub items: Vec<PlanF12Item>,

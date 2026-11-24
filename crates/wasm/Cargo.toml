@@ -10,9 +10,21 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 batchdesk-kernel = { path = "../kernel" }
+# ULID 熵源（ADR-0102）：与 `platform::ids::new_ulid` 同口径；该 crate 已在工作区依赖树中。
+blake3 = "1.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasm-bindgen = "0.2"
+# C10 归档执行臂（方案 §5.11）：与 platform 同版本同特性——GBK 名回退、ZIP64、
+# 加密条目（WinZip AES / ZipCrypto）的语义必须与桌面逐条一致，否则同一份计划在
+# 两端会给出不同的成败。deflate 后端显式选纯 Rust 的 miniz_oxide（wasm 无 C 工具链）。
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2", "aes-crypto"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# wasm32 的时间源（ADR-0116）：`std::time::SystemTime::now()` 在
+# wasm32-unknown-unknown 上会 panic，必须走 JS 的 `Date.now()`。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 
 # Web 形态零强制力（设计 05 §2）：编译期裁掉基于 LicenseService 的阻断分支。
 [features]

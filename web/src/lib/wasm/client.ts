@@ -9,21 +9,38 @@
  *
  * 语义：
  * - 产物/Worker 不可用时，`call` 返回 `{ ok: false, reason: "wasm-unavailable" }`；
- * - 内核错误以 `{ ok: false, reason: "kernel-error", message }` 返回，
+ * - 内核错误以 `{ ok: false, reason: "kernel-error", code }` 返回，
  *   调用方可用 `KernelError` 解析 E 码位——**是否阻断由调用方按 UI 语义决定**，
  *   本层**不做判定**（设计 05 §0 第 2 条）。
  */
 
+import type { ByteOp, PlanOp } from "./contract";
 import type { WasmRequest, WasmResponse } from "./worker";
+
+/** 沙箱产物：Worker 里已把字节包成 Blob，主线程只需建下载链接（不再复制一次）。 */
+export interface WasmProduct {
+  path: string;
+  size: number;
+  blob: Blob;
+}
 
 export type WasmCall =
   | { op: "browser_capabilities" }
-  | { op: "plan_c01"; payload: string }
-  | { op: "plan_f12"; payload: string };
+  | { op: PlanOp; payload: string }
+  /** 字节型入口（见 `contract.ts` 的 `BYTE_OPS`）。 */
+  | { op: ByteOp; payload: string; bytes: Uint8Array }
+  /** 沙箱登记输入：清单走 `payload`，字节走结构化克隆。 */
+  | { op: "stage_inputs"; payload: string; bytes: Uint8Array }
+  /** 只登记目录／目录事实（F10 清单）：没有字节，只有 JSON。 */
+  | { op: "stage_dirs"; payload: string }
+  | { op: "stage_listing"; payload: string }
+  | { op: "apply_plan"; payload: string }
+  | { op: "undo_plan"; payload: string }
+  | { op: "reset_sandbox" };
 
 export type WasmCallResult =
-  | { ok: true; result: string }
-  | { ok: false; reason: "wasm-unavailable" | "kernel-error"; message?: string };
+  | { ok: true; result: string; products?: WasmProduct[] }
+  | { ok: false; reason: "wasm-unavailable" | "kernel-error"; code?: string };
 
 export interface WasmClient {
   call(request: WasmCall): Promise<WasmCallResult>;
@@ -50,14 +67,14 @@ export function createWasmClient(): WasmClient | null {
     if (resolve === undefined) return;
     pending.delete(response.id);
     if (response.ok) {
-      resolve({ ok: true, result: response.result });
+      resolve({ ok: true, result: response.result, products: response.products });
     } else if (response.reason === "wasm-unavailable") {
       resolve({ ok: false, reason: "wasm-unavailable" });
     } else {
       resolve({
         ok: false,
         reason: "kernel-error",
-        message: response.message ?? ""
+        code: response.code ?? "E0000"
       });
     }
   };
@@ -73,10 +90,22 @@ export function createWasmClient(): WasmClient | null {
   return {
     call(request: WasmCall): Promise<WasmCallResult> {
       const id = nextId++;
-      const message: WasmRequest =
-        "payload" in request
-          ? { id, op: request.op, payload: request.payload }
-          : { id, op: request.op };
+      // 三种请求形态：无参 / JSON 单参 / JSON 参数 + 原始字节（结构化克隆直接过）。
+      // 逐个 op 收窄而不是靠 `"payload" in request`：执行面的 op 与 `PlanOp` 联合后，
+      // 属性判别收不到单一成员，TS 会把 `{op: A | B}` 判成不可赋值。
+      let message: WasmRequest;
+      if (request.op === "browser_capabilities" || request.op === "reset_sandbox") {
+        message = { id, op: request.op };
+      } else if ("bytes" in request) {
+        message = {
+          id,
+          op: request.op,
+          payload: request.payload,
+          bytes: request.bytes
+        };
+      } else {
+        message = { id, op: request.op, payload: request.payload } as WasmRequest;
+      }
       return new Promise((resolve) => {
         pending.set(id, resolve);
         worker.postMessage(message);

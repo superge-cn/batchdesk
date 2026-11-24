@@ -298,19 +298,9 @@ pub fn split_layout_by_parts(path: &Path, parts: u64) -> io::Result<kernel::spli
             "parts must be greater than zero",
         ));
     }
-    let mut line_bytes = 0u64;
-    let mut total_lines = 0u64;
-    stream_segments(path, None, |segment| {
-        line_bytes += segment.bytes.len() as u64;
-        if segment.ends_line {
-            total_lines += 1;
-            line_bytes = 0;
-        }
-        StreamFlow::Continue
-    })?;
-    if line_bytes > 0 {
-        total_lines += 1;
-    }
+    // ADR-0102 A2-4：行数预扫描走 kernel 的字节级入口（与 Web 同口径）。
+    let data = std::fs::read(crate::fs::fs_path(path))?;
+    let total_lines = kernel::split::count_lines(&data);
     let quotas = kernel::split::part_line_quotas(total_lines, parts);
     let accumulator = kernel::split::SplitAccumulator::new_quotas(quotas)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
@@ -319,28 +309,89 @@ pub fn split_layout_by_parts(path: &Path, parts: u64) -> io::Result<kernel::spli
 
 fn scan_layout(
     path: &Path,
-    mut accumulator: kernel::split::SplitAccumulator,
+    accumulator: kernel::split::SplitAccumulator,
 ) -> io::Result<kernel::split::SplitLayout> {
-    let file_size = File::open(fs_path(path))?.metadata()?.len();
-    let mut line_bytes = 0u64;
-    stream_segments(path, None, |segment| {
-        line_bytes += segment.bytes.len() as u64;
-        if segment.ends_line {
-            accumulator.push_line(line_bytes, true);
-            line_bytes = 0;
-        }
-        StreamFlow::Continue
-    })?;
-    if line_bytes > 0 {
-        accumulator.push_line(line_bytes, false);
-    }
-    Ok(accumulator.finish(file_size))
+    // ADR-0102 A2-4：行切分与累加统一走 kernel 字节级入口（原 platform 流式实现）。
+    let fs_path = crate::fs::fs_path(path);
+    let data = std::fs::read(&fs_path)?;
+    let file_size = File::open(&fs_path)?.metadata()?.len();
+    Ok(kernel::split::layout_from_bytes(
+        &data,
+        file_size,
+        accumulator,
+    ))
 }
 
 fn overlong(threshold: Option<u64>, line_bytes: u64) -> u64 {
     match threshold {
         Some(limit) if line_bytes > limit => 1,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod a2_4_parity {
+    use super::*;
+    use kernel::split::SplitAccumulator;
+
+    /// ADR-0102 A2-4：**桌面流式路径**与 **kernel 整段入口**必须给出同一布局。
+    /// 重点覆盖「末行无换行」（尾片保留）与多片切分边界。
+    #[test]
+    fn split_layouts_agree_between_stream_and_bytes() {
+        let samples: &[&[u8]] = &[
+            b"a
+bb
+ccc
+dddd
+",
+            b"a
+bb
+ccc", // 末行无换行
+            b"",                       // 空文件
+            b"single-line-no-newline", // 单行无换行
+            b"x
+",                      // 单行有换行
+        ];
+        for data in samples {
+            let size = data.len() as u64;
+            // 按字节：目标 3 字节
+            let stream = split_layout(&path_of(data), 3).unwrap();
+            let bytes =
+                kernel::split::layout_from_bytes(data, size, SplitAccumulator::new(3).unwrap());
+            assert_eq!(stream.spans, bytes.spans, "按字节布局不一致：{data:?}");
+            // 按行：每 2 行一片
+            let stream = split_layout_by_lines(&path_of(data), 2).unwrap();
+            let bytes = kernel::split::layout_from_bytes(
+                data,
+                size,
+                SplitAccumulator::new_lines(2).unwrap(),
+            );
+            assert_eq!(stream.spans, bytes.spans, "按行布局不一致：{data:?}");
+            // 按份数：4 片
+            let stream = split_layout_by_parts(&path_of(data), 4).unwrap();
+            let total = kernel::split::count_lines(data);
+            let quotas = kernel::split::part_line_quotas(total, 4);
+            let bytes = kernel::split::layout_from_bytes(
+                data,
+                size,
+                SplitAccumulator::new_quotas(quotas).unwrap(),
+            );
+            assert_eq!(stream.spans, bytes.spans, "按份数布局不一致：{data:?}");
+        }
+    }
+
+    /// 测试夹具：把字节写成临时文件，返回路径（本模块测试本就依赖真实 FS）。
+    fn path_of(data: &[u8]) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        path.push(format!(
+            "batchdesk-a2-4-{}-{}.txt",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&path, data).unwrap();
+        path
     }
 }
 

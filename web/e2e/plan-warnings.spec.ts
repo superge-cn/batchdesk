@@ -28,7 +28,9 @@ test.describe("功能页的集中报告", () => {
       .getByRole("navigation", { name: "功能导航" })
       .getByRole("button", { name: /^批量改名\s*F12$/ })
       .click();
-    await page.getByLabel(/改名目录/).fill("/mock/dir");
+  // 浏览器形态下「改名目录」是**目录选择器**（A3-11 起），不是文本输入；
+  // 选了文件会切到 WASM 真计划路径。本组用例验证的是 mock 计划的面板语义
+  // （ADR-0046 边界），所以不选文件——留在 mock IPC 路径上。
     await page.getByLabel(/前缀/).fill("2026-");
     await page.getByLabel(/替换为/).fill("x");
     await page.getByLabel(/作用范围/).fill("full");

@@ -572,6 +572,26 @@ pub fn plan_c02(input: PlanC02Input) -> Result<PlanDocument, KernelError> {
     })
 }
 
+/// **字节级**换行统计入口（ADR-0102 A2-2）。
+///
+/// Web 形态拿不到真实 FS（`platform` 的探测函数只接受 `&Path`），但浏览器能把
+/// 文件读成整段字节。这里把「整段字节 → 换行统计」封成一个纯函数，让 WASM 侧
+/// 与桌面 platform 走**同一份算法**——否则两形态会对同一文件算出不同的换行结构
+/// （方案 §13.5 排除的双实现）。
+///
+/// 桌面侧仍用 `LineEndingProcessor` 流式跑（内存 O(块)）；本入口是**整段**语义
+/// （内存 O(文件)），仅供 Web 的中小文件使用。桌面不调用它。
+pub fn counts_from_bytes(
+    data: &[u8],
+    structure: LineEndingStructure,
+) -> Result<LineEndingCounts, KernelError> {
+    let mut processor = LineEndingProcessor::new(structure, None);
+    let mut sink = std::io::sink();
+    processor.feed(data, &mut sink)?;
+    processor.finish(&mut sink)?;
+    Ok(processor.counts())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

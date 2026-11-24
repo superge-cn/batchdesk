@@ -348,6 +348,214 @@ pub fn plan_f09(input: PlanF09Input) -> Result<PlanDocument, KernelError> {
     })
 }
 
+/// **字节级**区间扫描（ADR-0102 A2-3 收尾）。
+///
+/// 桌面壳在 `platform::csv_range` 里流式喂记录并累计区间；Web 形态拿不到 FS，
+/// 只能读整段字节。这里把同一状态机放在 kernel，两处共用——否则「提前终止」的
+/// 语义（扫到 endRow 就停）容易被写成两套，产生不同的 `selected_rows`。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RangeSpan {
+    pub start: u64,
+    pub end: u64,
+}
+
+impl RangeSpan {
+    pub fn len(&self) -> u64 {
+        self.end.saturating_sub(self.start)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// F09 的区间事实（供计划层与 WASM 共用）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RangeFacts {
+    pub header: Option<RangeSpan>,
+    pub header_columns: u64,
+    pub multi_line_header: bool,
+    pub data_rows: u64,
+    pub selected: Option<(u64, u64)>,
+    pub selected_rows: u64,
+    pub dirty_rows: u64,
+    pub max_selected_columns: u64,
+    /// 是否扫到 EOF；false 表示在 endRow 处提前终止。
+    pub total_known: bool,
+}
+
+/// 由整段 UTF-8 字节算出 F09 需要的全部区间事实。
+///
+/// `delimiter` 必须已解析（嗅探或显式）；本函数不判编码。
+pub fn range_from_bytes(
+    data: &[u8],
+    has_header: bool,
+    start_row: u64,
+    end_row: u64,
+    delimiter: crate::csv::Delimiter,
+) -> Result<RangeFacts, KernelError> {
+    if start_row == 0 || end_row < start_row {
+        return Err(KernelError::invalid_params(
+            "startRow and endRow must be 1-based with endRow >= startRow",
+        ));
+    }
+    let mut scanner = crate::csv::CsvRecordScanner::new(delimiter.as_byte());
+    let mut consumed = 0u64;
+    let mut record_index = 0u64;
+    let mut header: Option<RangeSpan> = None;
+    let mut header_columns = 0u64;
+    let mut multi_line_header = false;
+    let mut data_rows = 0u64;
+    let mut selected_start: Option<u64> = None;
+    let mut selected_end: Option<u64> = None;
+    let mut selected_rows = 0u64;
+    let mut dirty_rows = 0u64;
+    let mut first_selected_columns: Option<u64> = None;
+    let mut max_selected_columns = 0u64;
+
+    // 与 platform 的 `stream_segments + feed` 同口径：扫描器逐条回调，本函数累计区间。
+    // 「提前终止」由 done 标记表达——扫到 endRow 后不再统计后续记录。
+    let mut done = false;
+    scanner.feed(data, |record| {
+        if done {
+            return;
+        }
+        let start = consumed;
+        let end = start.saturating_add(record.len);
+        consumed = end;
+        push_record(
+            record,
+            has_header,
+            start_row,
+            end_row,
+            &mut record_index,
+            &mut header,
+            &mut header_columns,
+            &mut multi_line_header,
+            &mut data_rows,
+            &mut selected_start,
+            &mut selected_end,
+            &mut selected_rows,
+            &mut dirty_rows,
+            &mut first_selected_columns,
+            &mut max_selected_columns,
+            &mut done,
+            start,
+            end,
+        );
+    });
+    // `finish` 冲刷尾部未结束的记录；仅在未提前终止时才需要计入。
+    if !done {
+        let tail = scanner.finish();
+        if let Some(tail_record) = tail.tail {
+            // 尾部记录接着已消费位置继续累计（区间跨记录连续）。
+            let start = consumed;
+            let end = start.saturating_add(tail_record.len);
+            done = false;
+            push_record(
+                tail_record,
+                has_header,
+                start_row,
+                end_row,
+                &mut record_index,
+                &mut header,
+                &mut header_columns,
+                &mut multi_line_header,
+                &mut data_rows,
+                &mut selected_start,
+                &mut selected_end,
+                &mut selected_rows,
+                &mut dirty_rows,
+                &mut first_selected_columns,
+                &mut max_selected_columns,
+                &mut done,
+                start,
+                end,
+            );
+        }
+    }
+
+    let selected = match (selected_rows > 0, selected_start, selected_end) {
+        (true, Some(start), Some(end)) => Some((start, end)),
+        _ => None,
+    };
+    Ok(RangeFacts {
+        header,
+        header_columns,
+        multi_line_header,
+        data_rows,
+        selected,
+        selected_rows,
+        dirty_rows,
+        max_selected_columns,
+        total_known: !done,
+    })
+}
+
+/// 单条记录的区间累计（从原 platform `RangeState::push` 逐行搬运）。
+#[allow(clippy::too_many_arguments)]
+fn push_record(
+    record: crate::csv::CsvRecord,
+    has_header: bool,
+    start_row: u64,
+    end_row: u64,
+    record_index: &mut u64,
+    header: &mut Option<RangeSpan>,
+    header_columns: &mut u64,
+    multi_line_header: &mut bool,
+    data_rows: &mut u64,
+    selected_start: &mut Option<u64>,
+    selected_end: &mut Option<u64>,
+    selected_rows: &mut u64,
+    dirty_rows: &mut u64,
+    first_selected_columns: &mut Option<u64>,
+    max_selected_columns: &mut u64,
+    done: &mut bool,
+    start: u64,
+    end: u64,
+) {
+    if *done {
+        return;
+    }
+    if has_header && *record_index == 0 {
+        *header = Some(RangeSpan { start: 0, end });
+        *header_columns = record.columns;
+        *multi_line_header = record.multiline;
+        *record_index = 1;
+        return;
+    }
+    *record_index += 1;
+    *data_rows += 1;
+    if *data_rows >= start_row && *data_rows <= end_row {
+        if selected_start.is_none() {
+            *selected_start = Some(start);
+        }
+        *selected_end = Some(end);
+        *selected_rows += 1;
+        if has_header {
+            if record.columns != *header_columns {
+                *dirty_rows += 1;
+            }
+        } else {
+            match *first_selected_columns {
+                None => {
+                    *first_selected_columns = Some(record.columns);
+                    *max_selected_columns = record.columns;
+                }
+                Some(columns) => {
+                    *max_selected_columns = (*max_selected_columns).max(record.columns);
+                    if columns != record.columns {
+                        *dirty_rows += 1;
+                    }
+                }
+            }
+        }
+        if *data_rows == end_row {
+            *done = true;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -265,15 +265,341 @@ export interface IpcMeta {
   kernelVersion: string;
 }
 
-export interface PlanOperationInput {
-  kind: "c09";
-  params: {
-    keep?: KeepPolicy;
-    quickWindowBytes?: number;
-    protectedDirs?: string[];
-  };
-  sourcePaths: string[];
+/** C09 计划参数（壳层 `C09Params`，camelCase）。 */
+export interface C09PlanParams {
+  keep?: KeepPolicy;
+  quickWindowBytes?: number;
+  protectedDirs?: string[];
+  includeZeroByte?: boolean;
 }
+
+/**
+ * 各功能的计划参数（与 `src-tauri/src/plan_*.rs` 的 serde 结构体逐字段对齐，
+ * camelCase＝Rust 侧的 `rename_all = "camelCase"`）。
+ *
+ * **为什么每个功能一份而不是一份宽松的 `Record<string, unknown>`**：
+ * `kind` 是判别键，拼错或漏传必填字段在编译期就会红——此前 23 个功能页共用
+ * C09 形状，只能用 `as never` 绕过校验（见 ADR-0040…0044 的接入代价）。
+ * 新增功能时同步这里与对应 Rust 结构体即可。
+ */
+
+/** F01/F02/F03（`SplitParams`）。三者共用同一结构体，必填由功能各自决定。 */
+export interface SplitPlanParams {
+  file: string;
+  outputDir: string;
+  targetBytes?: number;
+  linesPerPart?: number;
+  parts?: number;
+  planId?: string;
+}
+
+/** F04 合并（`MergeParams`）。 */
+export interface MergePlanParams {
+  files: string[];
+  output: string;
+  target: string;
+  source?: string;
+  invalid?: string;
+  planId?: string;
+}
+
+/** C01 转码（`TranscodeParams`）。 */
+export interface TranscodePlanParams {
+  files: string[];
+  target: string;
+  sampleWindow: number;
+  source?: string;
+  invalid?: string;
+  prior?: string;
+  sampleBlocks?: number;
+  planId?: string;
+}
+
+/** C02 换行转换（`LineEndingsParams`）。 */
+export interface LineEndingsPlanParams {
+  files: string[];
+  target: string;
+  sampleBytes: number;
+  structure?: string;
+  source?: string;
+  prior?: string;
+  planId?: string;
+}
+
+/** C03 查找替换（`ReplaceParams`）。 */
+export interface ReplacePlanParams {
+  files: string[];
+  mode: string;
+  find: string;
+  replacement: string;
+  sampleBytes: number;
+  csvMode?: string;
+  delimiter?: string;
+  source?: string;
+  prior?: string;
+  planId?: string;
+}
+
+/** C07 清单驱动移动（`ManifestParams`）。 */
+export interface ManifestPlanParams {
+  manifest: string;
+  sourceRoot: string;
+  targetRoot: string;
+  operation?: string;
+  missing?: string;
+  delimiter?: string;
+  planId?: string;
+}
+
+/** C08 规则归档（`ArchivePlanParams`）。 */
+export interface RuleArchivePlanParams {
+  sourceRoot: string;
+  targetRoot: string;
+  rules: string[];
+  recursive?: boolean;
+  unclassifiedDir?: string;
+  planId?: string;
+}
+
+/** C10 ZIP 解压/压缩（`ZipPlanParams`；密码只进请求不进计划，ADR-0074）。 */
+export interface ZipPlanParams {
+  mode?: string;
+  archive?: string;
+  outputDir?: string;
+  maxTotalBytes?: number;
+  maxRatio?: number;
+  output?: string;
+  sources?: string[];
+  compression?: string;
+  password?: string;
+  planId?: string;
+}
+
+/** F05 CSV 分割（`F05ShellParams`）。 */
+export interface CsvSplitPlanParams {
+  file: string;
+  outputDir: string;
+  targetBytes?: number;
+  rows?: number;
+  delimiter?: string;
+  keepHeader?: boolean;
+  planId?: string;
+}
+
+/** F11 按清单建档（`F11ShellParams`）。 */
+export interface CreateDirsPlanParams {
+  list: string;
+  root: string;
+  planId?: string;
+}
+
+/** F12 批量重命名（`F12ShellParams`）。 */
+export interface RenamePlanParams {
+  dir: string;
+  prefix?: string;
+  suffix?: string;
+  find?: string;
+  replace?: string;
+  scope?: string;
+  planId?: string;
+}
+
+/**
+ * F06–F10 共用 `CsvPlanParams`，但**各自只用其中一部分键**——分开声明避免
+ * 「F06 传了 f08 的 window」这类交叉错误。
+ */
+export type CsvFamilyPlanParams =
+  | {
+      kind: "f06";
+      params: {
+        files: string[];
+        target?: string;
+        output: string;
+        sourceColumn?: boolean;
+        sourceColumnName?: string;
+        strict?: boolean;
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "f07";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        columns?: string[];
+        columnIndexes?: number[];
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "f08";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        window?: "first" | "last";
+        count?: number;
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "f09";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        startRow?: number;
+        endRow?: number;
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "f10";
+      params: {
+        roots: string[];
+        output?: string;
+        outputDir?: string;
+        planId?: string;
+      };
+    };
+
+/** C11–C14 共用 `OpPlanParams`，同样按功能收窄。 */
+export type OpFamilyPlanParams =
+  | {
+      kind: "c11";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        keyColumns?: string[];
+        keyColumnIndexes?: number[];
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "c12";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        column?: string;
+        columnIndex?: number;
+        op?: string;
+        value?: string;
+        filterMode?: "keep" | "drop";
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "c13";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        sortColumns?: string[];
+        sortColumnIndexes?: number[];
+        order?: "asc" | "desc";
+        externalChunkRows?: number;
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "c14";
+      params: {
+        files: string[];
+        target?: string;
+        output?: string;
+        outputDir?: string;
+        splitColumn?: string;
+        splitColumnIndex?: number;
+        splitSeparator?: string;
+        splitRegex?: string;
+        mergeColumns?: string[];
+        mergeColumnIndexes?: number[];
+        mergeJoinWith?: string;
+        mergeName?: string;
+        delimiter?: string;
+        source?: string;
+        hasHeader?: boolean;
+        sampleWindow?: number;
+        sampleBlocks?: number;
+        planId?: string;
+      };
+    }
+  | {
+      kind: "c04";
+      params: {
+        dir: string;
+        find?: string;
+        replace?: string;
+        mode?: string;
+        scope?: string;
+        planId?: string;
+      };
+    };
+
+/**
+ * `planOperation` 入参（设计 01 §4.4.2／设计 12 §3.1 的 kind 路由）。
+ *
+ * 判别键是 `kind`；缺省分支（`never`）让「加了功能没加分支」在调用点直接编译不过。
+ */
+export type PlanOperationInput =
+  | { kind: "c09"; params: C09PlanParams; sourcePaths: string[] }
+  | { kind: "f01" | "f02" | "f03"; params: SplitPlanParams; sourcePaths: string[] }
+  | { kind: "f04"; params: MergePlanParams; sourcePaths: string[] }
+  | { kind: "c01"; params: TranscodePlanParams; sourcePaths: string[] }
+  | { kind: "c02"; params: LineEndingsPlanParams; sourcePaths: string[] }
+  | { kind: "c03"; params: ReplacePlanParams; sourcePaths: string[] }
+  | { kind: "c07"; params: ManifestPlanParams; sourcePaths: string[] }
+  | { kind: "c08"; params: RuleArchivePlanParams; sourcePaths: string[] }
+  | { kind: "c10"; params: ZipPlanParams; sourcePaths: string[] }
+  | { kind: "f05"; params: CsvSplitPlanParams; sourcePaths: string[] }
+  | { kind: "f11"; params: CreateDirsPlanParams; sourcePaths: string[] }
+  | { kind: "f12"; params: RenamePlanParams; sourcePaths: string[] }
+  | (CsvFamilyPlanParams & { sourcePaths: string[] })
+  | (OpFamilyPlanParams & { sourcePaths: string[] });
 
 export type PreviewStatus = "normal" | "conflict" | "invalid" | "too-long" | "protected";
 

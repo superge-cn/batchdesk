@@ -471,6 +471,58 @@ fn joiner_of(spec: &MergeSpec) -> &str {
     &spec.joiner
 }
 
+/// **字节级** C14 列数评估（ADR-0102 A2-3 收尾）。
+///
+/// 拆分模式下，计划层需要「采样记录按切分规则评估出的最大段数」来决定输出列数。
+/// 这段计算原先在**壳层**（`src-tauri/src/plan_ops.rs`）；Web 形态没有壳层，
+/// 故下沉到 kernel——`split_value`/`resolve_column` 本就在这里。
+pub fn parts_from_bytes(
+    has_header: bool,
+    records: &[Vec<String>],
+    source: &ColumnPick,
+    by: &SplitBy,
+) -> Result<u64, KernelError> {
+    // 无表头时首行也是数据行；records 由调用方给出（含表头与否与 has_header 一致）。
+    let columns = if has_header {
+        records.first().cloned().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let resolved = resolve_column(
+        source,
+        has_header,
+        &columns,
+        data_columns(records, has_header),
+    )?;
+    let rows: &[Vec<String>] = if has_header {
+        records.get(1..).unwrap_or(&[])
+    } else {
+        records
+    };
+    Ok(rows
+        .iter()
+        .map(|row| {
+            split_value(
+                row.get(resolved.index as usize - 1)
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                by,
+            )
+            .len() as u64
+        })
+        .max()
+        .unwrap_or(1))
+}
+
+fn data_columns(records: &[Vec<String>], has_header: bool) -> u64 {
+    let rows = if has_header {
+        records.get(1..).unwrap_or(&[])
+    } else {
+        records
+    };
+    rows.iter().map(|row| row.len() as u64).max().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

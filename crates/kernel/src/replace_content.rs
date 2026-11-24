@@ -1230,13 +1230,10 @@ impl ReplaceRewriter {
     ) -> Result<(), KernelError> {
         // 桌面/CLI 走「读+变换」与「写盘」重叠的流水线（WASM 无线程，走单线程）。
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            return self.rewrite_plain_pipelined(input, output);
-        }
+        let outcome = self.rewrite_plain_pipelined(input, output);
         #[cfg(target_arch = "wasm32")]
-        {
-            return self.rewrite_plain_single(input, output);
-        }
+        let outcome = self.rewrite_plain_single(input, output);
+        outcome
     }
 
     /// plain 替换的**一步**：`buffer`（含上一块剩余）＋本块读入 → 本步应写出的字节。
@@ -1293,6 +1290,8 @@ impl ReplaceRewriter {
     }
 
     /// 单线程版（WASM 与回退）：变换直接写 output。
+    // 非 wasm 构建下由 `rewrite_plain` 的流水线分支替代；保留作无线程环境的回退。
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn rewrite_plain_single(
         &self,
         input: &mut dyn crate::fs::ReadSeek,

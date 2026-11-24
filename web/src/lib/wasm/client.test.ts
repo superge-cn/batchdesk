@@ -46,11 +46,15 @@ describe("WASM Worker 客户端", () => {
     expect(unavailable.reason).toBe("wasm-unavailable");
   });
 
-  it("内核错误不在客户端层被判定（只搬运 message）", async () => {
+  it("内核错误不在客户端层被判定（只搬运错误码）", async () => {
     const { KernelError } = await import("./contract");
-    // 客户端只负责把 message 传出去；是否阻断由调用方决定。
+    // 客户端只负责把错误码传出去；是否阻断由调用方决定。
+    // 后端原文不进协议（设计 06 §3：技术细节只进诊断日志）。
     const message = "E4001: operation not licensed";
     const error = new KernelError(message);
     expect(error.code).toBe("E4001");
+    const failed = { id: 7, ok: false as const, reason: "kernel-error" as const, code: error.code };
+    expect(failed.code).toBe("E4001");
+    expect("message" in failed).toBe(false);
   });
 });

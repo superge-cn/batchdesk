@@ -15,7 +15,7 @@ import {
 import { ErrorBanner } from "./ErrorBanner";
 import { useI18n } from "./i18n";
 import { actionLabel } from "./labels";
-import { NAV_LABEL_BY_ID } from "./navCatalog";
+import { NAV_LABEL_BY_ID, type View } from "./navCatalog";
 import { TemplateRunner } from "./TemplateRunner";
 import { VirtualList } from "./VirtualList";
 import type {
@@ -159,8 +159,9 @@ export function TemplatesPage({ onBack }: { onBack: () => void }) {
       }
       const label = features
         .map((code) => {
-          const labelKey = NAV_LABEL_BY_ID[code as keyof typeof NAV_LABEL_BY_ID];
-          return labelKey ? `${t(labelKey as never)} (${code})` : code;
+          const labelKey = NAV_LABEL_BY_ID[code as View];
+          return labelKey ? `${t(labelKey)} (${code})` : code;
+
         })
         .join(" → ");
       return { bound: true as const, label };

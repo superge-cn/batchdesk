@@ -157,6 +157,95 @@ pub trait JournalStore: JournalSink {
     fn mark_reverted(&mut self, plan_id: &str, seqs: &[u64]) -> Result<(), KernelError>;
 }
 
+/// 会话内 Journal：Web 执行沙箱（ADR-0108）用，不落盘、不跨页留存。
+///
+/// 与桌面 `FileJournal` 的差别只有持久化——追加式序号、`plan_kind`、撤销标记
+/// 语义与桌面一致；页面关闭即随沙箱一起丢弃（设计 02 §3.4 的「会话内留存」）。
+#[derive(Default)]
+pub struct MemoryJournal {
+    entries: Vec<JournalEntry>,
+}
+
+impl MemoryJournal {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 全部记录（诊断与测试用；撤销仍走 `entries_for_plan`）。
+    pub fn all(&self) -> &[JournalEntry] {
+        &self.entries
+    }
+
+    fn push(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        plan_kind: Option<&str>,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> JournalEntry {
+        let seq = self.entries.len() as u64 + 1;
+        let entry = JournalEntry {
+            seq,
+            plan_id: plan_id.to_string(),
+            entry_id: entry_id.to_string(),
+            ts: ts.to_string(),
+            plan_kind: plan_kind.map(str::to_string),
+            forward,
+            reverse,
+            status: JournalStatus::Applied,
+        };
+        self.entries.push(entry.clone());
+        entry
+    }
+}
+
+impl JournalSink for MemoryJournal {
+    fn append(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> Result<JournalEntry, KernelError> {
+        Ok(self.push(plan_id, entry_id, ts, None, forward, reverse))
+    }
+
+    fn append_with_kind(
+        &mut self,
+        plan_id: &str,
+        entry_id: &str,
+        ts: &str,
+        plan_kind: &str,
+        forward: FsOp,
+        reverse: FsOp,
+    ) -> Result<JournalEntry, KernelError> {
+        Ok(self.push(plan_id, entry_id, ts, Some(plan_kind), forward, reverse))
+    }
+}
+
+impl JournalStore for MemoryJournal {
+    fn entries_for_plan(&self, plan_id: &str) -> Result<Vec<JournalEntry>, KernelError> {
+        Ok(self
+            .entries
+            .iter()
+            .filter(|entry| entry.plan_id == plan_id)
+            .cloned()
+            .collect())
+    }
+
+    fn mark_reverted(&mut self, plan_id: &str, seqs: &[u64]) -> Result<(), KernelError> {
+        for entry in self.entries.iter_mut() {
+            if entry.plan_id == plan_id && seqs.contains(&entry.seq) {
+                entry.status = JournalStatus::Reverted;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

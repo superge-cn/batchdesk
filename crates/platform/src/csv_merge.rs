@@ -8,7 +8,6 @@ use std::io;
 use std::path::Path;
 
 use kernel::csv::{sniff_delimiter, Delimiter};
-use kernel::csv_merge::parse_records;
 use kernel::encoding::{
     detect, transcode, InvalidSequencePolicy, PlatformPrior, SourceEncoding, TargetEncoding,
 };
@@ -121,41 +120,29 @@ fn inspect_with_records(
         InvalidSequencePolicy::ReplaceAndCount,
     )
     .map_err(|error| io::Error::other(format!("{}: {}", error.code, error.message)))?;
-    let records = parse_records(&decoded.bytes, delimiter.as_byte());
-
-    let (columns, rows): (Vec<String>, &[Vec<String>]) = if options.has_header {
-        match records.split_first() {
-            Some((header, rows)) => (header.clone(), rows),
-            None => (Vec::new(), &[]),
-        }
-    } else {
-        (Vec::new(), &records)
+    // ADR-0102 A2-3：行数/列信息改由 kernel 的字节级入口算（`CsvInspection`），
+    // 与 Web 形态共用同一份算法——避免两形态对同一文件算出不同列数。
+    let mut inspection = kernel::csv_merge::CsvInspection {
+        file_size: sampled.file_size,
+        source_encoding: Some(encoding),
+        delimiter,
+        delimiter_detected,
+        ..kernel::csv_merge::CsvInspection::default()
     };
-    let column_count = if options.has_header {
-        columns.len() as u64
-    } else {
-        records
-            .iter()
-            .map(|row| row.len() as u64)
-            .max()
-            .unwrap_or(0)
-    };
-    let dirty_rows = rows
-        .iter()
-        .filter(|row| row.len() as u64 != column_count)
-        .count() as u64;
+    let records =
+        kernel::csv_merge::complete_records(&mut inspection, &decoded.bytes, options.has_header);
 
     Ok((
         CsvMergeInspection {
-            file_size: sampled.file_size,
-            source_encoding: Some(encoding),
-            delimiter,
-            delimiter_detected,
-            has_header: options.has_header,
-            columns,
-            column_count,
-            data_rows: rows.len() as u64,
-            dirty_rows,
+            file_size: inspection.file_size,
+            source_encoding: inspection.source_encoding,
+            delimiter: inspection.delimiter,
+            delimiter_detected: inspection.delimiter_detected,
+            has_header: inspection.has_header,
+            columns: inspection.columns,
+            column_count: inspection.column_count,
+            data_rows: inspection.data_rows,
+            dirty_rows: inspection.dirty_rows,
         },
         records,
     ))
@@ -166,6 +153,56 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// ADR-0102 A2-3 对拍：**桌面流式路径**（本模块）与 **kernel 字节级入口**
+    /// （Web 形态用）必须对同一文件给出同一组事实。
+    ///
+    /// 这条断言存在的理由：两处若各自实现，同一 CSV 在桌面与 Web 可能算出不同的
+    /// 列数／脏行数（方案 §13.5 明排除的双实现）。
+    #[test]
+    fn desktop_path_and_kernel_bytes_path_agree() {
+        let samples: &[&[u8]] = &[
+            b"name,age\nann,30\nbob,25\n",
+            b"a,b\n1,2,3\n4\n",           // 脏行
+            b"1,2,3\n4,5\n",              // 无表头
+            b"\"quoted,field\",x\n1,2\n", // 引号内分隔符
+            b"",                          // 空文件
+        ];
+        for data in samples {
+            let dir = TempDir::new();
+            let path = dir.0.join("sample.csv");
+            fs::write(&path, data).unwrap();
+            let options = CsvMergeScanOptions {
+                source_encoding: Some(kernel::encoding::SourceEncoding::Utf8),
+                has_header: true,
+                delimiter: None,
+                platform_prior: kernel::encoding::PlatformPrior::Other,
+                sample_window_bytes: 4096,
+                sample_blocks: 0,
+            };
+            let (desktop, _) = inspect_with_records(&path, options).unwrap();
+
+            // 同一文件走 kernel 字节入口：读全文当整段字节。
+            let mut kernel_side = kernel::csv_merge::inspect_head(
+                data,
+                data.len() as u64,
+                options.platform_prior,
+                options.delimiter,
+            );
+            let _ = kernel::csv_merge::complete_records(&mut kernel_side, data, options.has_header);
+
+            assert_eq!(desktop.file_size, kernel_side.file_size, "fileSize 不一致");
+            assert_eq!(
+                desktop.source_encoding, kernel_side.source_encoding,
+                "编码判定不一致"
+            );
+            assert_eq!(desktop.delimiter, kernel_side.delimiter, "分隔符不一致");
+            assert_eq!(desktop.columns, kernel_side.columns, "表头列不一致");
+            assert_eq!(desktop.column_count, kernel_side.column_count, "列数不一致");
+            assert_eq!(desktop.data_rows, kernel_side.data_rows, "数据行数不一致");
+            assert_eq!(desktop.dirty_rows, kernel_side.dirty_rows, "脏行数不一致");
+        }
+    }
 
     struct TempDir(std::path::PathBuf);
 

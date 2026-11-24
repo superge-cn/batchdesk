@@ -6,10 +6,9 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use kernel::archive::{
-    ArchiveCompression, ArchiveEntryInfo, ArchiveEntryKind, ArchiveInspect, ArchiveManifestItem,
-    ArchiveService, CompressedArchive,
+    decode_entry_name, ArchiveCompression, ArchiveEntryInfo, ArchiveEntryKind, ArchiveInspect,
+    ArchiveManifestItem, ArchiveService, CompressedArchive,
 };
-use kernel::encoding::{transcode, InvalidSequencePolicy, SourceEncoding, TargetEncoding};
 use kernel::error::KernelError;
 
 pub struct ZipArchiveService;
@@ -28,7 +27,7 @@ impl ArchiveService for ZipArchiveService {
             // 使加密包连预览都出不来。
             let entry = zip.by_index_data(index).map_err(zip_error)?;
             let utf8_flag = entry.flags().as_u16() & 0x0800 != 0;
-            let (name, gbk_fallback) = decode_name(entry.name_raw(), utf8_flag);
+            let (name, gbk_fallback) = decode_entry_name(entry.name_raw(), utf8_flag);
             let supported = matches!(
                 entry.compression(),
                 zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
@@ -304,30 +303,6 @@ fn walk_sources(dir: &Path, inspect: &mut CompressInspect) -> Result<(), KernelE
         }
     }
     Ok(())
-}
-
-fn decode_name(raw: &[u8], utf8_flag: bool) -> (Option<String>, bool) {
-    if utf8_flag {
-        return match std::str::from_utf8(raw) {
-            Ok(name) => (Some(name.to_string()), false),
-            Err(_) => (None, false),
-        };
-    }
-    if raw.is_ascii() {
-        return (Some(String::from_utf8_lossy(raw).into_owned()), false);
-    }
-    match transcode(
-        raw,
-        SourceEncoding::Gb18030,
-        TargetEncoding::Utf8 { bom: false },
-        InvalidSequencePolicy::Abort,
-    ) {
-        Ok(result) => match String::from_utf8(result.bytes) {
-            Ok(name) => (Some(name), true),
-            Err(_) => (None, true),
-        },
-        Err(_) => (None, true),
-    }
 }
 
 /// 输出目录下已存在的路径（解压冲突预览用；只读、不跟随符号链接）。

@@ -17,7 +17,9 @@
 //!   （目录级归档属 C08，见 ADR-0036）；
 //! - 本模块不读盘、不取时钟（不变量 1）；文件事实由壳层采集。
 
-use crate::csv_merge::{source_block, target_block};
+use crate::csv::Delimiter;
+use crate::csv_merge::{complete_records, source_block, target_block, CsvInspection};
+use crate::encoding::{detect, transcode, InvalidSequencePolicy, PlatformPrior, TargetEncoding};
 use crate::error::KernelError;
 use crate::fs::CaseSense;
 use crate::path::{is_under, normalize, try_normalize, ProtectedDir};
@@ -127,6 +129,74 @@ fn join_relative(root: &str, relative: &str) -> String {
     } else {
         format!("{root}/{relative}")
     }
+}
+
+/// 清单解析：字节 → 编码（显式优先、否则检测）→ 分隔符（显式优先、否则嗅探）→
+/// 两列记录。
+///
+/// 方案 §5.8 要求清单解析编码感知（UTF-8/UTF-8 BOM/GB18030 共存）。此前 CLI 与
+/// 桌面壳各自复制了一份 `csv_dedup_inspect` 调用加同一段两列校验，Web 侧再写第三份
+/// 必然漂移；这里把纯字节处理下沉到 kernel——三个形态只保留「把文件读成字节」与
+/// 「采集逐行事实（存在性/大小/目标占用）」两件属于各自环境的事。
+///
+/// **`source` 不可省**：清单里全是中英混排的文件名，统计检测在短样本上会把 GBK
+/// 猜成 EUC-KR 之类落在候选集外的编码 → E3001。此时用户必须能指定编码，否则
+/// 该清单在这三个形态里永远不可用（这是个真实缺口，不是理论风险）。
+///
+/// 与既有口径一致的部分：整份清单解析（清单很小，不做采样窗口）；`has_header` 恒
+/// false（首行即数据，C07 清单没有表头约定）；少于两列的行按 E1004 拒绝而非跳过
+/// （跳过会让用户以为该行已处理）。
+pub fn parse_manifest(
+    data: &[u8],
+    delimiter: Option<Delimiter>,
+    source: Option<crate::encoding::SourceEncoding>,
+) -> Result<Vec<PlanC07Row>, KernelError> {
+    let encoding = match source {
+        Some(source) => source,
+        None => {
+            let detection = detect(data, PlatformPrior::Other);
+            detection.require_encoding()?
+        }
+    };
+    let decoded = transcode(
+        data,
+        encoding,
+        TargetEncoding::Utf8 { bom: false },
+        InvalidSequencePolicy::ReplaceAndCount,
+    )?;
+    let sniffed = if delimiter.is_none() {
+        crate::csv::sniff_delimiter(&decoded.bytes)
+    } else {
+        None
+    };
+    let delimiter = delimiter.or(sniffed).unwrap_or(Delimiter::Comma);
+    let mut inspection = CsvInspection {
+        file_size: data.len() as u64,
+        source_encoding: Some(encoding),
+        delimiter,
+        delimiter_detected: sniffed.is_some(),
+        ..CsvInspection::default()
+    };
+    let records = complete_records(&mut inspection, &decoded.bytes, false);
+    let mut rows = Vec::with_capacity(records.len());
+    for (index, record) in records.iter().enumerate() {
+        if record.len() < 2 {
+            return Err(KernelError::new(
+                "E1004",
+                format!(
+                    "manifest row must have two columns (name, target sub-directory): line {}: {record:?}",
+                    index + 1
+                ),
+                None,
+                false,
+            ));
+        }
+        rows.push(PlanC07Row {
+            name: record[0].trim().to_string(),
+            sub_dir: record[1].trim().to_string(),
+        });
+    }
+    Ok(rows)
 }
 
 /// 生成 C07 计划：每个清单行一条条目（1:1，动作按 operation）。
@@ -348,6 +418,103 @@ fn error_with_row(mut error: KernelError, row_name: &str) -> KernelError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 清单解析（编码感知，三形态共用） ──────────────────────────────────
+    #[test]
+    fn parse_manifest_reads_plain_utf8_rows() {
+        let rows = parse_manifest(b"a.jpg,photos\nb.jpg,\n", None, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "a.jpg");
+        assert_eq!(rows[0].sub_dir, "photos");
+        // 空的目标子目录＝根目录，保持空串（plan_c07 再按空串处理）。
+        assert_eq!(rows[1].sub_dir, "");
+    }
+
+    #[test]
+    fn parse_manifest_strips_the_utf8_bom_so_the_first_name_is_clean() {
+        // 带 BOM 的清单在 Excel 另存为 UTF-8 时极常见；BOM 若不剥离，
+        // 第一行名称会多一个 U+FEFF，源文件「明明存在」却被判缺失。
+        let mut data = vec![0xEF, 0xBB, 0xBF];
+        data.extend_from_slice("照片.jpg,2024\n".as_bytes());
+        let rows = parse_manifest(&data, None, None).unwrap();
+        assert_eq!(rows[0].name, "照片.jpg");
+    }
+
+    #[test]
+    fn parse_manifest_decodes_gb18030_manifests_when_the_encoding_is_given() {
+        // 中文 Windows 导出的清单常是 GB18030。检测在短样本上会把它猜成
+        // EUC-KR（见下一条），所以**显式指定编码**是这条路径的必需入口。
+        let text = (0..12)
+            .map(|index| format!("年度报告{index}.docx,归档目录\n"))
+            .collect::<String>();
+        let (encoded, _, _) = encoding_rs::GB18030.encode(&text);
+        let rows = parse_manifest(
+            &encoded,
+            None,
+            Some(crate::encoding::SourceEncoding::Gb18030),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[0].name, "年度报告0.docx");
+        assert_eq!(rows[0].sub_dir, "归档目录");
+    }
+
+    #[test]
+    fn parse_manifest_reports_e3001_when_the_encoding_cannot_be_determined() {
+        // 边界如实记录：中英混排的中文文件名清单会被 chardetng 猜成 EUC-KR，
+        // 落在支持集之外 → E3001 要求人工确认，而不是「猜一个编码硬解」
+        // （方案 §5.2 置信度策略）。这条同时是「必须有显式编码入口」的证据。
+        let text = (0..12)
+            .map(|index| format!("年度报告{index}.docx,归档目录\n"))
+            .collect::<String>();
+        let (encoded, _, _) = encoding_rs::GB18030.encode(&text);
+        let error = parse_manifest(&encoded, None, None).unwrap_err();
+        assert_eq!(error.code, "E3001");
+    }
+
+    #[test]
+    fn parse_manifest_respects_an_explicit_utf8_encoding() {
+        // 显式指定时跳过检测：即便内容纯 ASCII（检测会默认 UTF-8），也按调用方口径走。
+        let rows = parse_manifest(
+            b"a.jpg,x\n",
+            None,
+            Some(crate::encoding::SourceEncoding::Utf8),
+        )
+        .unwrap();
+        assert_eq!(rows[0].name, "a.jpg");
+    }
+
+    #[test]
+    fn parse_manifest_honours_an_explicit_delimiter_over_sniffing() {
+        // 分号分隔、字段里含逗号：嗅探会被逗号带偏，显式分号才是对的。
+        let rows =
+            parse_manifest(b"a,1.jpg;x\nb,2.jpg;y\n", Some(Delimiter::Semicolon), None).unwrap();
+        assert_eq!(rows[0].name, "a,1.jpg");
+        assert_eq!(rows[0].sub_dir, "x");
+    }
+
+    #[test]
+    fn parse_manifest_keeps_quoted_newlines_inside_one_row() {
+        let rows = parse_manifest(b"\"multi\nline.jpg\",d\n", None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "multi\nline.jpg");
+    }
+
+    #[test]
+    fn parse_manifest_rejects_single_column_rows_with_the_line_number() {
+        let error = parse_manifest(b"a.jpg,x\norphan.jpg\n", None, None).unwrap_err();
+        assert_eq!(error.code, "E1004");
+        // 行号让用户能直接回到清单里改那一行；跳过该行会让它「看起来已处理」。
+        assert!(error.message.contains("line 2"), "{}", error.message);
+        assert!(error.message.contains("orphan.jpg"), "{}", error.message);
+    }
+
+    #[test]
+    fn parse_manifest_of_empty_input_yields_no_rows() {
+        // 空清单不在这里判死：`plan_c07` 对空 rows 报 E1002（缺参数），
+        // 语义上属于「计划缺输入」而不是「清单格式坏」。
+        assert!(parse_manifest(b"", None, None).unwrap().is_empty());
+    }
 
     fn fact(exists: bool, occupied: bool) -> PlanC07Fact {
         PlanC07Fact {

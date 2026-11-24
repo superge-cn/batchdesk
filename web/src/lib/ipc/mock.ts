@@ -1280,6 +1280,8 @@ const APPLY_SLOTS: Record<string, { required: [string, boolean][]; outputs: [str
   c14: { required: [["files", true]], outputs: [["output", false], ["outputDir", false]] }
 };
 
+export { APPLY_SLOTS };
+
 /**
  * 浏览器夹具的 loadRecipe：按 `stepIndex` 取那一步的评估做槽位校验（缺/多/空都报，
  * 与壳层同语义），事实采集是夹具（同 mockPlan），返回同形状的预览计划。
@@ -1346,13 +1348,21 @@ export function mockLoadRecipe(
       }
     }
   }
-  // PlanOperationInput 的 kind 字段在类型上只写了 "c09"（C09 形状先行），
-  // mockPlan 运行时本就按非 c09 分支给最小夹具——与既有用法一致，这里显式收窄。
+  // 路由用的判别键是**功能码**（`TemplateStep.feature`，schema v4/OQ-36 裁决），
+  // 不是动作级 `step.kind`（`split`/`rename`…）——后者一对多，反推不出功能。
+  // 未绑定＝不可套用，如实拒绝，不静默猜一个（与壳层 `assess` 同口径）。
+  const feature = step.feature?.trim();
+  if (!feature) {
+    fail("E1002", "loadRecipe: template step is not bound to a feature code");
+  }
   return mockPlan({
-    kind: step.kind as "c09",
-    params: { ...step.paramsSnapshot, ...(step.content ?? {}), ...pathParams } as PlanOperationInput["params"],
+    kind: feature,
+    params: { ...step.paramsSnapshot, ...(step.content ?? {}), ...pathParams },
     sourcePaths: []
-  });
+    // 模板快照的形状由保存时的功能决定（`paramsSnapshot` 原样存档，ADR-0072），
+    // 无法在编译期与某一功能的 `params` 对齐——这里收窄到联合整体，
+    // 真正的字段校验在壳层 serde（与 planOperation 同一条路由，不另建 schema）。
+  } as PlanOperationInput);
 }
 
 /**

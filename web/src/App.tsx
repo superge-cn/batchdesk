@@ -57,6 +57,8 @@ import {
   undoPlan
 } from "./lib/ipc";
 import { FeaturePages } from "./FeaturePages";
+import { fileNamesForFeature } from "./lib/aiContext";
+import type { AiContext } from "./lib/ipc/types";
 import { AiPanel } from "./AiPanel";
 import {
   NAV_ENTRIES,
@@ -89,6 +91,7 @@ import {
   sortRows
 } from "./lib/uiState";
 import { TableHead, columnVarsStyle, useUiTableState } from "./TableHead";
+import { formatBytes } from "./lib/format";
 import type {
   ApplyEntryReport,
   ApplyReport,
@@ -196,24 +199,6 @@ function planSortKey(entry: PlanEntry, column: string): string | undefined {
   if (column === "source") return entry.source;
   if (column === "reason") return entry.reason;
   return entry.blocked ? `blocked:${entry.blocked.code}` : "pending";
-}
-
-/** 字节数的人类可读形式（条目内进度用，ADR-0100）。单位符号按 IEC 口径。 */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let value = bytes;
-  let unit = "B";
-  for (const candidate of units) {
-    value /= 1024;
-    unit = candidate;
-    if (value < 1024) {
-      break;
-    }
-  }
-  return `${value.toFixed(value >= 100 ? 0 : 1)} ${unit}`;
 }
 
 function resultSortKey(entry: ApplyEntryReport, column: string): string | undefined {
@@ -379,6 +364,37 @@ function AppShell() {
   // 侧栏宽度只有这里用，就直接在本组件读写 layout 分节。
   const uiTables = useUiTableState();
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
+  /**
+   * F15 面板上下文（设计 14 §9）：功能码与表单由当前功能页上报。
+   * C09 没有表单上报，文件集改由计划条目派生（见下方 memo）。
+   */
+  const [aiFeature, setAiFeature] = useState<string>("");
+  const [aiForm, setAiForm] = useState<Record<string, string>>({});
+  /**
+   * F15 面板上下文（设计 14 §9 数据最小化）。
+   *
+   * C09 没有功能页表单上报，文件集由**当前计划条目**派生（重复文件清理的对象）；
+   * 其余功能页用各自页面上报的表单，经 `APPLY_SLOTS` 取输入文件槽位。
+   * `fileNames` 只在用户逐次同意后由面板自己加入——这里只备好清单，不代为决定。
+   */
+  const aiFileNames = useMemo(() => {
+    if (activeView === "c09") {
+      const names = (plan?.entries ?? []).map((entry) =>
+        entry.source.split(/[\\/]/).filter(Boolean).pop() ?? entry.source
+      );
+      return [...new Set(names)];
+    }
+    return fileNamesForFeature(aiFeature, aiForm);
+  }, [activeView, plan, aiFeature, aiForm]);
+
+  const aiContext: AiContext = {
+    fileCount: aiFileNames.length,
+    kinds: activeView === "c09" ? ["c09"] : aiFeature ? [aiFeature] : [],
+    locale: lang,
+    includeFileNames: false,
+    // 清单只备好：面板的同意勾选决定本次是否真的发送（设计 14 §9 逐次同意）。
+    fileNames: aiFileNames
+  };
   const layoutRef = useRef<UiLayoutState>({});
   const sidebarRef = useRef<HTMLElement | null>(null);
   const sidebarDrag = useRef<{ startX: number; startWidth: number; last: number } | null>(null);
@@ -1681,6 +1697,10 @@ function AppShell() {
                 view={activeView}
                 onBack={() => selectView("c09")}
                 initialPlan={aiPlan}
+                onContextChange={(feature, form) => {
+                  setAiFeature(feature);
+                  setAiForm(form);
+                }}
               />
             )}
           </div>
@@ -1699,7 +1719,7 @@ function AppShell() {
             closeAi();
             selectView("templates");
           }}
-          context={{ fileCount: 0, kinds: [], locale: lang, includeFileNames: false }}
+          context={aiContext}
         />
       </div>
 

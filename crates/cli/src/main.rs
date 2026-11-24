@@ -10,14 +10,16 @@ use std::env;
 use std::path::PathBuf;
 
 use kernel::apply::{
-    apply_plan, undo_dry_run_with_retry, undo_plan_with_ports, ApplyContext, ApplyOptions,
-    ApplyOutcome, UndoOutcome, UndoPorts,
+    apply_plan, undo_dry_run_with_retry, undo_plan_with_ports, ApplyContext, ApplyOutcome,
+    UndoOutcome, UndoPorts,
 };
 use kernel::archive::{
     apply_archive_plan, plan_c10, plan_c10_compress, ArchiveApplyContext, ArchiveCompression,
     ArchiveService, PlanC10CompressInput, PlanC10Input, C10_KIND,
 };
-use kernel::c07::{plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input, PlanC07Row};
+use kernel::c07::{
+    parse_manifest, plan_c07, C07Operation, MissingPolicy, PlanC07Fact, PlanC07Input,
+};
 use kernel::c08::{
     plan_c08, ArchiveCondition, ArchiveRule, PlanC08File, PlanC08Input, UnmatchedPolicy,
 };
@@ -128,6 +130,7 @@ const USAGE: &str = "usage:
   batchdesk c05 --plan <plan.json> [--json]
   batchdesk c07 --manifest <csv> --source-root <dir> --target-root <dir>
                 --operation move|copy [--missing skip|error] [--delimiter <d>]
+                [--source <encoding>]
                 [--plan-id ULID] [--protected-dir <dir>]... [--json]
   batchdesk c08 --source-root <dir> --target-root <dir>
                 --rule <subdir>|<type>:<params> ...
@@ -824,7 +827,7 @@ fn run_apply(args: &[String]) -> i32 {
     // 冲突策略：CLI 显式传入（缺省 skip，与既有行为一致）。
     let apply_options = kernel::apply::ApplyOptions {
         on_conflict,
-        on_conflict_explicit: on_conflict_explicit,
+        on_conflict_explicit,
         overwrite_confirmed,
         ..kernel::apply::ApplyOptions::default()
     };
@@ -6095,6 +6098,7 @@ fn run_c07(args: &[String]) -> i32 {
     let mut operation = None;
     let mut missing = MissingPolicy::Skip;
     let mut delimiter = None;
+    let mut source_encoding = None;
     let mut plan_id = None;
     let mut protected_dirs = Vec::new();
     let mut json = false;
@@ -6152,6 +6156,16 @@ fn run_c07(args: &[String]) -> i32 {
                     }
                 };
             }
+            "--source" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return input_error("E1001: --source requires an encoding");
+                };
+                let Some(parsed) = SourceEncoding::parse(value) else {
+                    return input_error(format!("E1002: unknown source encoding: {value}"));
+                };
+                source_encoding = Some(parsed);
+            }
             "--delimiter" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
@@ -6198,8 +6212,10 @@ fn run_c07(args: &[String]) -> i32 {
         return input_error("E1001: c07 requires --operation move|copy");
     };
     let manifest_absolute = make_absolute(&manifest_path);
-    let manifest_size = match std::fs::metadata(&manifest_absolute) {
-        Ok(metadata) => metadata.len().max(1),
+    // 清单解析的纯字节部分下沉在 kernel（`c07::parse_manifest`）：CLI / 桌面壳 /
+    // Web 三个形态共用同一实现，壳层只负责「读字节」与「采集逐行事实」。
+    let manifest_bytes = match std::fs::read(&manifest_absolute) {
+        Ok(bytes) => bytes,
         Err(error) => {
             eprintln!(
                 "E2001: manifest is not readable ({}): {error}",
@@ -6208,23 +6224,10 @@ fn run_c07(args: &[String]) -> i32 {
             return 2;
         }
     };
-    // 清单解析编码感知（方案 §5.8"清单解析（编码感知）"）：整份清单全量读取
-    // （清单很小；采样窗口取文件大小）。
-    let scan = CsvMergeScanOptions {
-        delimiter,
-        has_header: false,
-        sample_window_bytes: manifest_size,
-        sample_blocks: 1,
-        platform_prior: PlatformPrior::Other,
-        source_encoding: None,
-    };
-    let inspected = match csv_dedup_inspect(&manifest_absolute, scan) {
-        Ok(inspected) => inspected,
+    let rows = match parse_manifest(&manifest_bytes, delimiter, source_encoding) {
+        Ok(rows) => rows,
         Err(error) => {
-            eprintln!(
-                "E1004: manifest is not parseable ({}): {error}",
-                manifest_absolute.display()
-            );
+            eprintln!("{}: {}", error.code, error.message);
             return 2;
         }
     };
@@ -6239,35 +6242,22 @@ fn run_c07(args: &[String]) -> i32 {
         return 2;
     }
 
-    let mut rows = Vec::new();
     let mut facts = Vec::new();
-    for record in &inspected.records {
-        if record.len() < 2 {
-            eprintln!(
-                "E1004: manifest row must have two columns (name, target sub-directory): {record:?}"
-            );
-            return 2;
-        }
-        let name = record[0].trim();
-        let sub_dir = record[1].trim();
+    for row in &rows {
         // 事实采集：shell 与 kernel 用同一相对拼接规则（root/relative）。
-        let source = source_root.join(name);
+        let source = source_root.join(&row.name);
         let source_meta = std::fs::metadata(&source);
-        let target_dir = if sub_dir.is_empty() {
+        let target_dir = if row.sub_dir.is_empty() {
             target_root.clone()
         } else {
-            target_root.join(sub_dir)
+            target_root.join(&row.sub_dir)
         };
         let target = target_dir.join(
-            std::path::Path::new(name)
+            std::path::Path::new(&row.name)
                 .file_name()
                 .map(|value| value.to_os_string())
-                .unwrap_or_else(|| name.into()),
+                .unwrap_or_else(|| row.name.clone().into()),
         );
-        rows.push(PlanC07Row {
-            name: name.to_string(),
-            sub_dir: sub_dir.to_string(),
-        });
         facts.push(PlanC07Fact {
             exists: source_meta
                 .as_ref()
