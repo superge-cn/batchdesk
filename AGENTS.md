@@ -35,7 +35,7 @@
 - 单 crate 测试：`cargo test -p batchdesk-kernel` / `-p batchdesk-platform`（包名带 `batchdesk-` 前缀；`kernel`/`platform` 是 `[lib]` 名，`-p kernel` 会报 package ID 不匹配）
 - Web/壳：pnpm install（根，Tauri CLI）→ (cd web && pnpm install) → pnpm build → **pnpm test**（Vitest：视图导航可达（含处理模板）、取消/重试/撤销调用形状、设置区与双语、模板存取）→ **pnpm test:e2e**（Playwright＋Chromium：真实浏览器下的 C05 面板语义、S01 报告与处理模板页；数据走浏览器 mock 夹具，不代表真机文件结果）；pnpm tauri dev；cargo check --manifest-path src-tauri/Cargo.toml（独立 workspace，需 WebKitGTK/WebView2；不随根 cargo test 编译）
 - 桌面壳任务队列测试：cargo test --manifest-path src-tauri/Cargo.toml --offline
-- WebView E2E：先启动 Vite 与 tauri-driver（前置条件见 scripts/e2e-tauri.mjs 文件头），再 `node scripts/e2e-tauri.mjs`
+- WebView E2E：先 `node scripts/build-webview-e2e.mjs` 构建可附加的桌面二进制（注入调试端口＋隔离应用数据 identifier），再启动 Vite 与 tauri-driver（前置条件见 `scripts/e2e-tauri.mjs` 文件头、`docs/testing/tauri-webview-e2e-记录.md`），最后 `node scripts/e2e-tauri.mjs`。**WebView2 浏览器 profile 仍未隔离**（三条通道实测无效，见记录 §七）
 - 语料生成物校验：python fixtures/corpus/verify_corpus.py --hashes（加 `--rebuild` 校验幂等）
 - 文档/契约门禁：python scripts/check_docs.py；python fixtures/migrations/check_schema.py
 - 门禁：cargo fmt --check；cargo clippy --workspace --all-targets -- -D warnings；cargo deny check（白名单见 `deny.toml`；项目许可证已定为**专有/All rights reserved**，OQ-11 于 2026-10-28 确认并落地 `LICENSE`，不是待法务）

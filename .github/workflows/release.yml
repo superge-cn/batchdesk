@@ -104,12 +104,16 @@ jobs:
         # bundle 目标由 src-tauri/tauri.conf.json 的 bundle.targets 决定（当前仅 nsis）。
         # release profile 硬化（strip/lto/codegen-units/panic=abort）见
         # src-tauri/Cargo.toml 的 [profile.release] 与 ADR-0002。
+        # 单靠 strip=symbols 只清符号表，MSVC 仍写 CodeView 的 RSDS/PDB 路径；
+        # 实测 `-C link-arg=/DEBUG:NONE` 后两者都消失。只在 release 构建路径
+        # 设置，不改开发构建的链接行为。
+        env:
+          RUSTFLAGS: -C link-arg=/DEBUG:NONE
         run: pnpm tauri build --ci --no-sign
 
       # ADR-0002 §3：加固要求必须机器验收，不能只靠 profile 配了就认为生效。
-      # 断言符号表已剥离、授权关键字符串不落明文；失败让 job 红。
-      # 脚本对「CodeView/RSDS 残留」只 WARN 不判红——当前 strip=symbols 确实
-      # 移除符号表但保留 PDB 路径，这是已登记缺口，不能用假断言声称已满足。
+      # 断言符号表已剥离、CodeView 调试信息不留、授权关键字符串不落明文；
+      # 任一项失败让 job 红。反向验证：对未加 /DEBUG:NONE 的旧产物判红。
       - name: 发行产物硬化断言（符号剥离／授权字符串不落明文）
         shell: pwsh
         run: python scripts/check_release_artifact.py --binary src-tauri/target/release/batchdesk-desktop.exe

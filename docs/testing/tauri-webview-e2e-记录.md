@@ -10,7 +10,8 @@
 - 真跑，不是模拟：`tauri-driver` + `msedgedriver` 驱动真实 Tauri WebView（WebView2 运行时 157.0.4341.60），真实文件系统读写。
 - 首跑整体结论：**未通过**（`EXIT=1`）。根因是一个**产品缺陷**，不是环境问题：取消任务后「是否一并撤销」对话框在真实运行中永不出现。
 - 用例 1（执行 → 撤销）**通过**；用例 2（执行中取消 → 一并撤销）**失败**；用例 3（计划到执行的内容复检）**单独验证通过**，但在正式脚本顺序中被用例 2 阻断，未跑到。
-- **修复后复跑（2026-11-24 21:28）：整体通过（`EXIT=0`）**，三条用例全部 `PASS`。缺陷根因是 `src-tauri/src/tasks.rs::finish()` 把功能码（`c09`）塞进 `task://done` 的 `kind`，而契约（设计 01 §4.3，已打开原文核对）要求该字段是 `apply`／`undo`；修复见 main `a5409be`，Rust 侧先红实测 `left: ["c09","c09"] / right: ["apply","undo"]`。复跑前用 `TAURI_CONFIG` 注入重新构建了带调试端口的桌面二进制，`tauri-driver` 与 Vite 均返回 200。
+- **构建已封装**：`node scripts/build-webview-e2e.mjs` 一条命令完成「清桌面壳缓存 → 注入 `TAURI_CONFIG`（调试端口）→ `cargo build`」。它同时把应用数据 identifier 改为 `com.batchdesk.e2e`，e2e 不再污染真实应用数据；但 **WebView2 浏览器 profile 仍未隔离**（见 §七）。
+- **修复后复跑（2026-11-24 21:28，封装后又复跑两次）：整体通过（`EXIT=0`）**，三条用例全部 `PASS`。缺陷根因是 `src-tauri/src/tasks.rs::finish()` 把功能码（`c09`）塞进 `task://done` 的 `kind`，而契约（设计 01 §4.3，已打开原文核对）要求该字段是 `apply`／`undo`；修复见 main `a5409be`，Rust 侧先红实测 `left: ["c09","c09"] / right: ["apply","undo"]`。复跑前用 `TAURI_CONFIG` 注入重新构建了带调试端口的桌面二进制，`tauri-driver` 与 Vite 均返回 200。
 - 环境侧欠账已补齐：msedgedriver 已安装到仓库外 `E:/tools/msedgedriver/157/`，版本与 WebView2 运行时一致。
 
 ## 一、环境
@@ -154,8 +155,8 @@ tauri-driver --port 4444 --native-driver "E:/tools/msedgedriver/157/msedgedriver
 ## 七、剩余缺口
 
 1. ~~产品缺陷未修~~（**已关闭**）：`task://done.kind` 已改发任务类别（`a5409be`），复跑用例 2 通过。
-2. **测试构建要求**：e2e 依赖 `TAURI_CONFIG` 注入 `--remote-debugging-port=0` 的二进制（普通 `cargo build` 产物 WebDriver 附加不上）；是否固化成脚本/CI 步骤、或给 e2e 专用构建独立 profile，**待裁决**。
+2. ~~测试构建要求~~（**已封装**）：`node scripts/build-webview-e2e.mjs` 一条命令搞定，已验证构建后 e2e 仍 3/3 PASS。CI 的 ubuntu runner 没有 Edge/WebView2，不做 CI job。
 3. ~~用例 3 未在正式顺序跑到~~（**已关闭**）：复跑时三条用例按脚本顺序全部执行并通过。
-4. **WebView2 用户数据未隔离**：使用的是真实 profile `%LOCALAPPDATA%/com.batchdesk.desktop/EBWebView`，测试会写真实 localStorage/ui-state；本轮未做隔离。
+4. **WebView2 浏览器 profile 仍未隔离**：2026-11-24 实测三条通道都无效——① `additionalBrowserArgs` 加 `--user-data-dir=<temp>`；② 构建期改 identifier（只隔离了应用数据，`com.batchdesk.e2e` 目录被创建但无 `EBWebView`）；③ driver 进程注入 `WEBVIEW2_USER_DATA_FOLDER`。e2e 仍写真实 `%LOCALAPPDATA%/com.batchdesk.desktop/EBWebView`。根因是 wry 建 WebView2 环境时显式传了 userDataFolder，覆盖上述通道；要彻底隔离需改产品代码或用独立 Windows 用户跑 e2e。
 5. **可移植性**：本记录只覆盖 Windows + WebView2；Linux（WebKitWebDriver）未验证。CI 环境无 Edge/WebView2，e2e 仍只能在实机跑。
 6. **引用核对**：文中「设计 01 §4.3」已在本次修复时打开原文核对（`task://done` 契约明确 `kind ∈ apply|undo`）；「方案 §7.7」「方案 6.2」仍未打开原文核对，按 AGENTS 第 1 条标注为**未核对，待人工确认**。

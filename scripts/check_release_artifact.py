@@ -6,7 +6,7 @@ ADR-0002 §3 要求「加固要求进门禁：CI 在 release 构建路径上断�
 `.github/workflows/release.yml` 的 `tauri build` 之后、上传之前。
 
 判定口径：
-- 退出码 0 = 所有**硬断言**通过（允许有 WARN 项，WARN 会逐条打印）；
+- 退出码 0 = 所有断言通过；
 - 退出码 1 = 至少一条硬断言失败；
 - 退出码 2 = 平台跳过（不是 Windows PE 产物，例如 Linux/macOS 上误跑）。
 
@@ -99,18 +99,18 @@ def main() -> int:
     else:
         ok("符号表已剥离：PointerToSymbolTable = 0")
 
-    # ③ 调试信息残留：当前工具链在 strip=symbols 后仍保留 CodeView 的 RSDS/PDB
-    # 路径（实测）。ADR-0002 §3 的「剥离调试信息」尚未被 profile 完全覆盖，
-    # 所以这里**只报告不判红**，避免用假断言制造"已满足"的假象。
+    # ③ 调试信息残留（ADR-0002 §3「剥离调试信息」）。
+    # 单靠 `[profile.release] strip = "symbols"` 只清符号表，MSVC 链接器仍写入
+    # CodeView 的 RSDS/PDB 路径；实测需再给链接器 `/DEBUG:NONE`（见 release.yml）。
+    # 2026-11-24 起此项为硬断言：有残留即判红，杜绝"配了 profile 就算硬化"。
     debug_markers = [marker for marker in (b".pdb", b"RSDS") if marker in data]
     if debug_markers:
-        warn(
-            "仍存在调试信息残留（"
+        fail(
+            "调试信息未剥离：仍含 "
             + ", ".join(marker.decode() for marker in debug_markers)
-            + "）：strip=symbols 已移除符号表，但 CodeView 目录仍在。"
-            "ADR-0002 §3 的『剥离调试信息』未完全满足，需另立改动调整 profile；"
-            "本条不判红，以免用假断言掩盖缺口。"
+            + "。MSVC 需 RUSTFLAGS='-C link-arg=/DEBUG:NONE'（见 release.yml）"
         )
+        failed = True
     else:
         ok("未发现 .pdb／RSDS 调试信息残留")
 
@@ -129,7 +129,7 @@ def main() -> int:
     if failed:
         print("结论：发行产物硬化断言失败")
         return EXIT_FAIL
-    print("结论：发行产物硬化断言通过（WARN 项见上，属已登记缺口）")
+    print("结论：发行产物硬化断言通过")
     return EXIT_OK
 
 
