@@ -3830,6 +3830,23 @@ mod tests {
         let wire = serde_json::to_value(&undone.summary).unwrap();
         assert_eq!(wire["job"], Value::String("undo".to_string()));
 
+        // `finish()` 先把状态置为终态、再 emit state/done；`wait_terminal` 轮询的是
+        // 状态，因此可能先看到终态、事件还没到齐。这里等事件收齐再断言——否则
+        // 测试自身带时序竞态（实测出现过只录到 1 条 done 的假绿/假红）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let count = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, _)| name == EVENT_DONE)
+                .count();
+            if count >= 2 || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
         // `task://done` 的 `kind` 必须是任务类别：界面靠 `kind === "apply"` 决定
         // 要不要问「已完成 N 项，是否一并撤销？」（方案 §7.7）。壳层曾把**功能码**
         // 塞进这个字段（`c09`），条件恒假，询问框成了死代码。
