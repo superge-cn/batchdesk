@@ -38,7 +38,7 @@
 - WebView E2E：先启动 Vite 与 tauri-driver（前置条件见 scripts/e2e-tauri.mjs 文件头），再 `node scripts/e2e-tauri.mjs`
 - 语料生成物校验：python fixtures/corpus/verify_corpus.py --hashes（加 `--rebuild` 校验幂等）
 - 文档/契约门禁：python scripts/check_docs.py；python fixtures/migrations/check_schema.py
-- 门禁：cargo fmt --check；cargo clippy --workspace --all-targets -- -D warnings；cargo deny check（白名单见 `deny.toml`；项目许可证 OQ-11 待法务）
+- 门禁：cargo fmt --check；cargo clippy --workspace --all-targets -- -D warnings；cargo deny check（白名单见 `deny.toml`；项目许可证已定为**专有/All rights reserved**，OQ-11 于 2026-10-28 确认并落地 `LICENSE`，不是待法务）
   - ⚠️ **桌面壳是独立 workspace，根命令够不到它**：另跑 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 与 `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`（前者已在 CI lint job，后者在 desktop job）。
   - ⚠️ **门禁结论一律以命令退出码为准**：禁止 `cargo clippy … | grep …` / `| head` 等管道判断通过——管道会吞掉上游退出码，grep 无输出 ≠ 通过。用法为 `cmd > /tmp/x.log 2>&1; echo "EXIT=$?"`，或显式读 `${PIPESTATUS[0]}`。
   - ⚠️ **本地工具链可能滞后于 CI**：CI 用最新 stable（`dtolnay/rust-toolchain@stable`），会引入本地尚未生效的新 lint；本地 clippy 绿灯不等于 CI 绿灯，以 CI 注解（`::error::`）为准。
