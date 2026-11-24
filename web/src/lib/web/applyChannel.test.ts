@@ -109,12 +109,24 @@ describe("webSandboxFacts", () => {
   });
 });
 
+/** 逐文件登记后，把各次调用的清单按登记顺序收成数组的数组。 */
+function stagedManifests(caller: {
+  mock: { calls: [WasmCall][] };
+}): { path: string; length: number }[][] {
+  return caller.mock.calls.map(([request]) => {
+    if (request.op !== "stage_inputs") {
+      throw new Error(`unexpected op ${request.op}`);
+    }
+    return JSON.parse(request.payload) as { path: string; length: number }[];
+  });
+}
+
 describe("stageInputs", () => {
-  it("清单与拼接字节一致，路径取计划里出现的裸文件名", async () => {
+  it("清单与字节逐文件一致，路径取计划里出现的裸文件名", async () => {
     const calls: WasmCall[] = [];
     const caller = vi.fn(async (request: WasmCall): Promise<WasmCallResult> => {
       calls.push(request);
-      return { ok: true, result: "{\"staged\":2}" };
+      return { ok: true, result: "{\"staged\":1}" };
     });
     const facts = await stageInputs(caller, "f03", picked([
       file("报告.txt", "aaa\n"),
@@ -122,14 +134,51 @@ describe("stageInputs", () => {
     ]));
     expect(facts.totalBytes).toBe(8);
 
-    const request = calls[0];
-    expect(request.op).toBe("stage_inputs");
-    if (request.op !== "stage_inputs") throw new Error("unreachable");
-    expect(JSON.parse(request.payload)).toEqual([
-      { path: "报告.txt", length: 4 },
-      { path: "notes.txt", length: 4 }
+    // 逐文件登记：两次调用，每次只带自己那份清单与字节（动因见下一条用例）。
+    expect(calls.map((call) => call.op)).toEqual(["stage_inputs", "stage_inputs"]);
+    const staged = calls.map((call) => {
+      if (call.op !== "stage_inputs") throw new Error("unreachable");
+      return {
+        manifest: JSON.parse(call.payload),
+        bytes: new TextDecoder().decode(call.bytes)
+      };
+    });
+    expect(staged).toEqual([
+      { manifest: [{ path: "报告.txt", length: 4 }], bytes: "aaa\n" },
+      { manifest: [{ path: "notes.txt", length: 4 }], bytes: "bbb\n" }
     ]);
-    expect(new TextDecoder().decode(request.bytes)).toBe("aaa\nbbb\n");
+  });
+
+  it("多文件逐文件过边界：峰值只与单文件大小相关，不与总量相关", async () => {
+    // 旧实现把所有文件拼成一块再跨线程传：主线程峰值 ≈ 总量×2（拼接 + 结构化克隆），
+    // 500MB 建议档下会到 GB 级。逐文件登记后峰值只跟**单个文件**大小相关。
+    const calls: WasmCall[] = [];
+    const caller = vi.fn(async (request: WasmCall): Promise<WasmCallResult> => {
+      calls.push(request);
+      return { ok: true, result: "{}" };
+    });
+    await stageInputs(
+      caller,
+      "f03",
+      picked([file("a.txt", "aaaa"), file("b.txt", "bb"), file("c.txt", "c")])
+    );
+    expect(calls.map((call) => call.op)).toEqual([
+      "stage_inputs",
+      "stage_inputs",
+      "stage_inputs"
+    ]);
+    const manifests = calls.map((call) =>
+      JSON.parse((call as { payload: string }).payload)
+    );
+    expect(manifests).toEqual([
+      [{ path: "a.txt", length: 4 }],
+      [{ path: "b.txt", length: 2 }],
+      [{ path: "c.txt", length: 1 }]
+    ]);
+    // 每次只带该文件的字节——不是全部拼接后的整块。
+    expect(
+      calls.map((call) => (call as { bytes: Uint8Array }).bytes.length)
+    ).toEqual([4, 2, 1]);
   });
 
   it("未接线的视图在调用 WASM 之前就拒绝", async () => {
@@ -223,10 +272,13 @@ describe("stageInputs", () => {
     const request = caller.mock.calls[0][0];
     if (request.op !== "stage_inputs") throw new Error("unreachable");
     expect(JSON.parse(request.payload)).toEqual([
-      { path: "资料/sub/年度报告.docx", length: 2 },
-      { path: "资料/b.txt", length: 2 }
+      { path: "资料/sub/年度报告.docx", length: 2 }
     ]);
-    expect(new TextDecoder().decode(request.bytes)).toBe("abcd");
+    const second = caller.mock.calls[1][0];
+    if (second.op !== "stage_inputs") throw new Error("unreachable");
+    expect(JSON.parse(second.payload)).toEqual([{ path: "资料/b.txt", length: 2 }]);
+    // 清单文件也在同一批调用里被跳过：只有两次登记，都是源目录里的文件。
+    expect(caller).toHaveBeenCalledTimes(2);
   });
 
   it("C08 的键同样带源根，子目录层级不丢", async () => {
@@ -271,13 +323,11 @@ describe("stageInputs", () => {
     await stageInputs(caller, "c10", {
       sources: [dirFile("素材/a.txt", "aa"), dirFile("素材/sub/b.txt", "bbb")]
     });
-    const request = caller.mock.calls[0][0];
-    if (request.op !== "stage_inputs") throw new Error("unreachable");
     // 键＝`pickedRelativePath`（相对所选目录内部，不含根名）——与计划里的 sources
     // 逐字一致；裸文件名会让执行器逐条报源缺失（计划写的是 `sub/b.txt`）。
-    expect(JSON.parse(request.payload)).toEqual([
-      { path: "a.txt", length: 2 },
-      { path: "sub/b.txt", length: 3 }
+    expect(stagedManifests(caller)).toEqual([
+      [{ path: "a.txt", length: 2 }],
+      [{ path: "sub/b.txt", length: 3 }]
     ]);
   });
 
@@ -289,13 +339,11 @@ describe("stageInputs", () => {
     await stageInputs(caller, "f12", {
       dir: [dirFile("素材/a.txt", "A"), dirFile("素材/sub/b.txt", "BB")]
     });
-    const request = caller.mock.calls[0][0];
-    if (request.op !== "stage_inputs") throw new Error("unreachable");
     // 条目是 `素材/a.txt` 与 `素材/sub`（第一层），但目录改名会带走整棵子树，
     // 所以登记的是**所有选中的文件**；键与计划里的条目口径一致（根名 + 相对路径）。
-    expect(JSON.parse(request.payload)).toEqual([
-      { path: "素材/a.txt", length: 1 },
-      { path: "素材/sub/b.txt", length: 2 }
+    expect(stagedManifests(caller)).toEqual([
+      [{ path: "素材/a.txt", length: 1 }],
+      [{ path: "素材/sub/b.txt", length: 2 }]
     ]);
   });
 
@@ -307,11 +355,9 @@ describe("stageInputs", () => {
     await stageInputs(caller, "f13", {
       dir: [dirFile("素材/2026-a.txt", "A"), dirFile("素材/sub/b.txt", "BB")]
     });
-    const request = caller.mock.calls[0][0];
-    if (request.op !== "stage_inputs") throw new Error("unreachable");
-    expect(JSON.parse(request.payload)).toEqual([
-      { path: "素材/2026-a.txt", length: 1 },
-      { path: "素材/sub/b.txt", length: 2 }
+    expect(stagedManifests(caller)).toEqual([
+      [{ path: "素材/2026-a.txt", length: 1 }],
+      [{ path: "素材/sub/b.txt", length: 2 }]
     ]);
   });
 });

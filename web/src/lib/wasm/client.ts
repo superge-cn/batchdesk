@@ -108,7 +108,13 @@ export function createWasmClient(): WasmClient | null {
       }
       return new Promise((resolve) => {
         pending.set(id, resolve);
-        worker.postMessage(message);
+        // 字节型请求把底层缓冲区**转移**给 Worker：结构化克隆会再复制一整块，
+        // 500MB 量级下等于凭空多一份峰值内存。转移后调用方的这块内存失效——
+        // 调用方（`stageInputs` / `parse_c07_manifest`）每次都新建并随即交出，
+        // 不存在复用，因此这是安全的。
+        const transfer =
+          "bytes" in message ? ([message.bytes.buffer] as Transferable[]) : [];
+        worker.postMessage(message, transfer);
       });
     },
     terminate() {

@@ -182,6 +182,15 @@ export async function readPersisted(
   }
 }
 
+/** OPFS/File System Access 的「不存在」是**目标状态**，其它失败不是。 */
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: string }).name === "NotFoundError"
+  );
+}
+
 /** 清空浏览器里的全部产物（用户主动清理；不碰沙箱与会话状态）。 */
 export async function clearPersisted(root?: DirHandle): Promise<boolean> {
   const app = await appRoot(root);
@@ -189,8 +198,10 @@ export async function clearPersisted(root?: DirHandle): Promise<boolean> {
   try {
     await app.removeEntry(PRODUCTS_DIR, { recursive: true });
     return true;
-  } catch {
+  } catch (error) {
     // 目录本来就不存在：对「清理」而言已经是目标状态。
-    return true;
+    // 但**其它失败**（权限、句柄占用）必须如实返回 false——界面否则会说
+    // 「已清理」而文件还在，那是最难排查的一种谎报。
+    return isNotFound(error);
   }
 }

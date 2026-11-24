@@ -237,7 +237,16 @@ async function invoke(caller: ExecCaller, request: WasmCall): Promise<string> {
   return (await invokeResult(caller, request)).result;
 }
 
-/** 把输入字节登记进 Worker 沙箱（清单 + 一段连续字节，只过一次边界）。 */
+/**
+ * 把输入字节登记进 Worker 沙箱。
+ *
+ * **逐文件**过一次边界，不拼接：旧实现把所有文件拼成一块 `Uint8Array` 再传，主线程
+ * 峰值≈总量×2（拼接 + 跨线程克隆），500MB 建议档下会到 GB 级。逐文件后峰值只与
+ * **单个文件**大小相关；文件数换来的额外 round-trip 是常数级开销（每次一个 wasm 调用）。
+ *
+ * 两步走是刻意的：**先把每个文件的沙箱键都算出来**（`stagedPath` 在缺相对路径时抛
+ * `E1001`），才开始登记——否则登记到一半才发现某个键算不出来，沙箱里会留下半批输入。
+ */
 export async function stageInputs(
   caller: ExecCaller,
   view: string,
@@ -252,25 +261,19 @@ export async function stageInputs(
     throw new KernelError("E1001: pick at least one file before applying");
   }
   const facts = webSandboxFacts(files);
-  const entries: { path: string; length: number; bytes: Uint8Array }[] = [];
-  for (const { slot, file } of stagedPairs(view, picked)) {
+  // 先算键（可能抛 E1001），再登记。
+  const targets = stagedPairs(view, picked).map(({ slot, file }) => ({
+    path: stagedPath(view, slot, file),
+    file
+  }));
+  for (const { path, file } of targets) {
     const bytes = await readAllBytes(file);
-    entries.push({ path: stagedPath(view, slot, file), length: bytes.length, bytes });
+    await invoke(caller, {
+      op: "stage_inputs",
+      payload: JSON.stringify([{ path, length: bytes.length }]),
+      bytes
+    });
   }
-  const total = entries.reduce((sum, entry) => sum + entry.length, 0);
-  const data = new Uint8Array(total);
-  let offset = 0;
-  for (const entry of entries) {
-    data.set(entry.bytes, offset);
-    offset += entry.length;
-  }
-  await invoke(caller, {
-    op: "stage_inputs",
-    payload: JSON.stringify(
-      entries.map((entry) => ({ path: entry.path, length: entry.length }))
-    ),
-    bytes: data
-  });
   return facts;
 }
 

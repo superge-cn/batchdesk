@@ -82,6 +82,23 @@ describe("opfsStore", () => {
     expect(await clearPersisted(asHandle(root))).toBe(true);
   });
 
+  it("清理失败时如实返回 false（不把「删不掉」说成「已清理」）", async () => {
+    // `clearPersisted` 删的是 app 根下的 `products` 目录，所以让**app 目录**抛错，
+    // 而不是让最外层根目录抛错（那样会先在建目录时失败，测不到这条分支）。
+    class FailingAppDir extends FakeDir {
+      override async removeEntry(): Promise<void> {
+        throw Object.assign(new Error("SecurityError"), { name: "SecurityError" });
+      }
+    }
+    class RootDir extends FakeDir {
+      override async getDirectoryHandle(name: string): Promise<FakeDir> {
+        return new FailingAppDir(name);
+      }
+    }
+    // 旧实现对任何异常都返回 true：界面会说「已清理」，而文件其实还在。
+    expect(await clearPersisted(asHandle(new RootDir()))).toBe(false);
+  });
+
   it("不支持 OPFS 时不抛：返回全失败，调用方退回「只下载」", async () => {
     // jsdom 里 `navigator.storage.getDirectory` 不存在——正是要覆盖的形态差异。
     expect(opfsSupported()).toBe(false);

@@ -356,13 +356,19 @@ describe("浏览器形态横向铺开（A3-2：不只 C02）", () => {
     expect(panel.textContent).toContain("/out/bundle.zip");
 
     const ops = callWasm.mock.calls.map(([call]) => (call as { op: string }).op);
-    expect(ops).toEqual(["plan_c10_compress", "stage_inputs", "apply_plan"]);
-    const stage = callWasm.mock.calls.find(
-      ([call]) => (call as { op: string }).op === "stage_inputs"
-    )![0] as { payload: string };
-    expect(JSON.parse(stage.payload)).toEqual([
-      { path: "a.txt", length: 4 },
-      { path: "b.txt", length: 2 }
+    // 逐文件登记（ADR-0118）：两个源＝两次 `stage_inputs`，各自只带一个文件。
+    expect(ops).toEqual([
+      "plan_c10_compress",
+      "stage_inputs",
+      "stage_inputs",
+      "apply_plan"
+    ]);
+    const staged = callWasm.mock.calls
+      .filter(([call]) => (call as { op: string }).op === "stage_inputs")
+      .map(([call]) => JSON.parse((call as { payload: string }).payload));
+    expect(staged).toEqual([
+      [{ path: "a.txt", length: 4 }],
+      [{ path: "b.txt", length: 2 }]
     ]);
     const applied = callWasm.mock.calls.find(
       ([call]) => (call as { op: string }).op === "apply_plan"
@@ -813,15 +819,16 @@ describe("改名族的浏览器执行（A3-11）", () => {
     expect(panel.textContent).toContain("/素材/new_a.txt");
 
     const ops = callWasm.mock.calls.map(([call]) => (call as { op: string }).op);
-    expect(ops).toEqual(["plan_f12", "stage_inputs", "apply_plan"]);
-    const stage = callWasm.mock.calls.find(
-      ([call]) => (call as { op: string }).op === "stage_inputs"
-    )![0] as { payload: string };
+    expect(ops).toEqual(["plan_f12", "stage_inputs", "stage_inputs", "apply_plan"]);
     // 条目只有第一层（a.txt 与 sub），但子树里的 b.txt 必须一起进沙箱：
     // 目录改名的执行臂会把整棵子树搬走，缺了它产物就成空目录。
-    expect(JSON.parse(stage.payload)).toEqual([
-      { path: "素材/a.txt", length: 3 },
-      { path: "素材/sub/b.txt", length: 2 }
+    // 逐文件登记（ADR-0118）：每次调用只带自己的清单。
+    const staged = callWasm.mock.calls
+      .filter(([call]) => (call as { op: string }).op === "stage_inputs")
+      .map(([call]) => JSON.parse((call as { payload: string }).payload));
+    expect(staged).toEqual([
+      [{ path: "素材/a.txt", length: 3 }],
+      [{ path: "素材/sub/b.txt", length: 2 }]
     ]);
   });
 });
@@ -910,7 +917,8 @@ describe("F13 正则改名的浏览器入口（ADR-0117）", () => {
     expect(panel.textContent).toContain("/素材/2026_a.txt");
 
     const ops = callWasm.mock.calls.map(([call]) => (call as { op: string }).op);
-    expect(ops).toEqual(["plan_f13", "stage_inputs", "apply_plan"]);
+    // 逐文件登记（ADR-0118）：两个文件＝两次 `stage_inputs`。
+    expect(ops).toEqual(["plan_f13", "stage_inputs", "stage_inputs", "apply_plan"]);
     const planCall = callWasm.mock.calls.find(
       ([call]) => (call as { op: string }).op === "plan_f13"
     )![0] as { payload: string };

@@ -46,6 +46,33 @@ describe("WASM Worker 客户端", () => {
     expect(unavailable.reason).toBe("wasm-unavailable");
   });
 
+  it("字节型请求用 transferable 传递：不产生第二份整块副本", async () => {
+    const sent: { message: unknown; transfer?: Transferable[] }[] = [];
+    class FakeWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(_url: URL, _options?: unknown) {}
+      postMessage(message: unknown, transfer?: Transferable[]) {
+        sent.push({ message, transfer });
+      }
+      terminate() {}
+    }
+    const { createWasmClient } = await import("./client");
+    const original = (globalThis as { Worker?: unknown }).Worker;
+    (globalThis as { Worker?: unknown }).Worker = FakeWorker;
+    try {
+      const client = createWasmClient();
+      expect(client).not.toBeNull();
+      const bytes = new Uint8Array([1, 2, 3]);
+      void client!.call({ op: "stage_inputs", payload: "[]", bytes });
+      expect(sent).toHaveLength(1);
+      // 转移（而不是克隆）该缓冲区：主线程不再保留第二份。
+      expect(sent[0].transfer).toEqual([bytes.buffer]);
+    } finally {
+      (globalThis as { Worker?: unknown }).Worker = original;
+    }
+  });
+
   it("内核错误不在客户端层被判定（只搬运错误码）", async () => {
     const { KernelError } = await import("./contract");
     // 客户端只负责把错误码传出去；是否阻断由调用方决定。
