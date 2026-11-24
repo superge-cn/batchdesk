@@ -1146,7 +1146,7 @@ impl Inner {
 
     fn finish(&self, task_id: &str, next: TaskState, report: ApplyReport, message: Option<String>) {
         let detail = message.clone();
-        let (changed, pending, kind) = {
+        let (changed, pending, job) = {
             let mut state = self.state.lock().unwrap();
             let Some(record) = state.tasks.get_mut(task_id) else {
                 return;
@@ -1162,7 +1162,7 @@ impl Inner {
             (
                 true,
                 record.progress_gate.pending.take(),
-                record.summary.kind.clone(),
+                record.summary.job,
             )
         };
         // 终态顺序（设计 01 §4.3）：窗口内合帧的计数 → state → done。
@@ -1174,11 +1174,13 @@ impl Inner {
         if changed {
             self.persist();
             self.emit_state(task_id, next);
-            // `kind` 让订阅方能区分 apply/undo：取消后的撤销询问只对 apply 任务成立
-            // （撤销任务被取消时再问"是否撤销"没有意义）。
+            // 事件里的 `kind` 是**任务类别**（`apply`／`undo`，设计 01 §4.3），
+            // 不是功能码——`summary.kind` 才是被处理计划的功能码（`c09`／`f12`），
+            // 两者不可混用。取消后的「是否一并撤销」只对 apply 成立；此前这里错发
+            // 功能码，前端 `kind === "apply"` 恒假，询问框成了死代码（2026-11-24 修）。
             self.emit(
                 EVENT_DONE,
-                json!({ "taskId": task_id, "kind": kind, "summary": report }),
+                json!({ "taskId": task_id, "kind": job, "summary": report }),
             );
             let (level, fallback) = match next {
                 TaskState::Completed => (Level::Info, "task completed"),
@@ -3777,6 +3779,10 @@ mod tests {
         let plan_id = plan.plan_id.clone();
         let plan_kind = plan.kind.clone();
 
+        // 录事件：`task://done` 的 `kind` 是**任务类别**（apply/undo），不是功能码——
+        // 取消后的「是否一并撤销」判别全靠它（设计 01 §4.3）。
+        let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
         let queue = test_queue(
             TaskPaths {
                 quarantine_dir: temp.0.join("quarantine"),
@@ -3785,7 +3791,9 @@ mod tests {
                 oplog_path: temp.0.join("oplog.sqlite3"),
                 diag_log_path: temp.0.join("logs/diagnostic.log"),
             },
-            Arc::new(|_event, _payload| {}),
+            Arc::new(move |event: &str, payload: Value| {
+                sink.lock().unwrap().push((event.to_string(), payload));
+            }),
         );
 
         let apply_id = queue.enqueue_apply(
@@ -3821,6 +3829,23 @@ mod tests {
         assert_eq!(by_id.get(&undo_id), Some(&TaskJob::Undo));
         let wire = serde_json::to_value(&undone.summary).unwrap();
         assert_eq!(wire["job"], Value::String("undo".to_string()));
+
+        // `task://done` 的 `kind` 必须是任务类别：界面靠 `kind === "apply"` 决定
+        // 要不要问「已完成 N 项，是否一并撤销？」（方案 §7.7）。壳层曾把**功能码**
+        // 塞进这个字段（`c09`），条件恒假，询问框成了死代码。
+        let done_kinds: Vec<String> = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == EVENT_DONE)
+            .filter_map(|(_, payload)| payload.get("kind").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            done_kinds,
+            vec!["apply".to_string(), "undo".to_string()],
+            "done 事件的 kind 是任务类别，不是功能码（实测曾下发 {plan_kind}）"
+        );
     }
 
     #[test]
