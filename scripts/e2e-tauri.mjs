@@ -28,9 +28,12 @@ function option(name, fallback) {
 const keep = args.includes("--keep");
 const driverUrl = option("--driver", "http://127.0.0.1:4444").replace(/\/+$/, "");
 const devUrl = option("--dev-url", "http://127.0.0.1:1420").replace(/\/+$/, "");
-const appBinary = path.resolve(
-  option("--app", "src-tauri/target/debug/batchdesk-desktop")
-);
+// Windows 上 cargo 产出的是 `batchdesk-desktop.exe`，缺省值要带后缀才能通过存在性检查。
+const defaultApp =
+  process.platform === "win32"
+    ? "src-tauri/target/debug/batchdesk-desktop.exe"
+    : "src-tauri/target/debug/batchdesk-desktop";
+const appBinary = path.resolve(option("--app", defaultApp));
 const screenshotPath = path.resolve("target/e2e/tauri-task-queue.png");
 
 let sessionId = null;
@@ -130,9 +133,21 @@ async function planFor(root, expectedRows) {
     '[...document.querySelectorAll("button")].some((item) => item.textContent.includes("生成计划预览"))'
   );
   if (!(await clickByText("生成计划预览"))) fail("plan button is missing");
+  // 预览表是窗口化列表（VirtualList，方案 6.2），DOM 里只挂可视行，
+  // 条数只能读列表容器的 aria-rowcount，不能数 `.row`。
   await waitFor(
     `plan with ${expectedRows} rows`,
-    `document.querySelectorAll(".row:not(.row-head)").length === ${expectedRows}`
+    `(() => {
+      const section = document.querySelector('section[aria-labelledby="plan-title"]');
+      const list = section && section.querySelector('[role="list"]');
+      return Boolean(list) && Number(list.getAttribute("aria-rowcount")) === ${expectedRows};
+    })()`
+  );
+  // 行数到位不等于计划已收尾：扫描按钮仍处于「正在扫描与分组…」时 busy 未清零，
+  // 确认框与执行按钮都是 disabled，此时点击是空操作。等确认框可用再往下走。
+  await waitFor(
+    "plan settled",
+    'document.querySelector("#confirm") !== null && !document.querySelector("#confirm").disabled'
   );
 }
 
@@ -149,7 +164,11 @@ async function waitApplyCompleted() {
         .some((item) => item.textContent.includes("执行任务"));
       const done = [...document.querySelectorAll(".task-panel")]
         .some((item) => item.textContent.includes("已完成"));
-      const rows = document.querySelectorAll(".result-row").length > 0;
+      // 结果表同样是窗口化列表：条数读 aria-rowcount（此前用 .result-row，
+      // 该类名只属于模板页，C09 结果表实际是 VirtualList 里的 .row）。
+      const resultSection = document.querySelector('section[aria-labelledby="result-title"]');
+      const resultList = resultSection && resultSection.querySelector('[role="list"]');
+      const rows = Boolean(resultList) && Number(resultList.getAttribute("aria-rowcount")) > 0;
       return panel && done && rows;
     })()`
   );
@@ -207,9 +226,16 @@ async function cancelScenario() {
   await confirmAndApply();
   await waitFor(
     "running apply task",
+    // 「是否一并撤销」只在已有条目落盘时才出现（方案 §7.7）；本机 149 条小文件
+    // 一个批次就跑完，必须等 done>0 再取消，否则取消发生在派发前、询问框不出现。
     `[...document.querySelectorAll(".task-panel")]
-      .some((item) => item.textContent.includes("执行任务") &&
-        (item.textContent.includes("执行中") || item.textContent.includes("排队中")))`
+      .some((item) => {
+        const text = item.textContent;
+        const progress = text.match(/(\\d+)\\s*\\/\\s*\\d+/);
+        return text.includes("执行任务") &&
+          (text.includes("执行中") || text.includes("排队中")) &&
+          progress !== null && Number(progress[1]) > 0;
+      })`
   );
   if (!(await clickByText("取消任务"))) fail("cancel button is missing");
   await waitFor(
