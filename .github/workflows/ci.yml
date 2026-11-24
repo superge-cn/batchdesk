@@ -211,6 +211,20 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
         working-directory: web
+      # WASM 产物不入库（`.gitignore` 排除 `web/wasm/`，ADR-0098），而前端**静态**
+      # import 它的类型与 JS 胶水（`lib/wasm/{load,worker}.ts`）。干净检出上不先构建
+      # 就是 TS2307 + vite 解析失败——2026-11-24 实测确认，此前因为产物一直躺在
+      # 本机工作树里而没暴露。wasm-bindgen-cli 必须与 Cargo.lock 的 wasm-bindgen
+      # 同版本（0.2.130），否则生成的胶水与 crate 不匹配。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: 构建 WASM 产物（wasm-bindgen 与 Cargo.lock 同版本）
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
+          node ../scripts/build-wasm.mjs
+        working-directory: web
       - name: 国际化门禁（十二项：key 集合／占位符／硬编码中文／错误码对齐／预警类别对齐／枚举不裸露／预检类别对齐）
         run: python ../scripts/check_locales.py
         working-directory: web
@@ -275,6 +289,12 @@ jobs:
       - name: 构建前端产物（Tauri context 需要 frontendDist）
         run: |
           pnpm install --frozen-lockfile
+          # WASM 产物不入库，而前端静态 import 它（见 web job 的同名步骤说明）。
+          # 本 job 的 rust-cache 只缓存 `src-tauri -> target`，根 workspace 的
+          # wasm32 构件不缓存，所以这里每次都会编一遍（1–2 分钟，可接受）。
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
+          node ../scripts/build-wasm.mjs
           pnpm build
         working-directory: web
       - name: 桌面壳 cargo check
