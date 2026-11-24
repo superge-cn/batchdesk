@@ -71,6 +71,9 @@ cargo build --manifest-path src-tauri/Cargo.toml
 
 副作用：这份二进制是「测试构建」，每次跑 e2e 前都要用上面的命令重建；普通 `cargo build` 的产物不能被 WebDriver 附加。
 
+注意：本记录走 **Vite dev + Tauri IPC** 通道，不加载 `web/dist`，因此**不需要** `web/wasm` 产物（`web/src/lib/wasm/load.ts:51` 是动态导入，`worker.ts` 只在 WASM 通道启用时才被加载；本机 `web/wasm/ENABLED` 不存在，前端自动走 IPC）。
+反之，凡走 `pnpm build` / `pnpm tauri build` 的发布构建，前置必须先跑 `node scripts/build-wasm.mjs`（据 release-track 实机验证：缺产物直接 `TS2307`；本记录未复现该失败，仅作前置条件提示）。
+
 ### 2.3 起服务
 
 ```bash
