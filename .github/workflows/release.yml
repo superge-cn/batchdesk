@@ -1,0 +1,146 @@
+# 发布件构建工作流（Windows 未签名安装包）
+#
+# ── 定位与边界（重要，先读）──────────────────────────────────────
+# 1) 本工作流**只做**「构建 + 打包 + 上传 artifact」，是设计 11 §2 流水线中
+#    「release build → 产物 CSP 断言 → 安装包」这一段的可执行落点。
+# 2) **不做**签名、**不**创建 GitHub Release、**不**上传任何商店/下载站。
+#    原因：Windows 代码签名证书尚未采购（设计 11 §7「待决」）、发布渠道口径
+#    未定（方案 §11.5 仅锁"统一下载站"）、更新源与密钥托管待 OQ-06。
+#    未签名产物只可用于内部验证，**不得对外分发**（ADR-0002 §4①：手工/非
+#    CI release 路径产物不得对外分发；本工作流的产物同样属于"未完成签名与
+#    发布检查清单"的中间物，见设计 11 §6）。
+# 3) 与 ci.yml **互不替代**：ci.yml 负责六 job 门禁（lint/deny/test/web/
+#    desktop/bench），本文件是独立工作流，不改动也不复用其 job 定义。
+#    发布前的门禁结论仍以 ci.yml 在该 commit 上的绿为准（设计 11 §6）。
+# 4) 本文件不写死任何数值阈值（体积上限、超时、重试次数）：安装包体积在
+#    方案 §9.1 与 §13.10.2 均未定义（§13.10.2 是 Web 单文件/总量阈值），
+#    故此处不作断言；超时用 GitHub 默认值。
+#
+# ── 触发方式 ────────────────────────────────────────────────────
+#   - 手动：Actions → release → Run workflow（workflow_dispatch）；
+#   - 打 tag：推送 v* 标签（如 v0.1.0）。
+#   ⚠️ tag 名**不参与**版本号计算：版本号唯一来源是 src-tauri/tauri.conf.json
+#   的 `version`（与 src-tauri/Cargo.toml 保持一致）。tag 与 version 对不上时
+#   产物名仍按 tauri.conf.json 生成——发布前请人工核对两者一致。
+
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+# 只读权限：本工作流不上传 Release、不改仓库内容。
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  # Windows runner 的 Python 默认按 cp1252 处理管道 I/O，中文输出会
+  # UnicodeEncodeError（与 ci.yml 同一根因，见其 env 段注释）。
+  PYTHONUTF8: "1"
+
+jobs:
+  windows-unsigned:
+    name: windows 未签名安装包（NSIS）
+    # MVP 平台范围＝仅 Windows 10/11（方案 §11.6 / v1.13 确认），故单平台。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          # 根（Tauri CLI）与 web（前端）各自有锁文件，两份都要进缓存键。
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            web/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # web/src 的 tsc 需要 web/wasm 的 JS 胶水（见下方 wasm 步骤）。
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: 安装依赖（根 Tauri CLI + web 前端）
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --dir web
+
+      - name: 构建 WASM 产物（前端 tsc 的前置条件）
+        # web/src/lib/wasm/*.ts 静态引用 web/wasm/batchdesk_wasm.js（不入库，
+        # .gitignore 排除），故 `pnpm build` 前必须先生成。生成方式见
+        # scripts/build-wasm.mjs 与 ADR-0100。
+        # wasm-bindgen-cli 版本须与 Cargo.lock 里 wasm-bindgen 的版本严格一致，
+        # 否则 wasm-bindgen 会直接报版本不匹配；升级依赖时两处一起改。
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
+          node scripts/build-wasm.mjs
+
+      - name: 构建前端产物
+        run: pnpm build
+
+      - name: 产物 CSP 前置断言（内联脚本/样式/远端引用）
+        # 设计 11 §2/§6：桌面 csp 的 script-src 'self' 依赖"产物无内联脚本、
+        # 不引远端资源"；该假设被打破时只有桌面端白屏、浏览器预览正常，
+        # 必须放在打包前拦（ADR-0060 §4）。
+        run: python ../scripts/check_dist_csp.py
+        working-directory: web
+
+      - name: 打包（Tauri release build + NSIS 安装包）
+        # --ci 关闭交互式提示（CI 环境无 TTY）；--no-sign 明示不签名——
+        # 证书未采购（设计 11 §3/§7），显式关闭也可防止将来环境里出现证书时
+        # 被意外用上（签名口径须随发布流程单独评审）。
+        # bundle 目标由 src-tauri/tauri.conf.json 的 bundle.targets 决定（当前仅 nsis）。
+        # release profile 硬化（strip/lto/codegen-units/panic=abort）见
+        # src-tauri/Cargo.toml 的 [profile.release] 与 ADR-0002。
+        run: pnpm tauri build --ci --no-sign
+
+      - name: 生成校验和（不含签名）
+        # 设计 11 §2 的产物清单含 checksums；签名与清单验签不在本工作流
+        # （证书与密钥托管未定，OQ-06/设计 11 §3）。
+        shell: pwsh
+        run: |
+          $out = "src-tauri/target/release/bundle/nsis"
+          $files = Get-ChildItem -Path $out -Filter *.exe
+          if (-not $files) { throw "未找到 NSIS 产物：$out" }
+          $files | ForEach-Object {
+            $h = (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLower()
+            "$h  $($_.Name)"
+          } | Set-Content -Encoding ascii "$out/SHA256SUMS.txt"
+          Get-Content "$out/SHA256SUMS.txt"
+
+      - name: 未签名产物提示（写入 run 摘要）
+        # 用数组逐行写而不是 here-string：PS 5.1 的 here-string 对纯 LF 换行
+        # 解析不稳（实测会把首行并进标题），数组写法在 pwsh 5/7 下一致。
+        shell: pwsh
+        run: |
+          $lines = @(
+            "## 未签名安装包（内部验证用）",
+            "",
+            "- 产物未做 Windows 代码签名，也没有 GitHub Release。",
+            "- 安装时会触发 SmartScreen「Windows 已保护你的电脑」；仅在内部验证时手动进「更多信息 → 仍要运行」，该绕过口径不得写进对外说明。",
+            "- 按 ADR-0002 §4① 与设计 11 §3/§6：未完成签名与发布检查清单的产物不得对外分发。",
+            "- 下载 artifact 后先用 SHA256SUMS.txt 校验完整性再安装。"
+          )
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: 上传 artifact（安装包 + 校验和 + 裸可执行文件）
+        uses: actions/upload-artifact@v4
+        with:
+          name: batchdesk-windows-unsigned-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/SHA256SUMS.txt
+            src-tauri/target/release/batchdesk-desktop.exe
+          if-no-files-found: error

@@ -34,3 +34,11 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 
 [dev-dependencies]
 rusqlite = "0.41.1"
+
+# src-tauri 是**独立 workspace**，不继承根 Cargo.toml 的 [profile.release]；
+# 发行构建硬化（ADR-0002）需在此重复声明，取值与根 Cargo.toml 保持一致。
+[profile.release]
+strip = "symbols"
+lto = true
+codegen-units = 1
+panic = "abort"
